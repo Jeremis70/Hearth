@@ -37,10 +37,8 @@ pub fn stick_direction(x: f32, y: f32, deadzone: f32) -> Option<Direction> {
 /// Where a held direction comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DirectionSource {
-    /// D-pad reported as buttons.
+    /// D-pad (gilrs reports hat axes as buttons too).
     DPadButton,
-    /// D-pad reported as hat axes.
-    DPadAxis,
     /// Left analog stick.
     Stick,
 }
@@ -63,7 +61,7 @@ impl HeldDirections {
         self.stack.retain(|&entry| entry != (source, dir));
     }
 
-    /// Sets the single direction of an axis-like source (stick, hat), replacing its previous one.
+    /// Sets the single direction of an axis-like source (stick), replacing its previous one.
     pub fn set_axis(&mut self, source: DirectionSource, dir: Option<Direction>) {
         if self
             .stack

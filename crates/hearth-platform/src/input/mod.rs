@@ -4,6 +4,7 @@
 
 use std::sync::mpsc::Sender;
 
+pub mod gilrs;
 pub mod repeat;
 
 /// Everything the UI can be asked to do by a controller.

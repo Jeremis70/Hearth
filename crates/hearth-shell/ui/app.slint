@@ -1,0 +1,83 @@
+import "../../../assets/fonts/Manrope-Regular.ttf";
+import "../../../assets/fonts/Manrope-Medium.ttf";
+import "../../../assets/fonts/Manrope-SemiBold.ttf";
+
+import { Theme } from "theme.slint";
+import { UiAction, InputMap } from "input.slint";
+import { HomeData, SettingsData, Status, HomeTile, TileKind, SettingsCategory, WifiRow } from "data.slint";
+import { Home } from "home.slint";
+import { Placeholder } from "placeholder.slint";
+
+export { Theme, HomeData, SettingsData, Status, HomeTile, TileKind, SettingsCategory, WifiRow }
+
+enum Screen { home, placeholder }
+
+export component AppWindow inherits Window {
+    title: "Hearth";
+    preferred-width: 1280px;
+    preferred-height: 720px;
+    min-width: 640px;
+    min-height: 360px;
+    background: Theme.bg-base;
+    default-font-family: "Manrope";
+
+    property <Screen> screen: Screen.home;
+
+    function update-scale() {
+        Theme.scale = min(self.width / 1920px, self.height / 1080px);
+    }
+
+    init => {
+        update-scale();
+        scope.focus();
+    }
+    changed width => { update-scale(); }
+    changed height => { update-scale(); }
+
+    // Every key (and every controller action, injected as a key) goes through here.
+    function dispatch(action: UiAction) -> bool {
+        if action == UiAction.none {
+            return false;
+        }
+        // TODO(M3): HomeShort opens the overlay and HomeLong focuses Home while a game runs.
+        if action == UiAction.home-short || action == UiAction.home-long {
+            screen = Screen.home;
+            home.reset();
+            return true;
+        }
+        if screen == Screen.placeholder {
+            if action == UiAction.back {
+                screen = Screen.home;
+                return true;
+            }
+            return false;
+        }
+        home.handle(action)
+    }
+
+    forward-focus: scope;
+    scope := FocusScope {
+        key-pressed(event) => {
+            root.dispatch(InputMap.from-key(event)) ? EventResult.accept : EventResult.reject
+        }
+
+        home := Home {
+            open-settings => {
+                placeholder.heading = "Settings";
+                placeholder.text = "Coming next.";
+                screen = Screen.placeholder;
+            }
+            open-placeholder(heading, text) => {
+                placeholder.heading = heading;
+                placeholder.text = text;
+                screen = Screen.placeholder;
+            }
+        }
+
+        placeholder := Placeholder {
+            opacity: screen == Screen.placeholder ? 1 : 0;
+            visible: self.opacity > 0;
+            animate opacity { duration: Theme.base; easing: ease-out; }
+        }
+    }
+}

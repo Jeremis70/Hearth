@@ -1,0 +1,35 @@
+import { Theme } from "theme.slint";
+import { HintBar } from "components/hint_bar.slint";
+
+// Stand-in for screens from later milestones.
+export component Placeholder inherits Rectangle {
+    in property <string> heading;
+    in property <string> text;
+    background: Theme.bg-base;
+
+    VerticalLayout {
+        alignment: center;
+        spacing: Theme.sp-16;
+        Text {
+            text: heading;
+            horizontal-alignment: center;
+            font-size: Theme.display;
+            font-weight: Theme.semibold;
+            color: Theme.text-primary;
+        }
+        Text {
+            text: root.text;
+            horizontal-alignment: center;
+            font-size: Theme.body-lg;
+            color: Theme.text-secondary;
+        }
+    }
+
+    HintBar {
+        x: Theme.safe-x;
+        width: parent.width - 2 * Theme.safe-x;
+        height: Theme.sp-32;
+        y: parent.height - Theme.safe-y - self.height;
+        hints: [{ key: "Esc", label: "Back" }];
+    }
+}

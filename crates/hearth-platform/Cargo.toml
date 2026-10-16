@@ -1,0 +1,12 @@
+[package]
+name = "hearth-platform"
+description = "Linux integrations for Hearth (input, network, power, gamescope), each with a mock"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

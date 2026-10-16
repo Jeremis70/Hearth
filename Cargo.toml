@@ -1,0 +1,26 @@
+[workspace]
+resolver = "3"
+members = ["crates/hearth-core", "crates/hearth-platform", "crates/hearth-shell"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+rust-version = "1.88"
+
+[workspace.dependencies]
+hearth-core = { path = "crates/hearth-core" }
+hearth-platform = { path = "crates/hearth-platform" }
+anyhow = "1.0"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+clap = { version = "4.6", features = ["derive"] }
+directories = "6.0"
+gilrs = "0.11"
+slint = "1.18"
+slint-build = "1.18"
+thiserror = "2.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"

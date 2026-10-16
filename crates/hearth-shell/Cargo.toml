@@ -1,0 +1,18 @@
+[package]
+name = "hearth-shell"
+description = "Hearth's Slint user interface"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "hearth"
+path = "src/main.rs"
+
+[dependencies]
+hearth-core.workspace = true
+hearth-platform.workspace = true
+
+[lints]
+workspace = true

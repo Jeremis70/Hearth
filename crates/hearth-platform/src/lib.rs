@@ -2,3 +2,5 @@
 //!
 //! TODO(M1): real `network` backend (nmrs), `power` (logind-zbus).
 //! TODO(M3): `gamescope` (x11rb), InputPlumber input backend (zbus).
+
+pub mod input;

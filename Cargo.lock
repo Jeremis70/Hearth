@@ -34,6 +34,9 @@ dependencies = [
 [[package]]
 name = "hearth-platform"
 version = "0.1.0"
+dependencies = [
+ "thiserror",
+]
 
 [[package]]
 name = "hearth-shell"

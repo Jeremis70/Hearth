@@ -1,0 +1,117 @@
+import { Theme } from "../theme.slint";
+import { Icons } from "../icons.slint";
+import { Status } from "../data.slint";
+import { FocusRing } from "focus.slint";
+
+component TabLabel inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected;
+    in property <bool> focused;
+    width: text.preferred-width + 2 * Theme.sp-16;
+    height: Theme.sp-64;
+
+    text := Text {
+        text: label;
+        font-size: Theme.tab;
+        font-weight: Theme.semibold;
+        letter-spacing: Theme.tab-tracking;
+        color: selected ? Theme.text-primary : Theme.text-secondary;
+    }
+    Rectangle {
+        y: parent.height - Theme.sp-8;
+        x: Theme.sp-16;
+        width: parent.width - 2 * Theme.sp-16;
+        height: Theme.sp-4;
+        border-radius: self.height / 2;
+        background: selected ? Theme.accent : transparent;
+    }
+    FocusRing {
+        shown: focused;
+    }
+}
+
+component IconButton inherits Rectangle {
+    in property <image> icon;
+    in property <bool> focused;
+    width: Theme.sp-64;
+    height: Theme.sp-64;
+    border-radius: self.height / 2;
+    background: focused ? Theme.surface-raised : transparent;
+    Image {
+        source: icon;
+        width: Theme.icon-size;
+        height: Theme.icon-size;
+        colorize: Theme.text-primary;
+    }
+    FocusRing {
+        shown: focused;
+        radius: parent.height / 2;
+    }
+}
+
+// Games / Media tabs on the left; search, settings, controller battery and clock on the right.
+// `focus-index`: 0 Games, 1 Media, 2 Search, 3 Settings, -1 when focus is elsewhere.
+export component TopBar inherits Rectangle {
+    in property <int> tab;
+    in property <int> focus-index: -1;
+    height: Theme.topbar-height;
+
+    HorizontalLayout {
+        padding-left: Theme.safe-x - Theme.sp-16;
+        padding-right: Theme.safe-x;
+        padding-top: Theme.sp-24;
+        padding-bottom: Theme.sp-24;
+        spacing: Theme.sp-16;
+        alignment: stretch;
+
+        TabLabel {
+            label: "Games";
+            selected: tab == 0;
+            focused: focus-index == 0;
+        }
+        TabLabel {
+            label: "Media";
+            selected: tab == 1;
+            focused: focus-index == 1;
+        }
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+        IconButton {
+            icon: Icons.search;
+            focused: focus-index == 2;
+        }
+        IconButton {
+            icon: Icons.settings;
+            focused: focus-index == 3;
+        }
+        HorizontalLayout {
+            padding-left: Theme.sp-16;
+            spacing: Theme.sp-8;
+            Image {
+                source: Icons.gamepad;
+                width: Theme.icon-size;
+                height: Theme.icon-size;
+                y: (parent.height - self.height) / 2;
+                colorize: Theme.text-secondary;
+            }
+            Text {
+                text: Status.controller-battery;
+                vertical-alignment: center;
+                font-size: Theme.caption;
+                font-weight: Theme.medium;
+                color: Theme.text-secondary;
+            }
+        }
+        Text {
+            text: Status.clock;
+            vertical-alignment: center;
+            horizontal-alignment: right;
+            min-width: Theme.sp-96 * 1.6;
+            font-size: Theme.tab;
+            font-weight: Theme.semibold;
+            letter-spacing: Theme.tab-tracking;
+            color: Theme.text-primary;
+        }
+    }
+}

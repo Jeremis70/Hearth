@@ -1,0 +1,64 @@
+import { Theme } from "../theme.slint";
+import { Icons } from "../icons.slint";
+import { HomeTile, TileKind } from "../data.slint";
+import { FocusRing } from "focus.slint";
+
+// Square home-row tile. `current` makes it large (it stays large while focus is in the hero
+// zone, like the PS5); `focused` draws the focus ring.
+export component Tile inherits Rectangle {
+    in property <HomeTile> data;
+    in property <bool> current;
+    in property <bool> focused;
+
+    width: current ? Theme.tile-focused : Theme.tile;
+    height: self.width;
+    animate width { duration: Theme.base; easing: ease-out; }
+    opacity: current ? 1 : 0.85;
+    border-radius: Theme.radius-lg;
+
+    // Art fill on the rounded rectangle itself: rounded clipping isn't supported by every
+    // renderer. TODO(M4): real art needs `clip` once images replace the gradient.
+    Rectangle {
+        border-radius: Theme.radius-lg;
+        background: @linear-gradient(135deg, data.art-a 0%, data.art-b 100%);
+
+        if data.kind == TileKind.game: Text {
+            x: root.width * 0.09;
+            y: root.width * 0.08;
+            width: root.width * 0.82;
+            text: data.title;
+            wrap: word-wrap;
+            font-size: root.width / 8;
+            font-weight: Theme.semibold;
+            color: #F7F3EEE0;
+        }
+
+        if data.kind != TileKind.game: Image {
+            width: root.width * 0.36;
+            height: self.width;
+            source: data.kind == TileKind.library ? Icons.library
+                : data.kind == TileKind.media ? Icons.clapperboard : Icons.settings;
+            colorize: Theme.text-primary;
+        }
+
+        if data.badge != "": Rectangle {
+            x: Theme.sp-8;
+            y: parent.height - self.height - Theme.sp-8;
+            width: badge-text.preferred-width + 2 * Theme.sp-8;
+            height: badge-text.preferred-height + Theme.sp-4;
+            border-radius: self.height / 2;
+            background: #000000A0;
+            badge-text := Text {
+                text: data.badge;
+                font-size: Theme.caption;
+                font-weight: Theme.medium;
+                color: Theme.text-primary;
+            }
+        }
+    }
+
+    FocusRing {
+        shown: focused;
+        radius: Theme.radius-lg;
+    }
+}

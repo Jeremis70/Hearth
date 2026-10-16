@@ -1,0 +1,35 @@
+import { Theme } from "../theme.slint";
+
+export struct Hint {
+    key: string,
+    label: string,
+}
+
+// Bottom-right button hints. Text-only until Kenney glyphs are added (TODO(M4)).
+export component HintBar inherits HorizontalLayout {
+    in property <[Hint]> hints;
+    spacing: Theme.sp-32;
+    alignment: end;
+    for hint in hints: HorizontalLayout {
+        spacing: Theme.sp-8;
+        Rectangle {
+            width: key-text.preferred-width + 2 * Theme.sp-8;
+            border-radius: Theme.radius-sm;
+            border-width: 1px;
+            border-color: Theme.text-secondary;
+            key-text := Text {
+                text: hint.key;
+                font-size: Theme.caption;
+                font-weight: Theme.semibold;
+                color: Theme.text-secondary;
+            }
+        }
+        Text {
+            text: hint.label;
+            vertical-alignment: center;
+            font-size: Theme.caption;
+            font-weight: Theme.medium;
+            color: Theme.text-secondary;
+        }
+    }
+}

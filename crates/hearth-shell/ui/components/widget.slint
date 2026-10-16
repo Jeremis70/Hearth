@@ -1,0 +1,70 @@
+import { Theme } from "../theme.slint";
+import { FocusRing } from "focus.slint";
+
+// Home dashboard card: icon + title, a big value, a detail line and an optional progress bar.
+export component Widget inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <string> value;
+    in property <string> detail;
+    in property <float> progress: -1;   // 0..1, negative hides the bar
+    in property <bool> focused;
+
+    border-radius: Theme.radius-lg;
+    background: focused ? Theme.surface-raised : Theme.surface;
+    animate background { duration: Theme.fast; easing: ease-out; }
+
+    VerticalLayout {
+        padding: Theme.sp-24;
+        spacing: Theme.sp-8;
+        HorizontalLayout {
+            spacing: Theme.sp-12;
+            Image {
+                source: icon;
+                width: Theme.icon-size * 0.85;
+                height: self.width;
+                colorize: Theme.text-secondary;
+            }
+            Text {
+                text: label;
+                font-size: Theme.caption;
+                font-weight: Theme.medium;
+                color: Theme.text-secondary;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+        Text {
+            text: value;
+            font-size: Theme.heading;
+            font-weight: Theme.semibold;
+            color: Theme.text-primary;
+            overflow: elide;
+        }
+        Text {
+            text: detail;
+            font-size: Theme.caption;
+            color: Theme.text-secondary;
+            overflow: elide;
+        }
+        Rectangle {
+            vertical-stretch: 1;
+        }
+        if progress >= 0: Rectangle {
+            height: Theme.sp-8;
+            border-radius: self.height / 2;
+            background: Theme.divider;
+            Rectangle {
+                x: 0;
+                width: parent.width * progress;
+                border-radius: parent.border-radius;
+                background: Theme.accent;
+            }
+        }
+    }
+
+    FocusRing {
+        shown: focused;
+        radius: Theme.radius-lg;
+    }
+}

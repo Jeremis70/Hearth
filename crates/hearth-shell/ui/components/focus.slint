@@ -1,0 +1,15 @@
+import { Theme } from "../theme.slint";
+
+// The one focus treatment (README §3): white ring plus ember glow. Place it as the last child
+// so it draws on top, sized to its parent.
+export component FocusRing inherits Rectangle {
+    in property <bool> shown;
+    in property <length> radius: Theme.radius-md;
+    border-radius: radius;
+    border-width: shown ? Theme.focus-ring-width : 0;
+    border-color: Theme.focus-ring;
+    drop-shadow-blur: shown ? Theme.focus-glow-radius : 0;
+    drop-shadow-color: Theme.focus-glow;
+    opacity: shown ? 1 : 0;
+    animate opacity { duration: Theme.fast; easing: ease-out; }
+}

@@ -1,0 +1,35 @@
+// One keyboard ↔ action table. Controller actions arrive from Rust as the first key listed
+// for each action (see src/bridge/input.rs), so keyboard and controller behave identically.
+
+export enum UiAction {
+    none,
+    up,
+    down,
+    left,
+    right,
+    accept,
+    back,
+    prev-tab,
+    next-tab,
+    options,
+    home-short,
+    home-long,
+}
+
+export global InputMap {
+    // Arrows · Enter/Space · Escape/Backspace · PageUp/Q · PageDown/E · Menu/O · F1 · F2
+    public pure function from-key(event: KeyEvent) -> UiAction {
+        if event.text == Key.UpArrow { return UiAction.up; }
+        if event.text == Key.DownArrow { return UiAction.down; }
+        if event.text == Key.LeftArrow { return UiAction.left; }
+        if event.text == Key.RightArrow { return UiAction.right; }
+        if event.text == Key.Return || event.text == " " { return UiAction.accept; }
+        if event.text == Key.Escape || event.text == Key.Backspace { return UiAction.back; }
+        if event.text == Key.PageUp || event.text == "q" || event.text == "Q" { return UiAction.prev-tab; }
+        if event.text == Key.PageDown || event.text == "e" || event.text == "E" { return UiAction.next-tab; }
+        if event.text == Key.Menu || event.text == "o" || event.text == "O" { return UiAction.options; }
+        if event.text == Key.F1 { return UiAction.home-short; }
+        if event.text == Key.F2 { return UiAction.home-long; }
+        UiAction.none
+    }
+}

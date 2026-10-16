@@ -1,0 +1,44 @@
+// Data the Rust side provides, and callbacks it handles. Kept in globals so screens don't
+// need properties threaded through AppWindow.
+
+export enum TileKind { game, library, media, settings }
+
+export struct HomeTile {
+    id: string,
+    title: string,
+    badge: string,      // console short name, games only
+    subtitle: string,   // "12 h played · last played yesterday" or a description
+    kind: TileKind,
+    art-a: color,       // placeholder art gradient
+    art-b: color,
+}
+
+export struct SettingsCategory {
+    key: string,
+    label: string,
+    status: string,
+}
+
+export struct WifiRow {
+    ssid: string,
+    strength: int,      // 0-100
+    secured: bool,
+    connected: bool,
+}
+
+export global HomeData {
+    in property <[HomeTile]> tiles;
+    // Actions not implemented yet (play, options, search, widgets) are reported here.
+    callback activated(/* what */ string, /* id */ string);
+}
+
+export global SettingsData {
+    in property <[SettingsCategory]> categories;
+    in property <[WifiRow]> wifi;
+    callback wifi-selected(/* ssid */ string);
+}
+
+export global Status {
+    in property <string> clock;
+    in property <string> controller-battery;
+}

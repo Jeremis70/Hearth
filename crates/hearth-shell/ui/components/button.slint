@@ -1,0 +1,39 @@
+import { Theme } from "../theme.slint";
+import { FocusRing } from "focus.slint";
+
+// Primary (ember fill) or secondary (surface) button, optionally icon-only.
+export component HButton inherits Rectangle {
+    in property <string> label;
+    in property <image> icon;
+    in property <bool> has-icon: false;
+    in property <bool> primary: false;
+    in property <bool> focused: false;
+
+    height: Theme.button-height;
+    width: label == "" ? self.height : content.preferred-width + 2 * Theme.sp-32;
+    border-radius: Theme.radius-md;
+    background: primary ? Theme.accent : (focused ? Theme.surface-raised : Theme.surface);
+
+    content := HorizontalLayout {
+        alignment: center;
+        spacing: Theme.sp-12;
+        if has-icon: Image {
+            source: icon;
+            width: Theme.icon-size * 0.85;
+            height: self.width;
+            y: (parent.height - self.height) / 2;
+            colorize: primary ? Theme.on-accent : Theme.text-primary;
+        }
+        if label != "": Text {
+            text: label;
+            vertical-alignment: center;
+            font-size: Theme.body-lg;
+            font-weight: Theme.semibold;
+            color: primary ? Theme.on-accent : Theme.text-primary;
+        }
+    }
+
+    FocusRing {
+        shown: focused;
+    }
+}

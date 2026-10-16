@@ -1,0 +1,91 @@
+// Hearth design tokens, from docs/design/README.md §3.
+// Values are authored at 1920×1080 and multiplied by `scale` (set by AppWindow from the
+// window size), so 1280×720 and 4K lay out from the same numbers.
+
+export global Theme {
+    // Window size / 1920×1080 (the smaller ratio, so nothing overflows on odd aspect ratios).
+    in-out property <float> scale: 1.0;
+    // Future "Reduce motion" setting: every duration is multiplied by this; 0 disables animation.
+    in-out property <float> motion-scale: 1.0;
+
+    // Colors
+    out property <color> bg-base: #0C0B0A;
+    out property <color> bg-glow: #2A2019;
+    out property <color> surface: #1C1A18B8;          // 72%
+    out property <color> surface-raised: #26231FE0;   // 88%
+    out property <color> divider: #FFFFFF0F;          // 6%
+    out property <color> scrim: #000000A6;            // 65%
+    out property <color> hero-vignette: #00000073;    // 45%, fades to transparent
+    out property <color> text-primary: #F7F3EE;
+    out property <color> text-secondary: #B4AAA0;
+    out property <color> text-disabled: #6E6660;
+    out property <color> accent: #F2994A;
+    out property <color> accent-soft: #F2994A2E;      // 18%
+    out property <color> on-accent: #0C0B0A;          // text on accent fills
+    out property <color> success: #34D399;
+    out property <color> warning: #FBBF24;
+    out property <color> danger: #EF6B5B;
+    out property <color> focus-ring: #FFFFFF;
+    out property <color> focus-glow: #F2994A59;       // 35%
+
+    // Typography (Manrope)
+    out property <length> display: 48px * scale;
+    out property <length> title: 32px * scale;
+    out property <length> tab: 28px * scale;
+    out property <length> tab-tracking: 0.5px * scale;
+    out property <length> heading: 26px * scale;
+    out property <length> body-lg: 24px * scale;
+    out property <length> body: 20px * scale;
+    out property <length> caption: 18px * scale;
+    out property <int> regular: 400;
+    out property <int> medium: 500;
+    out property <int> semibold: 600;
+
+    // Spacing scale
+    out property <length> sp-4: 4px * scale;
+    out property <length> sp-8: 8px * scale;
+    out property <length> sp-12: 12px * scale;
+    out property <length> sp-16: 16px * scale;
+    out property <length> sp-24: 24px * scale;
+    out property <length> sp-32: 32px * scale;
+    out property <length> sp-48: 48px * scale;
+    out property <length> sp-64: 64px * scale;
+    out property <length> sp-96: 96px * scale;
+
+    // Sizes
+    out property <length> safe-x: 96px * scale;
+    out property <length> safe-y: 54px * scale;
+    out property <length> topbar-height: 112px * scale;
+    out property <length> tile: 128px * scale;
+    out property <length> tile-focused: 192px * scale;
+    out property <length> tile-gap: 20px * scale;
+    out property <length> card-square: 300px * scale;
+    out property <length> card-wide-width: 520px * scale;
+    out property <length> card-wide-height: 220px * scale;
+    out property <length> grid-cover-width: 220px * scale;
+    out property <length> grid-cover-height: 300px * scale;
+    out property <length> row-height: 80px * scale;
+    out property <length> row-gap: 8px * scale;
+    out property <length> button-height: 64px * scale;
+    out property <length> dock-height: 96px * scale;
+    out property <length> dock-button: 72px * scale;
+    out property <length> icon-size: 32px * scale;
+    out property <length> settings-list-width: 1320px * scale;
+    out property <length> settings-sidebar-width: 480px * scale;
+
+    // Radii and focus
+    out property <length> radius-sm: 8px * scale;
+    out property <length> radius-md: 14px * scale;
+    out property <length> radius-lg: 22px * scale;
+    out property <length> radius-pill: 999px * scale;
+    out property <length> focus-ring-width: 3px * scale;
+    out property <length> focus-glow-radius: 18px * scale;
+
+    // Motion. Easing is written next to each `animate` (fast/base: ease-out, slow: ease-in-out,
+    // overlay-in: cubic-bezier(0.16, 1, 0.3, 1), overlay-out: ease-in).
+    out property <duration> fast: 120ms * motion-scale;
+    out property <duration> base: 200ms * motion-scale;
+    out property <duration> slow: 400ms * motion-scale;
+    out property <duration> overlay-in: 250ms * motion-scale;
+    out property <duration> overlay-out: 150ms * motion-scale;
+}

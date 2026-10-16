@@ -1,0 +1,62 @@
+import { Theme } from "../theme.slint";
+
+// Settings-style row: icon, label, right-aligned value. The focus frame is drawn by the list
+// that owns the rows so it can glide between them.
+export component ListRow inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <string> value;
+    in property <color> value-color: Theme.text-secondary;
+    in property <bool> selected: false;   // selected but focus is elsewhere (two-pane pages)
+    in property <bool> show-divider: true;
+    in property <image> trailing-icon;
+    in property <bool> has-trailing-icon: false;
+
+    height: Theme.row-height;
+    border-radius: Theme.radius-md;
+    background: selected ? Theme.accent-soft : transparent;
+
+    HorizontalLayout {
+        padding-left: Theme.sp-24;
+        padding-right: Theme.sp-24;
+        spacing: Theme.sp-24;
+        Image {
+            source: icon;
+            width: Theme.icon-size;
+            height: Theme.icon-size;
+            y: (parent.height - self.height) / 2;
+            colorize: Theme.text-primary;
+        }
+        Text {
+            text: label;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            font-size: Theme.body-lg;
+            font-weight: Theme.medium;
+            color: Theme.text-primary;
+            overflow: elide;
+        }
+        Text {
+            text: value;
+            vertical-alignment: center;
+            horizontal-alignment: right;
+            font-size: Theme.body;
+            color: value-color;
+        }
+        if has-trailing-icon: Image {
+            source: trailing-icon;
+            width: Theme.icon-size * 0.75;
+            height: self.width;
+            y: (parent.height - self.height) / 2;
+            colorize: Theme.text-secondary;
+        }
+    }
+
+    if show-divider: Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        x: Theme.sp-16;
+        width: parent.width - 2 * Theme.sp-16;
+        background: Theme.divider;
+    }
+}

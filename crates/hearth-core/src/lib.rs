@@ -4,3 +4,7 @@
 //!
 //! TODO(M2): `systems` (load systems.toml), `sources` (LibrarySource + roms/steam/ports),
 //! `library` (SQLite cache), `runtime` (Runtime trait, ProcessRuntime), `profiles`.
+
+pub mod demo;
+pub mod model;
+pub mod paths;

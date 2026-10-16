@@ -1,0 +1,65 @@
+import { Theme } from "../theme.slint";
+import { Icons } from "../icons.slint";
+import { SettingsData, WifiRow } from "../data.slint";
+import { ListRow } from "../components/list_row.slint";
+
+// Network pane: wired status and the Wi-Fi list (mock data in M0).
+// TODO(M1): connect with password through the on-screen keyboard.
+export component NetworkPane inherits Rectangle {
+    in property <int> focus-index: -1;    // -1 when focus is in the sidebar
+
+    function signal-icon(strength: int) -> image {
+        if strength >= 75 { return Icons.wifi; }
+        if strength >= 50 { return Icons.wifi-high; }
+        if strength >= 25 { return Icons.wifi-low; }
+        Icons.wifi-zero
+    }
+
+    property <length> list-top: wifi-label.y + wifi-label.height + Theme.sp-16;
+
+    Text {
+        x: 0;
+        y: 0;
+        text: "Ethernet · Not connected";
+        font-size: Theme.body;
+        color: Theme.text-secondary;
+    }
+    wifi-label := Text {
+        x: 0;
+        y: Theme.sp-48;
+        text: "Wi-Fi networks";
+        font-size: Theme.heading;
+        font-weight: Theme.semibold;
+        color: Theme.text-primary;
+    }
+
+    // Focus frame behind the rows, gliding with `fast`.
+    Rectangle {
+        x: 0;
+        y: list-top + max(0, focus-index) * (Theme.row-height + Theme.row-gap);
+        animate y { duration: Theme.fast; easing: ease-out; }
+        width: parent.width;
+        height: Theme.row-height;
+        border-radius: Theme.radius-md;
+        background: Theme.surface-raised;
+        border-width: Theme.focus-ring-width;
+        border-color: Theme.focus-ring;
+        drop-shadow-blur: Theme.focus-glow-radius;
+        drop-shadow-color: Theme.focus-glow;
+        opacity: focus-index >= 0 ? 1 : 0;
+        animate opacity { duration: Theme.fast; easing: ease-out; }
+    }
+
+    for net[i] in SettingsData.wifi: ListRow {
+        x: 0;
+        y: list-top + i * (Theme.row-height + Theme.row-gap);
+        width: parent.width;
+        icon: signal-icon(net.strength);
+        label: net.ssid;
+        value: net.connected ? "Connected" : "";
+        value-color: Theme.success;
+        trailing-icon: Icons.lock;
+        has-trailing-icon: net.secured;
+        show-divider: i != focus-index && i + 1 != focus-index;
+    }
+}

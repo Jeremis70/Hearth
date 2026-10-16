@@ -1,0 +1,194 @@
+import { Theme } from "../theme.slint";
+import { Icons } from "../icons.slint";
+import { UiAction } from "../input.slint";
+import { SettingsData, SettingsCategory } from "../data.slint";
+import { ListRow } from "../components/list_row.slint";
+import { HintBar } from "../components/hint_bar.slint";
+import { NetworkPane } from "network.slint";
+
+// Glides behind the focused row of a list.
+component FocusFrame inherits Rectangle {
+    in property <int> index;
+    in property <bool> shown;
+    y: index * (Theme.row-height + Theme.row-gap);
+    animate y { duration: Theme.fast; easing: ease-out; }
+    height: Theme.row-height;
+    border-radius: Theme.radius-md;
+    background: Theme.surface-raised;
+    border-width: Theme.focus-ring-width;
+    border-color: Theme.focus-ring;
+    drop-shadow-blur: Theme.focus-glow-radius;
+    drop-shadow-color: Theme.focus-glow;
+    opacity: shown ? 1 : 0;
+    animate opacity { duration: Theme.fast; easing: ease-out; }
+}
+
+component CategoryList inherits Rectangle {
+    in property <int> index;
+    in property <bool> focused;     // false: the current row is only "selected"
+    in property <bool> show-values: true;
+    height: SettingsData.categories.length * (Theme.row-height + Theme.row-gap);
+
+    FocusFrame {
+        index: index;
+        shown: focused;
+    }
+    for cat[i] in SettingsData.categories: ListRow {
+        y: i * (Theme.row-height + Theme.row-gap);
+        icon: Settings.icon-for(cat.key);
+        label: cat.label;
+        value: show-values ? cat.status : "";
+        selected: !focused && i == index;
+        show-divider: !(i == index || i + 1 == index);
+    }
+}
+
+export global Settings {
+    public pure function icon-for(key: string) -> image {
+        if key == "network" { return Icons.wifi; }
+        if key == "folders" { return Icons.folder; }
+        if key == "emulators" { return Icons.cpu; }
+        if key == "controllers" { return Icons.gamepad; }
+        Icons.power
+    }
+
+    public pure function placeholder-for(key: string) -> string {
+        if key == "folders" { return "Add and rescan game folders with a controller folder picker. Arrives in M1."; }
+        if key == "emulators" { return "Detected emulators, default per console and BIOS status. Arrives in M2."; }
+        if key == "controllers" { return "A/B layout and a button test. Arrives in a later milestone."; }
+        "Suspend, restart, power off and About. Arrives with the power backend."
+    }
+}
+
+// Settings: centered category list (level 0), then a two-pane page sliding in from the right
+// (level 1) with the categories as a sidebar and the selected category's content.
+export component SettingsScreen inherits Rectangle {
+    callback close();
+
+    property <int> level: 0;        // 0 list, 1 page
+    property <int> index: 0;        // category
+    property <int> pane: 0;         // 0 sidebar, 1 content
+    property <int> content-index: 0;
+    property <int> count: SettingsData.categories.length;
+    property <string> key: SettingsData.categories[index].key;
+    property <bool> has-content: key == "network" && SettingsData.wifi.length > 0;
+    property <length> list-top: 180px * Theme.scale;
+
+    public function reset() {
+        level = 0;
+        index = 0;
+        pane = 0;
+        content-index = 0;
+    }
+
+    public function handle(action: UiAction) -> bool {
+        if level == 0 {
+            if action == UiAction.up { index = max(0, index - 1); return true; }
+            if action == UiAction.down { index = min(count - 1, index + 1); return true; }
+            if action == UiAction.accept || action == UiAction.right {
+                level = 1;
+                pane = 0;
+                content-index = 0;
+                return true;
+            }
+            if action == UiAction.back { close(); return true; }
+            return false;
+        }
+        if pane == 0 {
+            if action == UiAction.up { index = max(0, index - 1); content-index = 0; return true; }
+            if action == UiAction.down { index = min(count - 1, index + 1); content-index = 0; return true; }
+            if (action == UiAction.right || action == UiAction.accept) && has-content { pane = 1; return true; }
+            if action == UiAction.back || action == UiAction.left { level = 0; return true; }
+            return false;
+        }
+        if action == UiAction.up { content-index = max(0, content-index - 1); return true; }
+        if action == UiAction.down { content-index = min(SettingsData.wifi.length - 1, content-index + 1); return true; }
+        if action == UiAction.accept {
+            SettingsData.wifi-selected(SettingsData.wifi[content-index].ssid);
+            return true;
+        }
+        if action == UiAction.left || action == UiAction.back { pane = 0; return true; }
+        false
+    }
+
+    background: Theme.bg-base;
+    clip: true;
+
+    // Soft top-left glow.
+    Rectangle {
+        x: -parent.width * 0.4;
+        y: -parent.height * 0.6;
+        width: parent.width * 1.2;
+        height: self.width;
+        background: @radial-gradient(circle, Theme.bg-glow 0%, Theme.bg-base 60%);
+    }
+
+    Text {
+        x: Theme.safe-x;
+        y: Theme.safe-y + Theme.sp-24;
+        text: level == 0 ? "Settings" : "Settings · " + SettingsData.categories[index].label;
+        font-size: Theme.display;
+        font-weight: Theme.semibold;
+        color: Theme.text-primary;
+    }
+
+    // Level 0: centered list.
+    CategoryList {
+        x: (parent.width - Theme.settings-list-width) / 2 - (level == 0 ? 0 : Theme.sp-96);
+        animate x { duration: Theme.slow; easing: ease-in-out; }
+        y: list-top;
+        width: Theme.settings-list-width;
+        index: index;
+        focused: true;
+        opacity: level == 0 ? 1 : 0;
+        animate opacity { duration: Theme.base; easing: ease-out; }
+    }
+
+    // Level 1: two-pane page sliding in from the right.
+    Rectangle {
+        x: level == 1 ? 0 : parent.width;
+        animate x { duration: Theme.slow; easing: ease-in-out; }
+        width: parent.width;
+
+        CategoryList {
+            x: Theme.safe-x;
+            y: list-top;
+            width: Theme.settings-sidebar-width;
+            index: index;
+            focused: pane == 0;
+            show-values: false;
+        }
+
+        Rectangle {
+            x: Theme.safe-x + Theme.settings-sidebar-width + Theme.sp-48;
+            y: list-top;
+            width: parent.width - self.x - Theme.safe-x;
+            height: parent.height - self.y - Theme.safe-y - Theme.sp-48;
+
+            if key == "network": NetworkPane {
+                focus-index: pane == 1 ? content-index : -1;
+            }
+            if key != "network": Text {
+                x: Theme.sp-24;
+                y: Theme.sp-24;
+                width: parent.width - 2 * Theme.sp-24;
+                text: Settings.placeholder-for(key);
+                wrap: word-wrap;
+                font-size: Theme.body-lg;
+                color: Theme.text-secondary;
+                vertical-alignment: top;
+            }
+        }
+    }
+
+    HintBar {
+        x: Theme.safe-x;
+        width: parent.width - 2 * Theme.safe-x;
+        height: Theme.sp-32;
+        y: parent.height - Theme.safe-y - self.height;
+        hints: [
+            { key: "Enter", label: "Select" },
+            { key: "Esc", label: "Back" },
+        ];
+    }
+}

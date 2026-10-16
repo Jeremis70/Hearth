@@ -6,11 +6,12 @@ import { Theme } from "theme.slint";
 import { UiAction, InputMap } from "input.slint";
 import { HomeData, SettingsData, Status, HomeTile, TileKind, SettingsCategory, WifiRow } from "data.slint";
 import { Home } from "home.slint";
+import { SettingsScreen } from "settings/settings.slint";
 import { Placeholder } from "placeholder.slint";
 
 export { Theme, HomeData, SettingsData, Status, HomeTile, TileKind, SettingsCategory, WifiRow }
 
-enum Screen { home, placeholder }
+enum Screen { home, settings, placeholder }
 
 export component AppWindow inherits Window {
     title: "Hearth";
@@ -45,6 +46,9 @@ export component AppWindow inherits Window {
             home.reset();
             return true;
         }
+        if screen == Screen.settings {
+            return settings.handle(action);
+        }
         if screen == Screen.placeholder {
             if action == UiAction.back {
                 screen = Screen.home;
@@ -63,15 +67,21 @@ export component AppWindow inherits Window {
 
         home := Home {
             open-settings => {
-                placeholder.heading = "Settings";
-                placeholder.text = "Coming next.";
-                screen = Screen.placeholder;
+                settings.reset();
+                screen = Screen.settings;
             }
             open-placeholder(heading, text) => {
                 placeholder.heading = heading;
                 placeholder.text = text;
                 screen = Screen.placeholder;
             }
+        }
+
+        settings := SettingsScreen {
+            opacity: screen == Screen.settings ? 1 : 0;
+            visible: self.opacity > 0;
+            animate opacity { duration: Theme.base; easing: ease-out; }
+            close => { screen = Screen.home; }
         }
 
         placeholder := Placeholder {

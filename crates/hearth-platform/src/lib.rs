@@ -4,3 +4,4 @@
 //! TODO(M3): `gamescope` (x11rb), InputPlumber input backend (zbus).
 
 pub mod input;
+pub mod network;

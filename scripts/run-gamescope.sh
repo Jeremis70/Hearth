@@ -10,6 +10,7 @@
 #   HEARTH_GS_SIZE=WxH      gamescope output size (default: the display's current mode, so a
 #                           16:10 laptop panel gets no black bars)
 #   HEARTH_GS_FULLSCREEN=1  start the gamescope window fullscreen (instead of Alt+F3 later)
+#   HEARTH_GS_ARGS="..."    extra gamescope flags, e.g. "--backend sdl"
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -26,6 +27,10 @@ height="${size#*x}"
 gamescope_args=(-e -W "$width" -H "$height")
 if [[ "${HEARTH_GS_FULLSCREEN:-0}" == "1" ]]; then
     gamescope_args+=(-f)
+fi
+if [[ -n "${HEARTH_GS_ARGS:-}" ]]; then
+    read -r -a extra <<< "$HEARTH_GS_ARGS"
+    gamescope_args+=("${extra[@]}")
 fi
 
 cargo build -p hearth-shell

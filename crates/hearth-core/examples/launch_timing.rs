@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use hearth_core::model::{Game, GameId, SystemId};
 use hearth_core::profiles::RetroArchProfile;
+use hearth_core::profiles::input::Translation;
 use hearth_core::runtime::{LaunchCtx, ProcessRuntime, Runtime};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -20,7 +21,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let frames: u32 = rest.first().map_or(Ok(600), |f| f.parse())?;
     let profile = RetroArchProfile::new(root);
-    profile.prepare()?;
+    // Input mapping doesn't matter for timing: keep whatever remap the last launch wrote.
+    profile.prepare(&Translation::default())?;
     let mut command = profile.command(Path::new(core), Path::new(rom));
     command
         .args

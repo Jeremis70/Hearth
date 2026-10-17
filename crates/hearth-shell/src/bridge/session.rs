@@ -35,6 +35,7 @@ use hearth_platform::input::{Action, PadActivity};
 use slint::ComponentHandle;
 
 use super::models;
+use crate::controls;
 use crate::{AppWindow, OverlayWindow, Session, Status};
 
 /// How long to look for a game's window before giving up.
@@ -121,6 +122,7 @@ pub struct Controller {
     systems: Systems,
     profile: RetroArchProfile,
     dolphin: DolphinProfile,
+    controls_dir: PathBuf,
     activity: PadActivity,
     library_db: PathBuf,
     entries: Vec<LibraryEntry>,
@@ -149,6 +151,8 @@ pub struct Setup {
     pub profile: RetroArchProfile,
     /// Dolphin profile.
     pub dolphin: DolphinProfile,
+    /// The user's controls files (`<config>/controls`).
+    pub controls_dir: PathBuf,
     /// Whether the controller is released (games are unfrozen only then).
     pub activity: PadActivity,
     /// Library database file.
@@ -212,6 +216,7 @@ pub fn install(setup: Setup) {
         systems: setup.systems,
         profile: setup.profile,
         dolphin: setup.dolphin,
+        controls_dir: setup.controls_dir,
         activity: setup.activity,
         library_db: setup.library_db,
         entries: Vec::new(),
@@ -382,9 +387,20 @@ impl Controller {
             self.toast(&format!("No emulator set up for {}", system.name));
             return;
         };
+        let device = controls::device(&self.activity.pads(), &self.controls_dir);
+        let input = controls::game_input(
+            system,
+            &game,
+            emulator.kind,
+            &self.controls_dir,
+            device,
+            &self.profile,
+        );
+        tracing::info!(key = %input.key.as_string(), "controls resolved");
+        let controls_problem = input.report();
         let mut command = match (emulator.kind, emulator.core.as_ref()) {
             (EmulatorKind::Retroarch, Some(core)) if core.is_file() => {
-                if let Err(err) = self.profile.prepare() {
+                if let Err(err) = self.profile.prepare(&input.translation) {
                     self.toast(&format!("Couldn't write the RetroArch config: {err}"));
                     return;
                 }
@@ -402,7 +418,7 @@ impl Controller {
                     self.toast("Dolphin isn't installed");
                     return;
                 };
-                if let Err(err) = self.dolphin.prepare() {
+                if let Err(err) = self.dolphin.prepare(&input.translation) {
                     self.toast(&format!("Couldn't write the Dolphin config: {err}"));
                     return;
                 }
@@ -452,10 +468,13 @@ impl Controller {
         self.closing = false;
         if self.compositor.controls_focus() {
             self.mode = Mode::Launching;
-            self.toast(&format!("Starting {title}…"));
+            self.toast(&controls_problem.unwrap_or_else(|| format!("Starting {title}…")));
             self.search_window(session, app_id);
         } else {
             // Outside gamescope (or without Steam mode) the game keeps the screen.
+            if let Some(problem) = controls_problem {
+                self.toast(&problem);
+            }
             self.mode = Mode::Game;
             if let Some(active) = &mut self.active {
                 active.state = SessionState::Playing;

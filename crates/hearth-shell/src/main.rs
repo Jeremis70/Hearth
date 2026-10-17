@@ -1,6 +1,7 @@
 //! Hearth shell: the Slint UI and the glue to core and platform services.
 
 mod bridge;
+mod controls;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -40,6 +41,11 @@ struct Args {
     /// Folder scanned (read-only) for games, laid out as <dir>/<system>/... [default: ~/Games]
     #[arg(long, value_name = "DIR")]
     games_dir: Option<PathBuf>,
+    /// Print GAME's resolved controls (with the layer of each value) and the emulator config
+    /// generated from them, then exit. GAME is a game id, a controls key (gc/GZ2E01) or part
+    /// of a title.
+    #[arg(long, value_name = "GAME")]
+    print_controls: Option<String>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -59,6 +65,11 @@ fn main() -> anyhow::Result<()> {
         .or_else(paths::default_games_dir)
         .context("no home directory; pass --games-dir")?;
     let systems = Systems::builtin()?;
+    let controls_dir = hearth_core::controls::user_dir(dirs.config());
+
+    if let Some(query) = args.print_controls {
+        return print_controls(&query, &games_dir, &systems, &controls_dir, &dirs);
+    }
 
     if process::any_process_named("steam") {
         tracing::warn!(
@@ -114,6 +125,7 @@ fn main() -> anyhow::Result<()> {
         systems,
         profile: RetroArchProfile::new(dirs.retroarch()),
         dolphin: DolphinProfile::new(dirs.dolphin(), dolphin),
+        controls_dir,
         activity: gilrs.activity(),
         library_db: dirs.library_db(),
         games_dir,
@@ -145,6 +157,62 @@ fn main() -> anyhow::Result<()> {
     slint::run_event_loop_until_quit()?;
     tracing::info!("shutting down");
     bridge::session::shutdown();
+    Ok(())
+}
+
+/// `--print-controls`: no window, nothing written.
+fn print_controls(
+    query: &str,
+    games_dir: &std::path::Path,
+    systems: &Systems,
+    controls_dir: &std::path::Path,
+    dirs: &DataDirs,
+) -> anyhow::Result<()> {
+    let games = hearth_core::scan::scan_roms(games_dir, systems);
+    let keys: Vec<_> = games
+        .iter()
+        .map(|g| hearth_core::controls::GameKey::for_rom(&g.system, &g.path, &g.title))
+        .collect();
+    let needle = query.to_lowercase();
+    let exact: Vec<_> = games
+        .iter()
+        .zip(&keys)
+        .filter(|(g, k)| g.id.as_str() == query || k.as_string() == query)
+        .collect();
+    let matches = if exact.is_empty() {
+        games
+            .iter()
+            .zip(&keys)
+            .filter(|(g, _)| g.title.to_lowercase().contains(&needle))
+            .collect()
+    } else {
+        exact
+    };
+    let [(game, _)] = matches.as_slice() else {
+        let list: Vec<_> = matches
+            .iter()
+            .map(|(g, k)| format!("  {} [{}]", g.title, k.as_string()))
+            .collect();
+        anyhow::bail!(
+            "{} games match '{query}' under {}{}{}",
+            matches.len(),
+            games_dir.display(),
+            if list.is_empty() { "" } else { ":\n" },
+            list.join("\n")
+        );
+    };
+    let system = systems
+        .get(&game.system)
+        .context("game of an unknown system")?;
+    let kind = system.emulator().context("system has no emulator")?.kind;
+    let pads = hearth_platform::input::gilrs::connected_pads().unwrap_or_else(|err| {
+        tracing::warn!("can't list controllers: {err}");
+        Vec::new()
+    });
+    let device = controls::device(&pads, controls_dir);
+    let retroarch = RetroArchProfile::new(dirs.retroarch());
+    let input = controls::game_input(system, game, kind, controls_dir, device, &retroarch);
+    print!("{}", input.describe(game));
     Ok(())
 }
 

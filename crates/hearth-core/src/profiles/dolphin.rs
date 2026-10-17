@@ -3,8 +3,8 @@
 //! Dolphin runs with `-u <root>`, so `~/.config/dolphin-emu` and `~/.local/share/dolphin-emu`
 //! are never read or written. Settings are passed as `-C` overrides, which Dolphin keeps in a
 //! command-line layer it never saves. Controller mappings and hotkeys can't be set that way, so
-//! `GCPadNew.ini` and `Hotkeys.ini` are written from templates in `data/profiles/dolphin/` on
-//! every launch.
+//! `GCPadNew.ini` and `Hotkeys.ini` are generated from Hearth's controls files on every launch
+//! (`dolphin_input`).
 //!
 //! Every key and flag was checked against Dolphin 2609 (`Core/Config/MainSettings.cpp`,
 //! `UICommon/CommandLineParse.cpp`, `DolphinQt/Main.cpp`).
@@ -15,20 +15,13 @@ use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
+use super::input::Translation;
 use crate::runtime::LaunchCommand;
 
 /// Program name of a native install.
 pub const PROGRAM: &str = "dolphin-emu";
 /// Flatpak application id.
 pub const FLATPAK_APP: &str = "org.DolphinEmu.dolphin-emu";
-
-/// GameCube controller mapping for port 1.
-const GCPAD_TEMPLATE: &str = include_str!("../../../../data/profiles/dolphin/Config/GCPadNew.ini");
-/// All hotkeys unbound.
-const HOTKEYS_TEMPLATE: &str = include_str!("../../../../data/profiles/dolphin/Config/Hotkeys.ini");
-
-/// Dolphin's name for the controller on port 1: the first SDL gamepad.
-pub const DEFAULT_DEVICE: &str = "SDL/0/DualSense Wireless Controller";
 
 /// `-C <System>.<Section>.<Key>=<Value>` overrides.
 const SETTINGS: &[(&str, &str)] = &[
@@ -109,7 +102,6 @@ fn find_in_path(path: &OsStr, name: &str) -> Option<PathBuf> {
 pub struct DolphinProfile {
     root: PathBuf,
     install: Option<DolphinInstall>,
-    device: String,
 }
 
 impl DolphinProfile {
@@ -120,14 +112,7 @@ impl DolphinProfile {
         Self {
             root: std::path::absolute(&root).unwrap_or(root),
             install,
-            device: DEFAULT_DEVICE.to_owned(),
         }
-    }
-
-    /// Maps port 1 to another controller (Dolphin's `<backend>/<index>/<name>` string).
-    pub fn with_device(mut self, device: impl Into<String>) -> Self {
-        self.device = device.into();
-        self
     }
 
     /// Dolphin's user directory.
@@ -140,26 +125,15 @@ impl DolphinProfile {
         self.install.as_ref()
     }
 
-    /// The seeded config files, as (path relative to the user directory, contents).
-    pub fn config_files(&self) -> [(&'static str, String); 2] {
-        [
-            (
-                "Config/GCPadNew.ini",
-                GCPAD_TEMPLATE.replace("{device}", &self.device),
-            ),
-            (
-                "Config/Hotkeys.ini",
-                HOTKEYS_TEMPLATE.replace("{device}", &self.device),
-            ),
-        ]
-    }
-
-    /// Writes the controller mapping and hotkeys into the user directory.
-    pub fn prepare(&self) -> io::Result<()> {
-        fs::create_dir_all(self.root.join("Config"))?;
+    /// Writes the generated input files (controller mapping, hotkeys) into the user directory.
+    pub fn prepare(&self, input: &Translation) -> io::Result<()> {
         fs::create_dir_all(self.root.join("Logs"))?;
-        for (rel, text) in self.config_files() {
-            fs::write(self.root.join(rel), text)?;
+        for (rel, text) in &input.files {
+            let path = self.root.join(rel);
+            if let Some(dir) = path.parent() {
+                fs::create_dir_all(dir)?;
+            }
+            fs::write(path, text)?;
         }
         Ok(())
     }
@@ -277,31 +251,15 @@ mod tests {
     }
 
     #[test]
-    fn templates_get_the_device_and_unbind_hotkeys() {
-        let profile = native().with_device("SDL/0/Pad");
-        let [(gcpad_path, gcpad), (hotkeys_path, hotkeys)] = profile.config_files();
-        assert_eq!(gcpad_path, "Config/GCPadNew.ini");
-        assert!(gcpad.contains("[GCPad1]\nDevice = SDL/0/Pad\n"));
-        assert!(gcpad.contains("Buttons/A = `Button S`"));
-        assert!(gcpad.contains("Buttons/Z = `Shoulder R`"));
-        assert!(gcpad.contains("C-Stick/Up = `Right Y+`"));
-        assert!(!gcpad.contains("[GCPad2]"));
-        assert_eq!(hotkeys_path, "Config/Hotkeys.ini");
-        // Only the device line: every hotkey loads empty.
-        let keys: Vec<_> = hotkeys
-            .lines()
-            .filter(|l| !l.starts_with('#') && l.contains('='))
-            .collect();
-        assert_eq!(keys, ["Device = SDL/0/Pad"]);
-    }
-
-    #[test]
-    fn prepare_writes_configs_under_root() {
+    fn prepare_writes_input_files_under_root() {
         let dir = tempdir();
         let profile = DolphinProfile::new(dir.path().join("dolphin"), None);
-        profile.prepare().unwrap();
+        let input = Translation {
+            files: vec![("Config/GCPadNew.ini".into(), "[GCPad1]\n".into())],
+            ..Translation::default()
+        };
+        profile.prepare(&input).unwrap();
         assert!(dir.path().join("dolphin/Config/GCPadNew.ini").is_file());
-        assert!(dir.path().join("dolphin/Config/Hotkeys.ini").is_file());
         assert!(dir.path().join("dolphin/Logs").is_dir());
     }
 

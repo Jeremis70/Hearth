@@ -4,10 +4,12 @@
 //! `config/`, `data/` and `cache/`. Without it, the XDG directories are used.
 
 use std::ffi::OsString;
-use std::io;
+use std::fs::{File, OpenOptions};
+use std::io::{self, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 
 use directories::ProjectDirs;
+use nix::fcntl::{Flock, FlockArg};
 
 /// Environment variable that overrides every Hearth directory.
 pub const HEARTH_HOME_ENV: &str = "HEARTH_HOME";
@@ -29,6 +31,79 @@ pub enum PathsError {
         /// Underlying I/O error.
         source: io::Error,
     },
+}
+
+/// Errors taking the single-instance lock.
+#[derive(Debug, thiserror::Error)]
+pub enum LockError {
+    /// Another Hearth holds the lock.
+    #[error("Hearth is already running (pid {pid}); not starting another")]
+    Running {
+        /// The running instance's pid, as written in the lock file ("unknown" if unreadable).
+        pid: String,
+    },
+    /// The lock file couldn't be opened or written.
+    #[error("cannot use lock file {path}: {source}")]
+    Io {
+        /// Lock file.
+        path: PathBuf,
+        /// Underlying error.
+        source: io::Error,
+    },
+}
+
+/// Held for the whole life of a Hearth process: a second one can't take it.
+///
+/// An exclusive `flock` on `<data>/hearth.lock`. The kernel releases it when the process
+/// dies, so a lock left by a crashed Hearth (whose pid is still in the file) is simply taken
+/// over.
+#[derive(Debug)]
+pub struct InstanceLock {
+    _lock: Flock<File>,
+    path: PathBuf,
+}
+
+impl InstanceLock {
+    /// Takes the lock in `dir` and writes our pid into it.
+    pub fn acquire(dir: &Path) -> Result<Self, LockError> {
+        let path = dir.join("hearth.lock");
+        let io_err = |source| LockError::Io {
+            path: path.clone(),
+            source,
+        };
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .map_err(io_err)?;
+        let mut lock = match Flock::lock(file, FlockArg::LockExclusiveNonblock) {
+            Ok(lock) => lock,
+            Err((mut file, _)) => {
+                let mut pid = String::new();
+                let _ = file.read_to_string(&mut pid);
+                let pid = pid.trim();
+                return Err(LockError::Running {
+                    pid: if pid.is_empty() {
+                        "unknown".into()
+                    } else {
+                        pid.into()
+                    },
+                });
+            }
+        };
+        lock.set_len(0).map_err(io_err)?;
+        lock.rewind().map_err(io_err)?;
+        writeln!(lock, "{}", std::process::id()).map_err(io_err)?;
+        lock.flush().map_err(io_err)?;
+        Ok(Self { _lock: lock, path })
+    }
+
+    /// The lock file.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
 }
 
 /// `~/Games`, the default folder scanned for games.
@@ -144,6 +219,22 @@ mod tests {
             dirs.library_db(),
             Path::new("./.dev-data/data/library.sqlite3")
         );
+    }
+
+    #[test]
+    fn second_lock_fails_until_the_first_is_dropped() {
+        let dir = crate::testdir::tempdir();
+        // A stale pid from a crashed instance doesn't matter: nobody holds the flock.
+        std::fs::write(dir.path().join("hearth.lock"), "999999\n").unwrap();
+        let first = InstanceLock::acquire(dir.path()).unwrap();
+        let pid = std::fs::read_to_string(first.path()).unwrap();
+        assert_eq!(pid.trim(), std::process::id().to_string());
+        match InstanceLock::acquire(dir.path()) {
+            Err(LockError::Running { pid }) => assert_eq!(pid, std::process::id().to_string()),
+            other => panic!("expected Running, got {other:?}"),
+        }
+        drop(first);
+        assert!(InstanceLock::acquire(dir.path()).is_ok());
     }
 
     #[test]

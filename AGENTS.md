@@ -12,6 +12,7 @@ Read .github/instructions/rust.instructions.md and docs/STATUS.md at the start o
   - Network: `MockNetworkBackend` unless `--real-network` is passed.
   - Power: `MockPower` unless `--real-power` is passed. Never call suspend/reboot/poweroff in tests.
   - Input: gilrs (read-only, non-exclusive) in development. Never grab devices exclusively or create uinput devices unless a milestone explicitly says so.
+- Before starting Hearth (cargo run, `scripts/run-gamescope.sh`), check whether one is already running (`pgrep -a hearth-shell`). If one is, don't start another: ask me. Hearth also refuses to start twice (lock in `<HEARTH_HOME>/data/hearth.lock`); `--print-controls` is read-only and may run next to it.
 - Only kill processes the app itself spawned (tracked by process group). Never `pkill`/`killall`.
 - Don't use `rm -rf` on anything but `target/` or `./.dev-data/`.
 

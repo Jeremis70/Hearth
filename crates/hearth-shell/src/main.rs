@@ -71,6 +71,17 @@ fn main() -> anyhow::Result<()> {
         return print_controls(&query, &games_dir, &systems, &controls_dir, &dirs);
     }
 
+    // Before anything reads the controller or opens a window. (--print-controls only
+    // reads, so it may run next to a running Hearth.)
+    let _instance = match paths::InstanceLock::acquire(dirs.data()) {
+        Ok(lock) => lock,
+        Err(err @ paths::LockError::Running { .. }) => {
+            eprintln!("{err}");
+            std::process::exit(1);
+        }
+        Err(err) => return Err(err).context("taking the single-instance lock"),
+    };
+
     if process::any_process_named("steam") {
         tracing::warn!(
             "Steam is running: it also reads the controller (Steam Input) and may react to \

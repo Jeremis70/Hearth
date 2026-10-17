@@ -43,6 +43,7 @@ pub fn start(backends: Vec<Box<dyn InputBackend>>) -> anyhow::Result<()> {
 }
 
 fn dispatch(action: Action) {
+    // Capture is the session's alone (`route` handles it); it has no key.
     match session::route(action) {
         Route::Main(app) => inject(app.window(), action),
         Route::Overlay(overlay) => inject(overlay.window(), action),
@@ -51,8 +52,9 @@ fn dispatch(action: Action) {
 }
 
 /// The key each action is injected as; must be the first key for it in `ui/input.slint`.
-fn key_for(action: Action) -> Key {
-    match action {
+/// `None`: the action never reaches the UI.
+fn key_for(action: Action) -> Option<Key> {
+    Some(match action {
         Action::Up => Key::UpArrow,
         Action::Down => Key::DownArrow,
         Action::Left => Key::LeftArrow,
@@ -64,11 +66,15 @@ fn key_for(action: Action) -> Key {
         Action::Options => Key::Menu,
         Action::HomeShort => Key::F1,
         Action::HomeLong => Key::F2,
-    }
+        Action::Capture => return None,
+    })
 }
 
 fn inject(window: &slint::Window, action: Action) {
-    let text: slint::SharedString = key_for(action).into();
+    let Some(key) = key_for(action) else {
+        return;
+    };
+    let text: slint::SharedString = key.into();
     window.dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
     window.dispatch_event(WindowEvent::KeyReleased { text });
 }
@@ -92,8 +98,11 @@ mod tests {
             Action::HomeShort,
             Action::HomeLong,
         ];
-        let mut keys: Vec<slint::SharedString> =
-            actions.iter().map(|&a| key_for(a).into()).collect();
+        let mut keys: Vec<slint::SharedString> = actions
+            .iter()
+            .filter_map(|&a| key_for(a))
+            .map(Into::into)
+            .collect();
         keys.sort();
         keys.dedup();
         assert_eq!(keys.len(), actions.len());

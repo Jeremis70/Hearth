@@ -5,6 +5,7 @@
 use serde::Deserialize;
 
 use super::device::ControllerKind;
+use super::model::{HearthAction, PadInput};
 use crate::systems::{ConsoleControl, ConsoleControls};
 
 const SHIPPED: &[(&str, &str)] = &[
@@ -41,6 +42,33 @@ pub fn pad_defaults(
     };
     let (_, text) = PADS.iter().find(|(n, _)| *n == name)?;
     Some((name, for_console(text, controls)))
+}
+
+/// The Hearth actions a controller type's defaults put on its buttons (PlayStation Create is
+/// Capture): what those buttons do in Hearth's own menus, where no console mapping applies.
+pub fn pad_hearth_binds(kind: ControllerKind) -> Vec<(PadInput, HearthAction)> {
+    let Some((_, text)) = pad_defaults(kind, &ConsoleControls::default()) else {
+        return Vec::new();
+    };
+    let Ok(doc) = text.parse::<toml::Table>() else {
+        return Vec::new();
+    };
+    let Some(bind) = doc
+        .get("player1")
+        .and_then(|p| p.get("bind"))
+        .and_then(toml::Value::as_table)
+    else {
+        return Vec::new();
+    };
+    bind.iter()
+        .filter_map(|(input, value)| {
+            let action = value.as_str()?.strip_prefix('@')?;
+            Some((
+                PadInput::from_name(input)?,
+                HearthAction::from_name(action)?,
+            ))
+        })
+        .collect()
 }
 
 /// A pad defaults file without the binds to controls this console doesn't have (`touchpad =
@@ -116,6 +144,15 @@ mod tests {
         assert!(!text.contains("touchpad"), "{text}");
         assert!(text.contains("select = \"@capture\""), "{text}");
         assert!(pad_defaults(ControllerKind::Generic, &without).is_none());
+        assert_eq!(
+            pad_hearth_binds(ControllerKind::DualSense),
+            [(PadInput::Select, HearthAction::Capture)]
+        );
+        assert_eq!(
+            pad_hearth_binds(ControllerKind::Xbox),
+            [(PadInput::Share, HearthAction::Capture)]
+        );
+        assert!(pad_hearth_binds(ControllerKind::Generic).is_empty());
         let (name, text) = pad_defaults(ControllerKind::SwitchPro, &without).unwrap();
         assert_eq!(name, "switch");
         assert!(text.contains("share = \"@capture\""), "{text}");

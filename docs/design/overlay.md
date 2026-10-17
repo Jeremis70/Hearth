@@ -172,3 +172,20 @@ This is a bottom overlay/quick bar displayed when pressing the system guide butt
 * **Tricky Aspects:** Handling modal key capture so all background input is suppressed while the overlay is active.
 
 ---
+
+## 10. Hearth: Capture button (design note, not implemented)
+
+Hearth's Capture button is any button bound to `@capture` (by default PlayStation Create,
+Xbox Series Share, Switch Pro Capture). Today it only shows "Screenshots and clips are coming
+later" (over a game: the overlay's `notice` panel, which neither freezes nor dims the game).
+
+The plan, like the PS5:
+- **Short press** opens a **capture panel** in the overlay (`OverlayPanel.capture`, its own
+  component in `ui/overlay/` with `handle(action)`): take a screenshot, save the last N
+  seconds as a clip, start/stop recording, recent captures. The game is frozen while it is
+  open, like the quick menu.
+- **Hold** (same threshold as Guide's long press, measured in the gilrs thread, which would
+  send a `CaptureLong` action) takes a screenshot at once, with a short notice, without opening
+  anything.
+- Screenshots come from gamescope (the base layer, so never Hearth's own overlay); clips need a
+  rolling recording (gamescope's PipeWire stream), which is M-later.

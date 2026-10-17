@@ -1,6 +1,7 @@
 import { Theme } from "../theme.slint";
 import { UiAction, InputMap } from "../input.slint";
 import { ControlsScreen } from "../controls/screen.slint";
+import { Toast } from "../components/toast.slint";
 import { QuickMenu } from "quick_menu.slint";
 
 // What the overlay shows. The session sets it (src/bridge/session.rs, `OverlayView`); panels
@@ -14,6 +15,9 @@ export enum OverlayPanel {
     menu,
     // The running game's controls page, over the quick menu.
     controls,
+    // A short message (Status.toast) over the running game: no scrim, takes no input, and the
+    // game keeps running.
+    notice,
 }
 
 // In-game overlay (README §4). A separate transparent window drawn on gamescope's overlay plane;
@@ -26,6 +30,11 @@ export component OverlayWindow inherits Window {
     in property <string> clock;
     // Set by the session controller together with STEAM_OVERLAY.
     in-out property <OverlayPanel> panel: OverlayPanel.none;
+    // The last panel shown, still drawn while the overlay fades out.
+    property <OverlayPanel> drawn: OverlayPanel.none;
+    changed panel => {
+        if panel != OverlayPanel.none { drawn = panel; }
+    }
 
     callback resume();
     callback go-home();
@@ -84,6 +93,7 @@ export component OverlayWindow inherits Window {
             animate opacity { duration: panel != OverlayPanel.none ? Theme.overlay-in : Theme.overlay-out; easing: ease-out; }
 
             menu := QuickMenu {
+                visible: drawn == OverlayPanel.menu || drawn == OverlayPanel.controls;
                 game-title: root.game-title;
                 badge: root.badge;
                 played: root.played;
@@ -95,9 +105,17 @@ export component OverlayWindow inherits Window {
             }
 
             controls := ControlsScreen {
-                visible: panel == OverlayPanel.controls;
+                visible: drawn == OverlayPanel.controls;
                 background: Theme.bg-base.with-alpha(0.94);
                 close => { panel = OverlayPanel.menu; }
+            }
+
+            // Messages in any panel; the notice panel is this alone.
+            Toast {
+                x: (parent.width - self.width) / 2;
+                y: drawn == OverlayPanel.notice
+                    ? Theme.safe-y + Theme.sp-24
+                    : parent.height - Theme.safe-y - Theme.sp-96 - self.height;
             }
         }
     }

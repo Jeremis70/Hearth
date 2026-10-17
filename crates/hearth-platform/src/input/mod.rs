@@ -35,6 +35,9 @@ pub enum Action {
     HomeShort,
     /// Guide held up to the long-press threshold.
     HomeLong,
+    /// A button bound to Hearth's Capture was released (see
+    /// [`PadActivity::set_capture_inputs`]). Never injected into the UI.
+    Capture,
 }
 
 /// A navigation direction, from the D-pad or the left stick.
@@ -71,6 +74,7 @@ struct ActivityState {
     disarms: AtomicU64,
     pads: Mutex<Vec<PadInfo>>,
     pressed: Mutex<Vec<&'static str>>,
+    capture: Mutex<Vec<&'static str>>,
 }
 
 /// What the input backend knows about a connected controller.
@@ -129,6 +133,26 @@ impl PadActivity {
             .pressed
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = pressed;
+    }
+
+    /// The inputs (Hearth pad position names) that act as Hearth's Capture button right now:
+    /// releasing one sends [`Action::Capture`]. They depend on what is in front (a game's
+    /// mapping, or the controller type's default in menus), so the UI keeps them current.
+    pub fn set_capture_inputs(&self, inputs: Vec<&'static str>) {
+        *self
+            .0
+            .capture
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = inputs;
+    }
+
+    /// See [`PadActivity::set_capture_inputs`].
+    pub fn capture_inputs(&self) -> Vec<&'static str> {
+        self.0
+            .capture
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// Increases with every [`PadActivity::disarm`].

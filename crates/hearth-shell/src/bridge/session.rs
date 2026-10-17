@@ -21,7 +21,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use hearth_core::controls::edit::{Editor, Scope};
-use hearth_core::controls::{ControllerKind, GameKey, PadInput};
+use hearth_core::controls::{ControllerKind, GameKey, HearthAction, PadInput, Target, defaults};
 use hearth_core::library::{Library, LibraryEntry};
 use hearth_core::model::{GameId, SystemId};
 use hearth_core::profiles::{DolphinProfile, RetroArchProfile};
@@ -54,6 +54,10 @@ const FOCUS_POLL: Duration = Duration::from_millis(250);
 /// Give up switching to the game after this long.
 const FOCUS_RETRY: Duration = Duration::from_secs(3);
 const TOAST_TIME: Duration = Duration::from_secs(5);
+/// How long a notice stays over a running game.
+const NOTICE_TIME: Duration = Duration::from_secs(3);
+/// What the Capture button does for now.
+const CAPTURE_MESSAGE: &str = "Screenshots and clips are coming later";
 /// First app id given to games (Hearth is 769).
 const FIRST_GAME_APP_ID: AppId = 10_000;
 
@@ -126,6 +130,9 @@ pub struct Controller {
     events: Sender<RuntimeEvent>,
     next_app_id: AppId,
     toast_timer: slint::Timer,
+    notice_timer: slint::Timer,
+    /// The running game's Capture buttons (Hearth pad position names).
+    game_capture: Vec<&'static str>,
     focus_timer: slint::Timer,
     /// Open controls pages: [main window, overlay].
     pages: [Option<Page>; 2],
@@ -246,6 +253,8 @@ pub fn install(setup: Setup) {
         events,
         next_app_id: FIRST_GAME_APP_ID,
         toast_timer: slint::Timer::default(),
+        notice_timer: slint::Timer::default(),
+        game_capture: Vec::new(),
         focus_timer: slint::Timer::default(),
         pages: [None, None],
         applier: Box::new(EmulatorConfigApplier),
@@ -354,6 +363,7 @@ impl Controller {
             overlay.set_clock(clock.into());
         }
         self.sync_controller_type();
+        self.sync_capture();
         self.refresh_settings();
         self.sync_session_ui();
     }
@@ -370,6 +380,10 @@ impl Controller {
                 self.home_button(false);
                 Route::None
             }
+            Action::Capture => {
+                self.capture();
+                Route::None
+            }
             Action::HomeLong => {
                 self.home_button(true);
                 Route::None
@@ -383,6 +397,80 @@ impl Controller {
                 // The game owns the controller; gilrs can't hide input from it, so drop ours.
                 Mode::Game | Mode::Launching => Route::None,
             },
+        }
+    }
+
+    /// Switches what has the controller, and with it which buttons are Capture: the game's
+    /// mapping while a game is in front, the controller type's default in Hearth's menus.
+    fn set_mode(&mut self, mode: Mode) {
+        self.mode = mode;
+        self.sync_capture();
+    }
+
+    /// Tells the input thread which buttons are Capture now. Also called every second, as
+    /// controllers come and go.
+    fn sync_capture(&self) {
+        let capture = match self.mode {
+            Mode::Game | Mode::Launching => self.game_capture.clone(),
+            Mode::Shell | Mode::Overlay => defaults::pad_hearth_binds(self.connected_kind())
+                .into_iter()
+                .filter(|(_, action)| *action == HearthAction::Capture)
+                .map(|(input, _)| input.name())
+                .collect(),
+        };
+        if capture != self.activity.capture_inputs() {
+            tracing::info!(mode = ?self.mode, ?capture, "capture buttons");
+            self.activity.set_capture_inputs(capture);
+        }
+    }
+
+    /// The Capture button. A notice for now (screenshots and clips come later; see
+    /// docs/design/overlay.md). Over a running game it shows without pausing it.
+    fn capture(&mut self) {
+        tracing::info!(mode = ?self.mode, "capture button");
+        match self.mode {
+            Mode::Game if self.compositor.controls_focus() => self.show_notice(CAPTURE_MESSAGE),
+            Mode::Overlay => {
+                if let Some(overlay) = &self.overlay {
+                    overlay.global::<Status>().set_toast(CAPTURE_MESSAGE.into());
+                    let weak = overlay.as_weak();
+                    self.notice_timer
+                        .start(slint::TimerMode::SingleShot, TOAST_TIME, move || {
+                            if let Some(overlay) = weak.upgrade() {
+                                overlay.global::<Status>().set_toast("".into());
+                            }
+                        });
+                }
+            }
+            _ => self.toast(CAPTURE_MESSAGE),
+        }
+    }
+
+    /// A message over the running game: the overlay's notice panel, no scrim, no freeze.
+    fn show_notice(&mut self, message: &str) {
+        let (Some(overlay), Some(window)) = (&self.overlay, self.overlay_window) else {
+            return;
+        };
+        overlay.global::<Status>().set_toast(message.into());
+        overlay.set_panel(OverlayPanel::Notice);
+        if let Err(err) = self.compositor.set_overlay(window, true) {
+            tracing::warn!("showing a notice failed: {err}");
+            return;
+        }
+        self.notice_timer
+            .start(slint::TimerMode::SingleShot, NOTICE_TIME, || {
+                defer(Controller::hide_notice);
+            });
+    }
+
+    fn hide_notice(&mut self) {
+        let Some(overlay) = &self.overlay else {
+            return;
+        };
+        overlay.global::<Status>().set_toast("".into());
+        // The quick menu may have opened over the notice; it stays.
+        if overlay.get_panel() == OverlayPanel::Notice {
+            self.hide_overlay();
         }
     }
 
@@ -458,6 +546,13 @@ impl Controller {
             &self.profile,
         );
         tracing::info!(key = %input.key.as_string(), "controls resolved");
+        self.game_capture = input
+            .resolved
+            .iter()
+            .flat_map(|r| &r.mapping.binds)
+            .filter(|(_, t)| **t == Target::Hearth(HearthAction::Capture))
+            .map(|(input, _)| input.name())
+            .collect();
         let controls_problem = input.report();
         let mut command = match (emulator.kind, emulator.core.as_ref()) {
             (EmulatorKind::Retroarch, Some(core)) if core.is_file() => {
@@ -528,7 +623,7 @@ impl Controller {
         ));
         self.closing = false;
         if self.compositor.controls_focus() {
-            self.mode = Mode::Launching;
+            self.set_mode(Mode::Launching);
             self.toast(&controls_problem.unwrap_or_else(|| format!("Starting {title}…")));
             self.search_window(session, app_id);
         } else {
@@ -536,7 +631,7 @@ impl Controller {
             if let Some(problem) = controls_problem {
                 self.toast(&problem);
             }
-            self.mode = Mode::Game;
+            self.set_mode(Mode::Game);
             if let Some(active) = &mut self.active {
                 active.state = SessionState::Playing;
             }
@@ -619,7 +714,7 @@ impl Controller {
         };
         self.hide_overlay();
         self.thaw();
-        self.mode = Mode::Game;
+        self.set_mode(Mode::Game);
         if !self.compositor.controls_focus() {
             return;
         }
@@ -670,7 +765,7 @@ impl Controller {
         tracing::warn!("couldn't show the game: {reason}");
         self.activity.disarm();
         let _ = self.compositor.focus(&[SHELL_APP_ID]);
-        self.mode = Mode::Shell;
+        self.set_mode(Mode::Shell);
         if let Some(active) = &mut self.active {
             active.state = SessionState::InBackground;
         }
@@ -701,7 +796,7 @@ impl Controller {
             self.go_home();
             return;
         }
-        self.mode = Mode::Overlay;
+        self.set_mode(Mode::Overlay);
         if let Some(active) = &mut self.active {
             active.state = SessionState::InBackground;
         }
@@ -733,7 +828,7 @@ impl Controller {
         if let Err(err) = self.compositor.focus(&[SHELL_APP_ID]) {
             tracing::warn!("focusing Hearth failed: {err}");
         }
-        self.mode = Mode::Shell;
+        self.set_mode(Mode::Shell);
         if let Some(active) = &mut self.active {
             active.state = SessionState::InBackground;
         }
@@ -790,7 +885,7 @@ impl Controller {
         self.closing = true;
         self.hide_overlay();
         let _ = self.compositor.focus(&[SHELL_APP_ID]);
-        self.mode = Mode::Shell;
+        self.set_mode(Mode::Shell);
         self.show_home();
         self.toast(&format!("Closing {title}…"));
         let runtime = self.runtime.clone();
@@ -834,7 +929,7 @@ impl Controller {
         self.activity.disarm();
         self.hide_overlay();
         let _ = self.compositor.focus(&[SHELL_APP_ID]);
-        self.mode = Mode::Shell;
+        self.set_mode(Mode::Shell);
         self.refresh();
         self.show_home();
         let message = if success || closed_by_us {
@@ -916,6 +1011,16 @@ impl Controller {
         }
     }
 
+    /// The first connected controller's type (generic when none is connected).
+    fn connected_kind(&self) -> ControllerKind {
+        self.activity
+            .pads()
+            .first()
+            .map_or(ControllerKind::Generic, |pad| {
+                ControllerKind::from_ids(pad.vendor_id, pad.product_id)
+            })
+    }
+
     /// Player 1's controller type, as launches see it (see `controls::device`).
     fn pad_kind(&self) -> ControllerKind {
         controls::device(&self.activity.pads(), &self.controls_dir).kind
@@ -929,14 +1034,7 @@ impl Controller {
     /// Button glyphs follow the first connected controller (both windows have their own
     /// globals).
     fn sync_controller_type(&self) {
-        let kind = self
-            .activity
-            .pads()
-            .first()
-            .map_or(ControllerKind::Generic, |pad| {
-                ControllerKind::from_ids(pad.vendor_id, pad.product_id)
-            });
-        let family = glyph_family(kind);
+        let family = glyph_family(self.connected_kind());
         if let Some(app) = self.app.upgrade() {
             app.global::<ControllerType>().set_family(family);
         }

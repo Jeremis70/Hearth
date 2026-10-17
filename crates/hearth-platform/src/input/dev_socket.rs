@@ -24,6 +24,7 @@ pub fn parse_action(name: &str) -> Option<Action> {
         "options" => Action::Options,
         "home_short" => Action::HomeShort,
         "home_long" => Action::HomeLong,
+        "capture" => Action::Capture,
         _ => return None,
     })
 }

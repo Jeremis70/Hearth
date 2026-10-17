@@ -80,6 +80,8 @@ fn run(mut gilrs: Gilrs, tx: &Sender<Action>, activity: &PadActivity) {
     let mut out = Vec::new();
     // Extra buttons held (gilrs has no `Button` for them), by Hearth name.
     let mut extras: Vec<&'static str> = Vec::new();
+    // Capture buttons pressed and not yet released.
+    let mut capture_held: Vec<&'static str> = Vec::new();
     loop {
         let now = Instant::now();
         let wait = state.deadline().map_or(IDLE_WAIT, |d| {
@@ -88,6 +90,25 @@ fn run(mut gilrs: Gilrs, tx: &Sender<Action>, activity: &PadActivity) {
         let event = gilrs.next_event_blocking(Some(wait));
         let now = Instant::now();
         if let Some(event) = event {
+            match event.event {
+                EventType::ButtonPressed(button, code) => {
+                    if let Some(name) = input_name(button, code.into_u32())
+                        && activity.capture_inputs().contains(&name)
+                        && !capture_held.contains(&name)
+                    {
+                        capture_held.push(name);
+                    }
+                }
+                EventType::ButtonReleased(button, code) => {
+                    if let Some(name) = input_name(button, code.into_u32())
+                        && let Some(i) = capture_held.iter().position(|n| *n == name)
+                    {
+                        capture_held.remove(i);
+                        out.push(Action::Capture);
+                    }
+                }
+                _ => {}
+            }
             let input = match event.event {
                 EventType::ButtonPressed(Button::Unknown, code) => {
                     if let Some(name) = extra_name(code.into_u32())
@@ -165,6 +186,15 @@ fn position_name(button: Button) -> Option<&'static str> {
         Button::Mode => "guide",
         _ => return None,
     })
+}
+
+/// Hearth pad position name of a button event.
+fn input_name(button: Button, code: u32) -> Option<&'static str> {
+    if button == Button::Unknown {
+        extra_name(code)
+    } else {
+        position_name(button)
+    }
 }
 
 /// Hearth name of a button gilrs reports as `Button::Unknown`, from its raw evdev code

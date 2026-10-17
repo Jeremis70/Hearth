@@ -115,7 +115,9 @@ resume and close it. Verified end to end inside `scripts/run-gamescope.sh` with 
   total length with all elbows on one vertical line per side, so lines can't cross (tested at
   1920×1080 and 1280×720). `HEARTH_CALLOUT_PREVIEW=out.svg cargo test -p hearth-shell
   callout_preview` draws the layout. The focused input is highlighted on the drawing.
-- **Select, Start, touchpad, share, paddles** show as named pills, not Kenney glyphs.
+- **Glyphs:** Kenney's own Create/Options/View/Menu/−/+ and touchpad icons; inputs without a
+  Kenney glyph (Share, paddles) show as a pill with their name. D-pad directions use Kenney's
+  `_outline` variants: the pressed side is filled, so they stay distinct when tinted one color.
 - **Capture** (`@capture`, `HearthAction`): a Hearth action on any console, never sent to the
   emulator. `data/controls/pads/<type>.toml` (between the console default and the user's files):
   PlayStation Create and Xbox Series / Switch Pro Share are Capture; the PlayStation touchpad

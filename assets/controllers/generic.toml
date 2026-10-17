@@ -1,0 +1,26 @@
+# Callout anchors for generic.svg, in its units (viewBox 760 × 460). Each input's leader line
+# ends at (x, y). `side` is the callout column (left, right or bottom) and `order` its row,
+# top to bottom (left to right for the bottom row). Swap both files to change the outline.
+
+width = 760
+height = 460
+
+[anchors]
+l2 = { x = 202, y = 30, side = "left", order = 0 }
+l1 = { x = 140, y = 74, side = "left", order = 1 }
+dpad_up = { x = 200, y = 138, side = "left", order = 2 }
+dpad_left = { x = 162, y = 175, side = "left", order = 3 }
+dpad_down = { x = 200, y = 212, side = "left", order = 4 }
+dpad_right = { x = 238, y = 175, side = "left", order = 5 }
+left_stick = { x = 254, y = 262, side = "left", order = 6 }
+l3 = { x = 282, y = 290, side = "left", order = 7 }
+r2 = { x = 558, y = 30, side = "right", order = 0 }
+r1 = { x = 620, y = 74, side = "right", order = 1 }
+north = { x = 560, y = 133, side = "right", order = 2 }
+east = { x = 602, y = 175, side = "right", order = 3 }
+south = { x = 560, y = 217, side = "right", order = 4 }
+west = { x = 518, y = 175, side = "right", order = 5 }
+right_stick = { x = 506, y = 262, side = "right", order = 6 }
+r3 = { x = 478, y = 290, side = "right", order = 7 }
+select = { x = 338, y = 167, side = "bottom", order = 0 }
+start = { x = 422, y = 167, side = "bottom", order = 1 }

@@ -1,0 +1,27 @@
+<!-- Hearth's generic controller outline (original line art, no brand shapes). White strokes,
+     tinted in the UI. Callout anchor points for each input are in generic.toml (same units). -->
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="460" viewBox="0 0 760 460" fill="none" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+  <!-- triggers (L2/R2) behind the bumpers -->
+  <path d="M152 60 V38 Q152 20 172 20 H232 Q252 20 252 38 V60"/>
+  <path d="M508 60 V38 Q508 20 528 20 H588 Q608 20 608 38 V60"/>
+  <!-- bumpers (L1/R1) -->
+  <rect x="128" y="62" width="144" height="24" rx="12"/>
+  <rect x="488" y="62" width="144" height="24" rx="12"/>
+  <!-- body with two grips -->
+  <path d="M150 92 C210 76 300 84 380 84 C460 84 550 76 610 92 C680 112 722 222 740 360 C752 432 690 456 640 420 C602 392 572 342 522 332 L238 332 C188 342 158 392 120 420 C70 456 8 432 20 360 C38 222 80 112 150 92 Z"/>
+  <!-- D-pad -->
+  <path d="M185 130 H215 V160 H245 V190 H215 V220 H185 V190 H155 V160 H185 Z"/>
+  <!-- face buttons -->
+  <circle cx="560" cy="133" r="18"/>
+  <circle cx="602" cy="175" r="18"/>
+  <circle cx="560" cy="217" r="18"/>
+  <circle cx="518" cy="175" r="18"/>
+  <!-- sticks -->
+  <circle cx="282" cy="262" r="44"/>
+  <circle cx="282" cy="262" r="28"/>
+  <circle cx="478" cy="262" r="44"/>
+  <circle cx="478" cy="262" r="28"/>
+  <!-- select / start -->
+  <rect x="318" y="158" width="40" height="18" rx="9"/>
+  <rect x="402" y="158" width="40" height="18" rx="9"/>
+</svg>

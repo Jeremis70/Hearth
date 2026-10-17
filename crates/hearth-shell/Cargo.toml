@@ -11,6 +11,8 @@ name = "hearth-shell"
 path = "src/main.rs"
 
 [dependencies]
+serde.workspace = true
+toml.workspace = true
 hearth-core.workspace = true
 hearth-platform.workspace = true
 nix.workspace = true

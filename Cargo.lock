@@ -1845,8 +1845,10 @@ dependencies = [
  "hearth-platform",
  "nix",
  "raw-window-handle",
+ "serde",
  "slint",
  "slint-build",
+ "toml",
  "tracing",
  "tracing-subscriber",
 ]

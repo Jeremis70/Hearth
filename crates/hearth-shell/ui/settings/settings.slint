@@ -5,6 +5,7 @@ import { SettingsData, SettingsCategory } from "../data.slint";
 import { ListRow } from "../components/list_row.slint";
 import { HintBar } from "../components/hint_bar.slint";
 import { NetworkPane } from "network.slint";
+import { ControllersPane } from "controllers.slint";
 
 // Glides behind the focused row of a list.
 component FocusFrame inherits Rectangle {
@@ -55,7 +56,6 @@ export global Settings {
     public pure function placeholder-for(key: string) -> string {
         if key == "folders" { return "Add and rescan game folders with a controller folder picker. Arrives in M1."; }
         if key == "emulators" { return "Detected emulators, default per console and BIOS status. Arrives in M2."; }
-        if key == "controllers" { return "A/B layout and a button test. Arrives in a later milestone."; }
         "Suspend, restart, power off and About. Arrives with the power backend."
     }
 }
@@ -71,7 +71,9 @@ export component SettingsScreen inherits Rectangle {
     property <int> content-index: 0;
     property <int> count: SettingsData.categories.length;
     property <string> key: SettingsData.categories[index].key;
-    property <bool> has-content: key == "network" && SettingsData.wifi.length > 0;
+    property <int> content-count: key == "network" ? SettingsData.wifi.length
+        : key == "controllers" ? SettingsData.controller-items.length : 0;
+    property <bool> has-content: content-count > 0;
     property <length> list-top: 180px * Theme.scale;
 
     public function reset() {
@@ -102,9 +104,10 @@ export component SettingsScreen inherits Rectangle {
             return false;
         }
         if action == UiAction.up { content-index = max(0, content-index - 1); return true; }
-        if action == UiAction.down { content-index = min(SettingsData.wifi.length - 1, content-index + 1); return true; }
+        if action == UiAction.down { content-index = min(content-count - 1, content-index + 1); return true; }
         if action == UiAction.accept {
-            SettingsData.wifi-selected(SettingsData.wifi[content-index].ssid);
+            if key == "network" { SettingsData.wifi-selected(SettingsData.wifi[content-index].ssid); }
+            if key == "controllers" { SettingsData.controller-item(SettingsData.controller-items[content-index].key); }
             return true;
         }
         if action == UiAction.left || action == UiAction.back { pane = 0; return true; }
@@ -168,7 +171,10 @@ export component SettingsScreen inherits Rectangle {
             if key == "network": NetworkPane {
                 focus-index: pane == 1 ? content-index : -1;
             }
-            if key != "network": Text {
+            if key == "controllers": ControllersPane {
+                focus-index: pane == 1 ? content-index : -1;
+            }
+            if key != "network" && key != "controllers": Text {
                 x: Theme.sp-24;
                 y: Theme.sp-24;
                 width: parent.width - 2 * Theme.sp-24;

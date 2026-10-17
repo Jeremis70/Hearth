@@ -1,4 +1,5 @@
 import { Theme } from "theme.slint";
+import { ControlsScreen } from "controls/screen.slint";
 import { Icons } from "icons.slint";
 import { UiAction, InputMap } from "input.slint";
 import { HButton } from "components/button.slint";
@@ -64,7 +65,15 @@ export component OverlayWindow inherits Window {
     property <int> item: 0;
     property <bool> confirm-open: false;
     property <int> confirm-index: 0;
-    property <[string]> dock-items: ["Home", "Library", "Media", "Volume", "Controllers", "Power"];
+    property <[string]> dock-items: ["Home", "Library", "Media", "Volume", "Controls", "Power"];
+    // The running game's controls page, over the frozen game.
+    property <bool> controls-open: false;
+
+    // Shows the controls page (ControlsData filled by Rust).
+    public function open-controls() {
+        controls.reset();
+        controls-open = true;
+    }
 
     // Globals are per window, so the overlay keeps its own Theme.scale.
     function update-scale() {
@@ -81,6 +90,7 @@ export component OverlayWindow inherits Window {
     public function reset() {
         item = 0;
         confirm-open = false;
+        controls-open = false;
         scope.focus();
     }
 
@@ -97,6 +107,9 @@ export component OverlayWindow inherits Window {
         if action == UiAction.home-short || action == UiAction.home-long {
             home-button(action == UiAction.home-long);
             return true;
+        }
+        if controls-open {
+            return controls.handle(action);
         }
         if confirm-open {
             if action == UiAction.left { confirm-index = 0; }
@@ -221,8 +234,14 @@ export component OverlayWindow inherits Window {
                 DockButton { icon: Icons.library; label: "Library"; focused: item == 11; }
                 DockButton { icon: Icons.clapperboard; label: "Media"; focused: item == 12; }
                 DockButton { icon: Icons.volume; label: "Volume"; focused: item == 13; }
-                DockButton { icon: Icons.gamepad; label: "Controllers"; focused: item == 14; }
+                DockButton { icon: Icons.gamepad; label: "Controls"; focused: item == 14; }
                 DockButton { icon: Icons.power; label: "Power"; focused: item == 15; }
+            }
+
+            controls := ControlsScreen {
+                visible: controls-open;
+                background: Theme.bg-base.with-alpha(0.94);
+                close => { controls-open = false; }
             }
 
             if confirm-open: ConfirmDialog {

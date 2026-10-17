@@ -111,6 +111,7 @@ fn run(mut gilrs: Gilrs, tx: &Sender<Action>, activity: &PadActivity) {
             if let Some(input) = input {
                 state.handle(input, now, activity.disarm_count(), &mut out);
             }
+            activity.set_pressed(pressed_inputs(&gilrs));
         }
         state.tick(now, &mut out);
         for action in out.drain(..) {
@@ -120,6 +121,74 @@ fn run(mut gilrs: Gilrs, tx: &Sender<Action>, activity: &PadActivity) {
             }
         }
     }
+}
+
+/// Hearth pad position name of a gilrs button (`hearth_core::controls::PadInput` names).
+fn position_name(button: Button) -> Option<&'static str> {
+    Some(match button {
+        Button::South => "south",
+        Button::East => "east",
+        Button::West => "west",
+        Button::North => "north",
+        Button::LeftTrigger => "l1",
+        Button::RightTrigger => "r1",
+        Button::LeftTrigger2 => "l2",
+        Button::RightTrigger2 => "r2",
+        Button::LeftThumb => "l3",
+        Button::RightThumb => "r3",
+        Button::Start => "start",
+        Button::Select => "select",
+        Button::DPadUp => "dpad_up",
+        Button::DPadDown => "dpad_down",
+        Button::DPadLeft => "dpad_left",
+        Button::DPadRight => "dpad_right",
+        Button::Mode => "guide",
+        _ => return None,
+    })
+}
+
+const ALL_BUTTONS: [Button; 17] = [
+    Button::South,
+    Button::East,
+    Button::West,
+    Button::North,
+    Button::LeftTrigger,
+    Button::RightTrigger,
+    Button::LeftTrigger2,
+    Button::RightTrigger2,
+    Button::LeftThumb,
+    Button::RightThumb,
+    Button::Start,
+    Button::Select,
+    Button::DPadUp,
+    Button::DPadDown,
+    Button::DPadLeft,
+    Button::DPadRight,
+    Button::Mode,
+];
+
+/// Inputs held on any controller, by position name; a stick counts when pushed past half.
+fn pressed_inputs(gilrs: &Gilrs) -> Vec<&'static str> {
+    let mut pressed = Vec::new();
+    for (_, pad) in gilrs.gamepads() {
+        for button in ALL_BUTTONS {
+            if pad.is_pressed(button)
+                && let Some(name) = position_name(button)
+                && !pressed.contains(&name)
+            {
+                pressed.push(name);
+            }
+        }
+        for (name, x, y) in [
+            ("left_stick", Axis::LeftStickX, Axis::LeftStickY),
+            ("right_stick", Axis::RightStickX, Axis::RightStickY),
+        ] {
+            if pad.value(x).hypot(pad.value(y)) > STICK_DEADZONE && !pressed.contains(&name) {
+                pressed.push(name);
+            }
+        }
+    }
+    pressed
 }
 
 /// The connected controllers, as [`PadInfo`]s.

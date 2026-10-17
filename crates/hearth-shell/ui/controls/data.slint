@@ -1,0 +1,63 @@
+// The controls page's data (src/bridge/controls_page.rs fills it). A global per window: the
+// main window and the overlay each have their own copy.
+
+// One input's callout on the Buttons tab.
+export struct Callout {
+    input: string,      // Hearth pad position ("south", "dpad_up", "left_stick")
+    label: string,      // what it does on this console ("A", "Fast-forward (hold)"), "—" if nothing
+    hint: string,       // one line for the description panel
+    unassigned: bool,
+    changed: bool,      // differs from the layer below (accent dot)
+    ax: float,          // anchor on the drawing, in drawing units
+    ay: float,
+}
+
+// One entry of the "what can this button do" menu.
+export struct Choice {
+    id: string,         // target as written in controls files ("Z", "@fast_forward_hold", "none")
+    label: string,
+    hint: string,
+    current: bool,
+}
+
+// One row of the Sticks & options tab.
+export struct OptionRow {
+    id: string,
+    label: string,
+    value: string,
+    hint: string,
+    changed: bool,
+    kind: int,          // 0 toggle, 1 stepper (left/right), 2 action (reset)
+}
+
+// One input on the button test drawing.
+export struct TestInput {
+    input: string,
+    ax: float,
+    ay: float,
+    pressed: bool,
+}
+
+export global ControlsData {
+    in property <string> title;             // "GameCube"
+    in property <string> scope-line;        // "All GameCube games" / "Twilight Princess only"
+    in property <string> note;              // "Applies next time you start the game"
+    in property <string> message;           // short feedback ("Z and R swapped"), empty: none
+    in property <string> changed-label;     // what the dot means on this page
+    in property <string> reset-message;     // what Reset goes back to
+    in property <float> drawing-width: 760;
+    in property <float> drawing-height: 460;
+    in property <[Callout]> callouts;       // left column, then right column, then bottom row
+    in property <int> left-count;
+    in property <int> right-count;
+    in property <[Choice]> choices;
+    in property <[OptionRow]> options;
+    in property <[TestInput]> test-inputs;
+
+    // Fills `choices` for `input`; returns the index of its current target.
+    callback request-choices(/* input */ string) -> int;
+    callback choose(/* input */ string, /* choice id */ string);
+    // step: -1/+1 for steppers and toggles, 0 to activate (toggle, reset).
+    callback change-option(/* id */ string, /* step */ int);
+    callback closed();
+}

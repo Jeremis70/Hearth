@@ -11,10 +11,13 @@ import { Placeholder } from "placeholder.slint";
 import { OverlayWindow } from "overlay.slint";
 import { Toast } from "components/toast.slint";
 import { ControllerType } from "components/glyphs.slint";
+import { ControlsScreen } from "controls/screen.slint";
+import { ButtonTest } from "controls/test.slint";
+import { ControlsData, Callout, Choice, OptionRow, TestInput } from "controls/data.slint";
 
-export { Theme, ControllerType, OverlayWindow, HomeData, SettingsData, Status, Session, HomeTile, TileKind, SettingsCategory, WifiRow }
+export { Theme, ControllerType, OverlayWindow, HomeData, SettingsData, Status, Session, HomeTile, TileKind, SettingsCategory, WifiRow, ControlsData, Callout, Choice, OptionRow, TestInput }
 
-enum Screen { home, settings, placeholder }
+enum Screen { home, settings, placeholder, controls, button-test }
 
 export component AppWindow inherits Window {
     title: "Hearth";
@@ -26,6 +29,8 @@ export component AppWindow inherits Window {
     default-font-family: "Manrope";
 
     property <Screen> screen: Screen.home;
+    // Where Back on the controls page returns (Settings or Home).
+    property <Screen> controls-return: Screen.settings;
 
     function update-scale() {
         Theme.scale = min(self.width / 1920px, self.height / 1080px);
@@ -44,6 +49,21 @@ export component AppWindow inherits Window {
         home.reset();
     }
 
+    // Shows the controls page (ControlsData filled by Rust), returning to the current screen.
+    public function open-controls() {
+        controls-return = screen == Screen.home ? Screen.home : Screen.settings;
+        controls.reset();
+        screen = Screen.controls;
+    }
+
+    // Button test: input is handled by Rust (a long Guide press closes it).
+    public function open-button-test() {
+        screen = Screen.button-test;
+    }
+    public function close-button-test() {
+        screen = Screen.settings;
+    }
+
     // Every key (and every controller action, injected as a key) goes through here.
     function dispatch(action: UiAction) -> bool {
         if action == UiAction.none {
@@ -56,6 +76,12 @@ export component AppWindow inherits Window {
         }
         if screen == Screen.settings {
             return settings.handle(action);
+        }
+        if screen == Screen.controls {
+            return controls.handle(action);
+        }
+        if screen == Screen.button-test {
+            return true;
         }
         if screen == Screen.placeholder {
             if action == UiAction.back {
@@ -90,6 +116,19 @@ export component AppWindow inherits Window {
             visible: self.opacity > 0;
             animate opacity { duration: Theme.base; easing: ease-out; }
             close => { screen = Screen.home; }
+        }
+
+        controls := ControlsScreen {
+            opacity: screen == Screen.controls ? 1 : 0;
+            visible: self.opacity > 0;
+            animate opacity { duration: Theme.base; easing: ease-out; }
+            close => { screen = controls-return; }
+        }
+
+        ButtonTest {
+            opacity: screen == Screen.button-test ? 1 : 0;
+            visible: self.opacity > 0;
+            animate opacity { duration: Theme.base; easing: ease-out; }
         }
 
         placeholder := Placeholder {

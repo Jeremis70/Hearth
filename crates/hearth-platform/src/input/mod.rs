@@ -70,6 +70,7 @@ pub struct PadActivity(Arc<ActivityState>);
 struct ActivityState {
     disarms: AtomicU64,
     pads: Mutex<Vec<PadInfo>>,
+    pressed: Mutex<Vec<&'static str>>,
 }
 
 /// What the input backend knows about a connected controller.
@@ -109,6 +110,25 @@ impl PadActivity {
     /// Replaces the list of connected controllers.
     pub fn set_pads(&self, pads: Vec<PadInfo>) {
         *self.0.pads.lock().unwrap_or_else(PoisonError::into_inner) = pads;
+    }
+
+    /// Inputs held right now on any controller, by Hearth pad position name ("south",
+    /// "left_stick", "guide"), for the button test.
+    pub fn pressed(&self) -> Vec<&'static str> {
+        self.0
+            .pressed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Replaces the held inputs.
+    pub fn set_pressed(&self, pressed: Vec<&'static str>) {
+        *self
+            .0
+            .pressed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = pressed;
     }
 
     /// Increases with every [`PadActivity::disarm`].

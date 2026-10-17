@@ -1,6 +1,5 @@
 //! Where each Hearth pad input sits on the controller drawing (`assets/controllers/`), for the
 //! controls page's callouts. Loaded from data so another outline can be dropped in.
-#![expect(dead_code, reason = "used by the controls page, added next")]
 
 use std::collections::BTreeMap;
 

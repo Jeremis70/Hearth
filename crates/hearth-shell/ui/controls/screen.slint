@@ -1,0 +1,536 @@
+import { Theme } from "../theme.slint";
+import { UiAction } from "../input.slint";
+import { ButtonGlyph } from "../components/glyphs.slint";
+import { HintBar } from "../components/hint_bar.slint";
+import { FocusRing } from "../components/focus.slint";
+import { ConfirmDialog } from "../components/dialog.slint";
+import { ControlsData, Callout } from "data.slint";
+
+// Small accent dot: this value differs from the layer below.
+component ChangedDot inherits Rectangle {
+    in property <bool> shown;
+    width: 12px * Theme.scale;
+    height: self.width;
+    border-radius: self.width / 2;
+    background: shown ? Theme.accent : transparent;
+}
+
+// One callout: glyph + what the input does. `align` 0: text right of the glyph's column
+// (left side, glyph nearest the drawing), 1: glyph first (right side and bottom row).
+component CalloutBox inherits Rectangle {
+    in property <Callout> callout;
+    in property <bool> focused;
+    in property <int> align;
+    border-radius: Theme.radius-md;
+    background: focused ? Theme.surface-raised : transparent;
+
+    HorizontalLayout {
+        padding-left: Theme.sp-16;
+        padding-right: Theme.sp-16;
+        spacing: Theme.sp-12;
+        alignment: align == 0 ? end : start;
+        if align == 0: ChangedDot {
+            y: (parent.height - self.height) / 2;
+            shown: callout.changed;
+        }
+        if align == 0: Text {
+            text: callout.label;
+            vertical-alignment: center;
+            horizontal-alignment: right;
+            font-size: Theme.body-lg;
+            font-weight: Theme.medium;
+            color: callout.unassigned ? Theme.text-disabled : Theme.text-primary;
+            overflow: elide;
+        }
+        ButtonGlyph {
+            y: (parent.height - self.height) / 2;
+            input: callout.input;
+            tint: focused ? Theme.accent : Theme.text-primary;
+            size: 40px * Theme.scale;
+        }
+        if align == 1: Text {
+            text: callout.label;
+            vertical-alignment: center;
+            font-size: Theme.body-lg;
+            font-weight: Theme.medium;
+            color: callout.unassigned ? Theme.text-disabled : Theme.text-primary;
+            overflow: elide;
+        }
+        if align == 1: ChangedDot {
+            y: (parent.height - self.height) / 2;
+            shown: callout.changed;
+        }
+    }
+    FocusRing {
+        shown: focused;
+    }
+}
+
+// The controls page (Settings → Controllers → a console, or the running game's Controls from
+// the overlay or Home). Two tabs: Buttons (controller drawing with a callout per input) and
+// Sticks & options. Every change is saved at once by Rust.
+export component ControlsScreen inherits Rectangle {
+    callback close();
+
+    property <int> tab: 0;              // 0 Buttons, 1 Sticks & options
+    property <int> index: 0;            // focused callout
+    property <bool> menu-open: false;
+    property <int> menu-index: 0;
+    property <int> option-index: 0;
+    property <bool> confirm-open: false;
+    property <int> confirm-index: 1;
+
+    property <int> left-count: ControlsData.left-count;
+    property <int> right-count: ControlsData.right-count;
+    property <int> count: ControlsData.callouts.length;
+    property <Callout> current: ControlsData.callouts[index];
+
+    // Geometry at 1920×1080 (× Theme.scale).
+    property <length> s: 1px * Theme.scale;
+    property <length> draw-h: 520 * s;
+    property <float> k: draw-h / 1px / ControlsData.drawing-height;
+    property <length> draw-w: ControlsData.drawing-width * k * 1px;
+    property <length> draw-x: (root.width - draw-w) / 2;
+    property <length> draw-y: 236 * s;
+    property <length> col-w: 400 * s;
+    property <length> row-h: 52 * s;
+    property <length> row-step: 58 * s;
+    property <length> left-x: Theme.safe-x;
+    property <length> right-x: root.width - Theme.safe-x - col-w;
+    property <length> bottom-w: 260 * s;
+    property <length> bottom-y: draw-y + draw-h + 12 * s;
+    property <length> menu-row: 56 * s;
+    property <int> menu-visible: 9;
+    property <int> menu-first: max(0, min(ControlsData.choices.length - menu-visible, menu-index - 4));
+    property <length> option-step: Theme.row-height * 0.8 + Theme.row-gap;
+    property <int> options-visible: 8;
+    property <int> options-first: max(0, min(ControlsData.options.length - options-visible, option-index - 3));
+
+    public function reset() {
+        tab = 0;
+        index = 0;
+        menu-open = false;
+        option-index = 0;
+        confirm-open = false;
+    }
+
+    function side-of(i: int) -> int {
+        if i < left-count { return 0; }
+        if i < left-count + right-count { return 1; }
+        2
+    }
+    function row-of(i: int) -> int {
+        if i < left-count { return i; }
+        if i < left-count + right-count { return i - left-count; }
+        i - left-count - right-count
+    }
+    // Each column starts level with its first anchor, so rows sit close to their buttons.
+    function column-top(side: int) -> length {
+        draw-y + ControlsData.callouts[first-of(side)].ay * k * 1px - row-h / 2
+    }
+    function box-x(i: int) -> length {
+        if side-of(i) == 0 { return left-x; }
+        if side-of(i) == 1 { return right-x; }
+        // Under its button: the first one extends left, the other right, glyph at the line.
+        let ax = draw-x + ControlsData.callouts[i].ax * k * 1px;
+        row-of(i) == 0 ? ax - bottom-w + 36 * s : ax - 36 * s
+    }
+    function box-y(i: int) -> length {
+        if side-of(i) == 2 { return bottom-y; }
+        column-top(side-of(i)) + row-of(i) * row-step
+    }
+    function box-w(i: int) -> length {
+        side-of(i) == 2 ? bottom-w : col-w
+    }
+    // Leader line from the callout to its anchor on the drawing, in pixels.
+    function leader(i: int) -> string {
+        let c = ControlsData.callouts[i];
+        let ax = (draw-x + c.ax * k * 1px) / 1px;
+        let ay = (draw-y + c.ay * k * 1px) / 1px;
+        let y1 = (box-y(i) + row-h / 2) / 1px;
+        if side-of(i) == 0 {
+            let x1 = (left-x + col-w) / 1px;
+            return "M \{x1} \{y1} L \{x1 + 24 * Theme.scale} \{y1} L \{ax} \{ay}";
+        }
+        if side-of(i) == 1 {
+            let x1 = right-x / 1px;
+            return "M \{x1} \{y1} L \{x1 - 24 * Theme.scale} \{y1} L \{ax} \{ay}";
+        }
+        let top = box-y(i) / 1px;
+        "M \{ax} \{top} L \{ax} \{ay}"
+    }
+
+    function first-of(side: int) -> int {
+        if side == 0 { return 0; }
+        if side == 1 { return left-count; }
+        left-count + right-count
+    }
+    function count-of(side: int) -> int {
+        if side == 0 { return left-count; }
+        if side == 1 { return right-count; }
+        count - left-count - right-count
+    }
+    function move(action: UiAction) {
+        let side = side-of(index);
+        let row = row-of(index);
+        if side == 2 {
+            if action == UiAction.left && row > 0 { index -= 1; }
+            if action == UiAction.right && row + 1 < count-of(2) { index += 1; }
+            if action == UiAction.up {
+                let to = row == 0 ? 0 : 1;
+                index = first-of(to) + count-of(to) - 1;
+            }
+            return;
+        }
+        if action == UiAction.up && row > 0 { index -= 1; }
+        if action == UiAction.down {
+            if row + 1 < count-of(side) {
+                index += 1;
+            } else if count-of(2) > 0 {
+                index = first-of(2) + min(side, count-of(2) - 1);
+            }
+        }
+        if action == UiAction.left && side == 1 { index = first-of(0) + min(row, left-count - 1); }
+        if action == UiAction.right && side == 0 { index = first-of(1) + min(row, right-count - 1); }
+    }
+
+    public function handle(action: UiAction) -> bool {
+        if confirm-open {
+            if action == UiAction.left { confirm-index = 0; }
+            if action == UiAction.right { confirm-index = 1; }
+            if action == UiAction.back { confirm-open = false; }
+            if action == UiAction.accept {
+                confirm-open = false;
+                if confirm-index == 0 { ControlsData.change-option("reset", 0); }
+            }
+            return true;
+        }
+        if menu-open {
+            if action == UiAction.up { menu-index = max(0, menu-index - 1); }
+            if action == UiAction.down { menu-index = min(ControlsData.choices.length - 1, menu-index + 1); }
+            if action == UiAction.back { menu-open = false; }
+            if action == UiAction.accept {
+                menu-open = false;
+                ControlsData.choose(current.input, ControlsData.choices[menu-index].id);
+            }
+            return true;
+        }
+        if action == UiAction.prev-tab || action == UiAction.next-tab {
+            tab = action == UiAction.prev-tab ? 0 : 1;
+            return true;
+        }
+        if action == UiAction.back {
+            ControlsData.closed();
+            close();
+            return true;
+        }
+        if tab == 0 {
+            if action == UiAction.accept {
+                menu-index = max(0, ControlsData.request-choices(current.input));
+                menu-open = true;
+                return true;
+            }
+            move(action);
+            return true;
+        }
+        let option = ControlsData.options[option-index];
+        if action == UiAction.up { option-index = max(0, option-index - 1); }
+        if action == UiAction.down { option-index = min(ControlsData.options.length - 1, option-index + 1); }
+        if action == UiAction.left && option.kind != 2 { ControlsData.change-option(option.id, -1); }
+        if action == UiAction.right && option.kind != 2 { ControlsData.change-option(option.id, 1); }
+        if action == UiAction.accept {
+            if option.kind == 2 {
+                confirm-open = true;
+                confirm-index = 1;
+            } else {
+                ControlsData.change-option(option.id, 0);
+            }
+        }
+        true
+    }
+
+    background: Theme.bg-base;
+    clip: true;
+
+    // Soft top-left glow.
+    Rectangle {
+        x: -parent.width * 0.4;
+        y: -parent.height * 0.6;
+        width: parent.width * 1.2;
+        height: self.width;
+        background: @radial-gradient(circle, Theme.bg-glow 0%, Theme.bg-base 60%);
+    }
+
+    // Header: title, scope, tabs.
+    Text {
+        x: Theme.safe-x;
+        y: Theme.safe-y + Theme.sp-24;
+        text: "Controls · " + ControlsData.title;
+        font-size: Theme.display;
+        font-weight: Theme.semibold;
+        color: Theme.text-primary;
+    }
+    Text {
+        x: Theme.safe-x;
+        y: Theme.safe-y + Theme.sp-24 + 66 * s;
+        text: ControlsData.note == "" ? ControlsData.scope-line : ControlsData.scope-line + "  ·  " + ControlsData.note;
+        font-size: Theme.body-lg;
+        color: Theme.text-secondary;
+    }
+    HorizontalLayout {
+        x: root.width - Theme.safe-x - self.width;
+        y: Theme.safe-y + Theme.sp-24;
+        width: self.preferred-width;
+        height: 56 * s;
+        spacing: Theme.sp-24;
+        ButtonGlyph {
+            y: (parent.height - self.height) / 2;
+            input: "l1";
+            tint: Theme.text-secondary;
+            size: 32 * s;
+        }
+        for name[i] in ["Buttons", "Sticks & options"]: VerticalLayout {
+            spacing: Theme.sp-8;
+            Text {
+                text: name;
+                font-size: Theme.tab;
+                font-weight: Theme.semibold;
+                letter-spacing: Theme.tab-tracking;
+                color: i == tab ? Theme.text-primary : Theme.text-secondary;
+            }
+            Rectangle {
+                height: 4 * s;
+                border-radius: 2 * s;
+                background: i == tab ? Theme.accent : transparent;
+            }
+        }
+        ButtonGlyph {
+            y: (parent.height - self.height) / 2;
+            input: "r1";
+            tint: Theme.text-secondary;
+            size: 32 * s;
+        }
+    }
+
+    // --- Buttons tab --------------------------------------------------------------------
+    Rectangle {
+        visible: tab == 0;
+
+        Image {
+            x: draw-x;
+            y: draw-y;
+            width: draw-w;
+            height: draw-h;
+            source: @image-url("../../../../assets/controllers/generic.svg");
+            colorize: Theme.text-secondary;
+            image-fit: contain;
+        }
+        for c[i] in ControlsData.callouts: Path {
+            x: 0;
+            y: 0;
+            width: root.width;
+            height: root.height;
+            viewbox-x: 0;
+            viewbox-y: 0;
+            viewbox-width: root.width / 1px;
+            viewbox-height: root.height / 1px;
+            commands: leader(i);
+            stroke: i == index ? Theme.accent : Theme.text-disabled;
+            stroke-width: (i == index ? 3 : 2) * s;
+        }
+        for c[i] in ControlsData.callouts: CalloutBox {
+            x: box-x(i);
+            y: box-y(i);
+            width: box-w(i);
+            height: row-h;
+            callout: c;
+            focused: i == index && !menu-open;
+            align: side-of(i) == 0 || (side-of(i) == 2 && row-of(i) == 0) ? 0 : 1;
+        }
+    }
+
+    // --- Sticks & options tab -----------------------------------------------------------
+    Rectangle {
+        visible: tab == 1;
+        x: (root.width - 1100 * s) / 2;
+        y: draw-y;
+        width: 1100 * s;
+        height: options-visible * option-step;
+        clip: true;
+
+        for o[i] in ControlsData.options: Rectangle {
+            y: (i - options-first) * option-step;
+            animate y { duration: Theme.fast; easing: ease-out; }
+            height: Theme.row-height * 0.8;
+            border-radius: Theme.radius-md;
+            background: i == option-index ? Theme.surface-raised : Theme.surface;
+            HorizontalLayout {
+                padding-left: Theme.sp-24;
+                padding-right: Theme.sp-24;
+                spacing: Theme.sp-16;
+                Text {
+                    text: o.label;
+                    vertical-alignment: center;
+                    font-size: Theme.body-lg;
+                    font-weight: Theme.medium;
+                    color: o.kind == 2 ? Theme.danger : Theme.text-primary;
+                    horizontal-stretch: 1;
+                }
+                ChangedDot {
+                    y: (parent.height - self.height) / 2;
+                    shown: o.changed;
+                }
+                if o.kind != 2: Text {
+                    text: o.kind == 1 ? "‹  " + o.value + "  ›" : o.value;
+                    vertical-alignment: center;
+                    font-size: Theme.body-lg;
+                    font-weight: Theme.semibold;
+                    color: i == option-index ? Theme.accent : Theme.text-secondary;
+                }
+            }
+            FocusRing {
+                shown: i == option-index;
+            }
+        }
+    }
+
+    // --- Description panel --------------------------------------------------------------
+    property <string> panel-title: menu-open ? ControlsData.choices[menu-index].label
+        : tab == 0 ? current.label
+        : ControlsData.options[option-index].label;
+    property <string> panel-hint: menu-open ? ControlsData.choices[menu-index].hint
+        : tab == 0 ? current.hint
+        : ControlsData.options[option-index].hint;
+    property <bool> panel-changed: !menu-open && (tab == 0 ? current.changed : ControlsData.options[option-index].changed);
+    Rectangle {
+        x: Theme.safe-x;
+        y: root.height - Theme.safe-y - Theme.sp-32 - Theme.sp-24 - self.height;
+        width: root.width - 2 * Theme.safe-x;
+        height: 116 * s;
+        border-radius: Theme.radius-lg;
+        background: Theme.surface;
+        HorizontalLayout {
+            padding: Theme.sp-24;
+            spacing: Theme.sp-24;
+            if tab == 0 && !menu-open: ButtonGlyph {
+                y: (parent.height - self.height) / 2;
+                input: current.input;
+                size: 56 * s;
+            }
+            VerticalLayout {
+                spacing: Theme.sp-8;
+                alignment: center;
+                Text {
+                    text: panel-title;
+                    font-size: Theme.heading;
+                    font-weight: Theme.semibold;
+                    color: Theme.text-primary;
+                }
+                Text {
+                    text: ControlsData.message != "" ? ControlsData.message : panel-hint;
+                    font-size: Theme.body;
+                    color: ControlsData.message != "" ? Theme.accent : Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+            }
+            if panel-changed: HorizontalLayout {
+                spacing: Theme.sp-8;
+                alignment: end;
+                ChangedDot {
+                    y: (parent.height - self.height) / 2;
+                    shown: true;
+                }
+                Text {
+                    text: ControlsData.changed-label;
+                    vertical-alignment: center;
+                    font-size: Theme.caption;
+                    color: Theme.text-secondary;
+                }
+            }
+        }
+    }
+
+    HintBar {
+        x: Theme.safe-x;
+        width: root.width - 2 * Theme.safe-x;
+        height: Theme.sp-32;
+        y: root.height - Theme.safe-y - self.height;
+        hints: menu-open
+            ? [{ input: "south", label: "Choose" }, { input: "east", label: "Cancel" }]
+            : tab == 0
+            ? [{ input: "south", label: "Change" }, { input: "east", label: "Back" }, { input: "l1", input2: "r1", label: "Tabs" }]
+            : [{ input: "dpad", label: "Adjust" }, { input: "south", label: "Select" }, { input: "east", label: "Back" }, { input: "l1", input2: "r1", label: "Tabs" }];
+    }
+
+    // --- Choice menu ----------------------------------------------------------------------
+    if menu-open: Rectangle {
+        background: Theme.scrim;
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: draw-y - 20 * s;
+            width: 720 * s;
+            height: min(ControlsData.choices.length, menu-visible) * menu-row + 2 * Theme.sp-12 + 64 * s;
+            border-radius: Theme.radius-lg;
+            background: Theme.surface-raised;
+            drop-shadow-blur: Theme.sp-32;
+            drop-shadow-color: #00000080;
+            clip: true;
+
+            HorizontalLayout {
+                x: Theme.sp-24;
+                y: Theme.sp-12;
+                height: 56 * s;
+                spacing: Theme.sp-12;
+                ButtonGlyph {
+                    y: (parent.height - self.height) / 2;
+                    input: current.input;
+                    size: 36 * s;
+                }
+                Text {
+                    text: "does…";
+                    vertical-alignment: center;
+                    font-size: Theme.body-lg;
+                    color: Theme.text-secondary;
+                }
+            }
+            for ch[i] in ControlsData.choices: Rectangle {
+                visible: i >= menu-first && i < menu-first + menu-visible;
+                x: Theme.sp-12;
+                y: 64 * s + Theme.sp-12 + (i - menu-first) * menu-row;
+                width: parent.width - 2 * Theme.sp-12;
+                height: menu-row - 4 * s;
+                border-radius: Theme.radius-md;
+                background: i == menu-index ? Theme.surface : transparent;
+                HorizontalLayout {
+                    padding-left: Theme.sp-24;
+                    padding-right: Theme.sp-24;
+                    Text {
+                        text: ch.label;
+                        vertical-alignment: center;
+                        font-size: Theme.body-lg;
+                        font-weight: Theme.medium;
+                        color: ch.id == "none" ? Theme.text-secondary : Theme.text-primary;
+                        horizontal-stretch: 1;
+                    }
+                    if ch.current: Text {
+                        text: "Current";
+                        vertical-alignment: center;
+                        font-size: Theme.caption;
+                        font-weight: Theme.semibold;
+                        color: Theme.accent;
+                    }
+                }
+                FocusRing {
+                    shown: i == menu-index;
+                }
+            }
+        }
+    }
+
+    if confirm-open: ConfirmDialog {
+        heading: ControlsData.options[option-index].label + "?";
+        message: ControlsData.reset-message;
+        confirm-label: "Reset";
+        index: confirm-index;
+    }
+}

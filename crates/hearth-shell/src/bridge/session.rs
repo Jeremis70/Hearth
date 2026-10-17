@@ -20,9 +20,10 @@ use std::sync::mpsc::{self, Sender};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use hearth_core::controls::ControllerKind;
+use hearth_core::controls::edit::{Editor, Scope};
+use hearth_core::controls::{ControllerKind, GameKey, PadInput};
 use hearth_core::library::{Library, LibraryEntry};
-use hearth_core::model::GameId;
+use hearth_core::model::{GameId, SystemId};
 use hearth_core::profiles::{DolphinProfile, RetroArchProfile};
 use hearth_core::runtime::{
     LaunchCtx, ProcessRuntime, Runtime, RuntimeEvent, Session as RuntimeSession, SessionId,
@@ -32,11 +33,16 @@ use hearth_core::session::{ActiveSession, SessionState};
 use hearth_core::systems::{EmulatorKind, SuspendPolicy, Systems};
 use hearth_platform::gamescope::{AppId, Compositor, SHELL_APP_ID};
 use hearth_platform::input::{Action, PadActivity};
-use slint::ComponentHandle;
+use slint::{ComponentHandle, Model, ModelRc, VecModel};
+use std::rc::Rc;
 
+use super::controls_page::{self, ApplyOutcome, EmulatorConfigApplier, MappingApplier, Page};
 use super::models;
 use crate::controls;
-use crate::{AppWindow, ControllerType, OverlayWindow, Session, Status};
+use crate::{
+    AppWindow, ControllerType, ControlsData, OverlayWindow, Session, SettingsCategory,
+    SettingsData, Status,
+};
 
 /// How long to look for a game's window before giving up.
 const WINDOW_SEARCH: Duration = Duration::from_secs(15);
@@ -121,7 +127,22 @@ pub struct Controller {
     next_app_id: AppId,
     toast_timer: slint::Timer,
     focus_timer: slint::Timer,
+    /// Open controls pages: [main window, overlay].
+    pages: [Option<Page>; 2],
+    applier: Box<dyn MappingApplier>,
+    message_timer: slint::Timer,
+    /// The button test is open (it takes all input; a long Guide press closes it).
+    testing: bool,
+    test_timer: slint::Timer,
 }
+
+/// Which window a controls page is in.
+const MAIN: usize = 0;
+const OVERLAY: usize = 1;
+/// How long a controls page's feedback line stays.
+const MESSAGE_TIME: Duration = Duration::from_secs(4);
+/// Button test refresh interval.
+const TEST_POLL: Duration = Duration::from_millis(33);
 
 /// Everything the controller needs at startup.
 pub struct Setup {
@@ -170,13 +191,26 @@ pub fn install(setup: Setup) {
         session.on_resume(|| defer(Controller::resume_game));
         session.on_close_game(|| defer(Controller::close_game));
         session.on_home_button(|long| defer(move |c| c.home_button(long)));
+        session.on_open_controls(|| defer(|c| c.open_game_controls(MAIN)));
+        app.global::<SettingsData>().on_controller_item(|key| {
+            let key = key.to_string();
+            defer(move |c| c.settings_controller_item(&key));
+        });
+        wire_controls(&app.global::<ControlsData>(), MAIN);
     }
     if let Some(overlay) = &setup.overlay {
         overlay.on_resume(|| defer(Controller::resume_game));
         overlay.on_go_home(|| defer(Controller::go_home));
         overlay.on_close_game(|| defer(Controller::close_game));
         overlay.on_home_button(|long| defer(move |c| c.home_button(long)));
-        overlay.on_dock(|item| tracing::info!(%item, "overlay dock item not implemented yet"));
+        overlay.on_dock(|item| {
+            if item == "Controls" {
+                defer(|c| c.open_game_controls(OVERLAY));
+            } else {
+                tracing::info!(%item, "overlay dock item not implemented yet");
+            }
+        });
+        wire_controls(&overlay.global::<ControlsData>(), OVERLAY);
     }
 
     if !setup.profile.has_autoconfig() {
@@ -213,8 +247,29 @@ pub fn install(setup: Setup) {
         next_app_id: FIRST_GAME_APP_ID,
         toast_timer: slint::Timer::default(),
         focus_timer: slint::Timer::default(),
+        pages: [None, None],
+        applier: Box::new(EmulatorConfigApplier),
+        message_timer: slint::Timer::default(),
+        testing: false,
+        test_timer: slint::Timer::default(),
     };
     CONTROLLER.with(|cell| *cell.borrow_mut() = Some(controller));
+}
+
+/// Connects a window's controls page callbacks to the controller.
+fn wire_controls(data: &ControlsData<'_>, which: usize) {
+    // Synchronous: the page needs the current choice's index right away. Never re-entrant
+    // (Slint calls it while handling a key, after `route` returned).
+    data.on_request_choices(move |input| with(|c| c.controls_choices(which, &input)).unwrap_or(0));
+    data.on_choose(move |input, id| {
+        let (input, id) = (input.to_string(), id.to_string());
+        defer(move |c| c.controls_choose(which, &input, &id));
+    });
+    data.on_change_option(move |id, step| {
+        let id = id.to_string();
+        defer(move |c| c.controls_change_option(which, &id, step));
+    });
+    data.on_closed(move || defer(move |c| c.controls_closed(which)));
 }
 
 /// Closes the running game, if any, before Hearth exits (blocks a few seconds at most).
@@ -256,6 +311,17 @@ fn load_library(db: PathBuf, games_dir: PathBuf, systems: Systems) {
     }
 }
 
+/// What the Settings page calls a controller family.
+fn kind_name(kind: ControllerKind) -> &'static str {
+    match kind {
+        ControllerKind::DualSense => "PlayStation (DualSense)",
+        ControllerKind::DualShock4 => "PlayStation (DualShock 4)",
+        ControllerKind::Xbox => "Xbox",
+        ControllerKind::SwitchPro => "Nintendo Switch Pro",
+        ControllerKind::Generic => "Generic",
+    }
+}
+
 /// `ControllerType.family` in `ui/components/glyphs.slint`.
 fn glyph_family(kind: ControllerKind) -> i32 {
     match kind {
@@ -288,10 +354,17 @@ impl Controller {
             overlay.set_clock(clock.into());
         }
         self.sync_controller_type();
+        self.refresh_settings();
         self.sync_session_ui();
     }
 
     fn route(&mut self, action: Action) -> Route {
+        if self.testing {
+            if action == Action::HomeLong {
+                self.stop_button_test();
+            }
+            return Route::None;
+        }
         match action {
             Action::HomeShort => {
                 self.home_button(false);
@@ -859,6 +932,233 @@ impl Controller {
         }
         if let Some(overlay) = &self.overlay {
             overlay.global::<ControllerType>().set_family(family);
+        }
+    }
+
+    // --- controls pages ------------------------------------------------------------------
+
+    fn with_page_data(&self, which: usize, f: impl FnOnce(&Page, &ControlsData<'_>)) {
+        let Some(page) = &self.pages[which] else {
+            return;
+        };
+        if which == MAIN {
+            if let Some(app) = self.app.upgrade() {
+                f(page, &app.global::<ControlsData>());
+            }
+        } else if let Some(overlay) = &self.overlay {
+            f(page, &overlay.global::<ControlsData>());
+        }
+    }
+
+    /// Settings → Controllers: the button test or a console's page.
+    fn settings_controller_item(&mut self, key: &str) {
+        if key == "test" {
+            self.start_button_test();
+            return;
+        }
+        let Some(id) = key.strip_prefix("system:") else {
+            return;
+        };
+        let Some(system) = self.systems.get(&SystemId::new(id)).cloned() else {
+            return;
+        };
+        let key = GameKey::for_rom(&system.id, std::path::Path::new(""), "");
+        let editor = match Editor::new(&system, key, &self.controls_dir, Scope::System) {
+            Ok(editor) => editor,
+            Err(err) => {
+                self.toast(&err.to_string());
+                return;
+            }
+        };
+        let affects = self
+            .active
+            .as_ref()
+            .is_some_and(|a| a.game.system == system.id);
+        self.pages[MAIN] = Some(Page::new(editor, None, affects, self.applier.is_live()));
+        self.with_page_data(MAIN, |page, data| {
+            data.set_message("".into());
+            page.fill(data);
+        });
+        if let Some(app) = self.app.upgrade() {
+            app.invoke_open_controls();
+        }
+    }
+
+    /// The running game's controls page, in the main window (Home) or the overlay.
+    fn open_game_controls(&mut self, which: usize) {
+        let Some(active) = &self.active else {
+            return;
+        };
+        let game = active.game.clone();
+        let Some(system) = self.systems.get(&game.system).cloned() else {
+            return;
+        };
+        let key = GameKey::for_rom(&system.id, &game.path, &game.title);
+        let editor = match Editor::new(&system, key, &self.controls_dir, Scope::Game) {
+            Ok(editor) => editor,
+            Err(err) => {
+                self.toast(&err.to_string());
+                return;
+            }
+        };
+        self.pages[which] = Some(Page::new(
+            editor,
+            Some(game.title.clone()),
+            true,
+            self.applier.is_live(),
+        ));
+        self.with_page_data(which, |page, data| {
+            data.set_message("".into());
+            page.fill(data);
+        });
+        if which == MAIN {
+            if let Some(app) = self.app.upgrade() {
+                app.invoke_open_controls();
+            }
+        } else if let Some(overlay) = &self.overlay {
+            overlay.invoke_open_controls();
+        }
+    }
+
+    fn controls_choices(&mut self, which: usize, input: &str) -> i32 {
+        let Some(input) = PadInput::from_name(input) else {
+            return 0;
+        };
+        let mut index = 0;
+        self.with_page_data(which, |page, data| {
+            let (choices, current) = page.choices(input);
+            index = i32::try_from(current).unwrap_or(0);
+            data.set_choices(ModelRc::from(Rc::new(VecModel::from(choices))));
+        });
+        index
+    }
+
+    fn controls_choose(&mut self, which: usize, input: &str, id: &str) {
+        let Some(input) = PadInput::from_name(input) else {
+            return;
+        };
+        let Some(page) = &mut self.pages[which] else {
+            return;
+        };
+        let result = page.choose(input, id);
+        self.after_edit(which, result);
+    }
+
+    fn controls_change_option(&mut self, which: usize, id: &str, step: i32) {
+        let Some(page) = &mut self.pages[which] else {
+            return;
+        };
+        let result = page.change_option(id, step);
+        self.after_edit(which, result);
+    }
+
+    fn after_edit(&mut self, which: usize, result: Result<String, String>) {
+        let message = match result {
+            Ok(message) => message,
+            Err(err) => {
+                tracing::warn!("saving controls failed: {err}");
+                format!("Couldn't save: {err}")
+            }
+        };
+        self.with_page_data(which, |page, data| {
+            page.fill(data);
+            data.set_message(message.as_str().into());
+        });
+        if !message.is_empty() {
+            let app = self.app.clone();
+            let overlay = self.overlay.as_ref().map(ComponentHandle::as_weak);
+            self.message_timer
+                .start(slint::TimerMode::SingleShot, MESSAGE_TIME, move || {
+                    if let Some(app) = app.upgrade() {
+                        app.global::<ControlsData>().set_message("".into());
+                    }
+                    if let Some(overlay) = overlay.as_ref().and_then(slint::Weak::upgrade) {
+                        overlay.global::<ControlsData>().set_message("".into());
+                    }
+                });
+        }
+    }
+
+    fn controls_closed(&mut self, which: usize) {
+        let Some(page) = self.pages[which].take() else {
+            return;
+        };
+        if !page.changed {
+            return;
+        }
+        let title = self.title();
+        match page.apply(self.applier.as_ref()) {
+            Some(ApplyOutcome::Applied) => self.toast(&format!("New controls active in {title}")),
+            Some(ApplyOutcome::NextLaunch) if which == MAIN => {
+                self.toast(&format!("New controls apply next time you start {title}"));
+            }
+            _ => {}
+        }
+        self.refresh_settings();
+    }
+
+    /// Settings → Controllers rows: connected pads, the button test, each console.
+    fn refresh_settings(&self) {
+        let Some(app) = self.app.upgrade() else {
+            return;
+        };
+        let settings = app.global::<SettingsData>();
+        let info: Vec<SettingsCategory> = self
+            .activity
+            .pads()
+            .iter()
+            .map(|pad| SettingsCategory {
+                key: "".into(),
+                label: pad.os_name.as_str().into(),
+                status: kind_name(ControllerKind::from_ids(pad.vendor_id, pad.product_id)).into(),
+            })
+            .collect();
+        let mut items = vec![SettingsCategory {
+            key: "test".into(),
+            label: "Test buttons".into(),
+            status: "".into(),
+        }];
+        for system in self.systems.iter().filter(|s| !s.controls.is_empty()) {
+            let customized =
+                hearth_core::controls::layers::system_file(system, &self.controls_dir).is_file();
+            items.push(SettingsCategory {
+                key: format!("system:{}", system.id).into(),
+                label: format!("{} controls", system.name).into(),
+                status: if customized { "Customized" } else { "Default" }.into(),
+            });
+        }
+        if settings.get_controller_info().row_count() != info.len() || info.is_empty() {
+            settings.set_controller_info(ModelRc::from(Rc::new(VecModel::from(info))));
+        }
+        settings.set_controller_items(ModelRc::from(Rc::new(VecModel::from(items))));
+    }
+
+    fn start_button_test(&mut self) {
+        let Some(app) = self.app.upgrade() else {
+            return;
+        };
+        self.testing = true;
+        controls_page::set_drawing(&app.global::<ControlsData>());
+        let activity = self.activity.clone();
+        let weak = self.app.clone();
+        let update = move || {
+            if let Some(app) = weak.upgrade() {
+                app.global::<ControlsData>()
+                    .set_test_inputs(controls_page::test_inputs(&activity.pressed()));
+            }
+        };
+        update();
+        self.test_timer
+            .start(slint::TimerMode::Repeated, TEST_POLL, update);
+        app.invoke_open_button_test();
+    }
+
+    fn stop_button_test(&mut self) {
+        self.testing = false;
+        self.test_timer.stop();
+        self.activity.disarm();
+        if let Some(app) = self.app.upgrade() {
+            app.invoke_close_button_test();
         }
     }
 

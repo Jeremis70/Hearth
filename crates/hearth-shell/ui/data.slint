@@ -37,6 +37,11 @@ export global SettingsData {
     in property <[SettingsCategory]> categories;
     in property <[WifiRow]> wifi;
     callback wifi-selected(/* ssid */ string);
+    // Controllers: connected pads (label = name, status = type), then the rows that open a
+    // page ("test" for the button test, "system:<id>" for a console's controls).
+    in property <[SettingsCategory]> controller-info;
+    in property <[SettingsCategory]> controller-items;
+    callback controller-item(/* key */ string);
 }
 
 export global Status {
@@ -54,6 +59,8 @@ export global Session {
     callback launch(/* game id */ string);
     callback resume();
     callback close-game();
+    // The running game's controls page.
+    callback open-controls();
     // Guide button pressed on the keyboard (F1 short / F2 long); controller presses don't
     // come through here.
     callback home-button(/* long */ bool);

@@ -1,0 +1,79 @@
+import { Theme } from "../theme.slint";
+import { ButtonGlyph } from "../components/glyphs.slint";
+import { ControlsData } from "data.slint";
+
+// Button test: the controller drawing with every input's glyph; held inputs light up. Rust
+// updates `ControlsData.test-inputs` while it is open and closes it on a long Guide press.
+export component ButtonTest inherits Rectangle {
+    property <length> s: 1px * Theme.scale;
+    property <length> draw-h: 560 * s;
+    property <float> k: draw-h / 1px / ControlsData.drawing-height;
+    property <length> draw-w: ControlsData.drawing-width * k * 1px;
+    property <length> draw-x: (root.width - draw-w) / 2;
+    property <length> draw-y: 230 * s;
+
+    background: Theme.bg-base;
+
+    Text {
+        x: Theme.safe-x;
+        y: Theme.safe-y + Theme.sp-24;
+        text: "Button test";
+        font-size: Theme.display;
+        font-weight: Theme.semibold;
+        color: Theme.text-primary;
+    }
+    HorizontalLayout {
+        x: Theme.safe-x;
+        y: Theme.safe-y + Theme.sp-24 + 66 * s;
+        width: self.preferred-width;
+        height: 40 * s;
+        spacing: Theme.sp-12;
+        Text {
+            text: "Press any button. Hold";
+            vertical-alignment: center;
+            font-size: Theme.body-lg;
+            color: Theme.text-secondary;
+        }
+        ButtonGlyph {
+            y: (parent.height - self.height) / 2;
+            input: "guide";
+            tint: Theme.text-secondary;
+            size: 36 * s;
+        }
+        Text {
+            text: "to exit.";
+            vertical-alignment: center;
+            font-size: Theme.body-lg;
+            color: Theme.text-secondary;
+        }
+    }
+
+    Image {
+        x: draw-x;
+        y: draw-y;
+        width: draw-w;
+        height: draw-h;
+        source: @image-url("../../../../assets/controllers/generic.svg");
+        colorize: Theme.text-disabled;
+        image-fit: contain;
+    }
+    for t in ControlsData.test-inputs: Rectangle {
+        property <length> size: (t.pressed ? 64 : 48) * s;
+        animate size { duration: Theme.fast; easing: ease-out; }
+        x: draw-x + t.ax * k * 1px - self.width / 2;
+        y: draw-y + t.ay * k * 1px - self.height / 2;
+        width: size;
+        height: size;
+        border-radius: size / 2;
+        background: t.pressed ? Theme.accent-soft : Theme.bg-base;
+        drop-shadow-blur: t.pressed ? Theme.focus-glow-radius : 0;
+        drop-shadow-color: Theme.focus-glow;
+        ButtonGlyph {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            input: t.input;
+            size: parent.size * 0.8;
+            tint: t.pressed ? Theme.accent : Theme.text-secondary;
+        }
+    }
+}

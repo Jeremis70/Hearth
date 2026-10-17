@@ -32,7 +32,7 @@ export component Home inherits Rectangle {
     // Options menu and Close game confirmation for the current tile.
     property <bool> menu-open: false;
     property <int> menu-index: 0;
-    property <[string]> menu-items: current.running ? ["Resume", "Close game"] : ["Play"];
+    property <[string]> menu-items: current.running ? ["Resume", "Controls", "Close game"] : ["Play"];
     property <bool> confirm-open: false;
     property <int> confirm-index: 0;
 
@@ -98,6 +98,8 @@ export component Home inherits Rectangle {
             if menu-items[menu-index] == "Close game" {
                 confirm-open = true;
                 confirm-index = 0;
+            } else if menu-items[menu-index] == "Controls" {
+                Session.open-controls();
             } else {
                 activate-current();
             }

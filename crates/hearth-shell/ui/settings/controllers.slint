@@ -1,0 +1,65 @@
+import { Theme } from "../theme.slint";
+import { Icons } from "../icons.slint";
+import { SettingsData } from "../data.slint";
+import { ListRow } from "../components/list_row.slint";
+
+// Controllers pane: connected controllers (information), then the button test and one row
+// per console with controls (SettingsData.controller-items), each opening a full page.
+export component ControllersPane inherits Rectangle {
+    in property <int> focus-index: -1;    // -1 when focus is in the sidebar
+
+    property <length> items-top: info.y + info.height + Theme.sp-32;
+
+    info := VerticalLayout {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: self.preferred-height;
+        spacing: Theme.sp-8;
+        Text {
+            text: "Connected";
+            font-size: Theme.heading;
+            font-weight: Theme.semibold;
+            color: Theme.text-primary;
+        }
+        if SettingsData.controller-info.length == 0: Text {
+            text: "No controller connected";
+            font-size: Theme.body;
+            color: Theme.text-secondary;
+        }
+        for pad in SettingsData.controller-info: Text {
+            text: pad.label + "  ·  " + pad.status;
+            font-size: Theme.body-lg;
+            color: Theme.text-secondary;
+        }
+    }
+
+    // Focus frame behind the rows, gliding with `fast`.
+    Rectangle {
+        x: 0;
+        y: items-top + max(0, focus-index) * (Theme.row-height + Theme.row-gap);
+        animate y { duration: Theme.fast; easing: ease-out; }
+        width: parent.width;
+        height: Theme.row-height;
+        border-radius: Theme.radius-md;
+        background: Theme.surface-raised;
+        border-width: Theme.focus-ring-width;
+        border-color: Theme.focus-ring;
+        drop-shadow-blur: Theme.focus-glow-radius;
+        drop-shadow-color: Theme.focus-glow;
+        opacity: focus-index >= 0 ? 1 : 0;
+        animate opacity { duration: Theme.fast; easing: ease-out; }
+    }
+
+    for item[i] in SettingsData.controller-items: ListRow {
+        x: 0;
+        y: items-top + i * (Theme.row-height + Theme.row-gap);
+        width: parent.width;
+        icon: item.key == "test" ? Icons.gamepad : Icons.settings;
+        label: item.label;
+        value: item.status;
+        trailing-icon: Icons.chevron-right;
+        has-trailing-icon: true;
+        show-divider: i != focus-index && i + 1 != focus-index;
+    }
+}

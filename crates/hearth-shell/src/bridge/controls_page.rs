@@ -5,7 +5,7 @@
 use std::rc::Rc;
 
 use hearth_core::controls::edit::{Editor, Scope, Setting, Stick};
-use hearth_core::controls::{EmulatorAction, Mapping, PadInput, Target, TriggerMode};
+use hearth_core::controls::{EmulatorAction, HearthAction, Mapping, PadInput, Target, TriggerMode};
 use hearth_core::profiles::input::Capabilities;
 use hearth_core::profiles::{dolphin_input, retroarch_input};
 use hearth_core::systems::{ControlKind, EmulatorKind, System};
@@ -125,6 +125,7 @@ impl Page {
         match target {
             Target::None => None,
             Target::Action(a) => Some((a.label().to_owned(), a.hint().to_owned())),
+            Target::Hearth(a) => Some((a.label().to_owned(), a.hint().to_owned())),
             Target::Control(name) => self
                 .system()
                 .controls
@@ -420,6 +421,7 @@ impl Page {
             for c in controls.all().into_iter().skip(controls.declared().len()) {
                 targets.push(Target::Control(c.name));
             }
+            targets.extend(HearthAction::ALL.map(Target::Hearth));
             for action in EmulatorAction::ALL {
                 if self.caps.actions.contains(&action) {
                     targets.push(Target::Action(action));
@@ -452,10 +454,10 @@ impl Page {
     pub fn choose(&mut self, input: PadInput, id: &str) -> Result<String, String> {
         let target = match id {
             "none" => Target::None,
-            _ => match id.strip_prefix('@').and_then(EmulatorAction::from_name) {
-                Some(action) => Target::Action(action),
-                None => Target::Control(id.to_owned()),
-            },
+            _ => id
+                .strip_prefix('@')
+                .and_then(Target::action)
+                .unwrap_or_else(|| Target::Control(id.to_owned())),
         };
         let label = |t: &Target| {
             self.target_label(t)

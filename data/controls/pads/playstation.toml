@@ -1,0 +1,6 @@
+# PlayStation pads (DualSense, DualShock 4): applied over every console's default.
+# Create is Hearth's Capture button, like on the PS5; the touchpad click takes over the
+# console's Select (only on consoles that have one).
+[player1.bind]
+select = "@capture"
+touchpad = "Select"

@@ -1,5 +1,5 @@
-//! Resolving a game's mapping: shipped default → user system override → user game override.
-//! Every value remembers which layer set it.
+//! Resolving a game's mapping: shipped default → controller type default → user system
+//! override → user game override. Every value remembers which layer set it.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -7,6 +7,8 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use super::defaults::pad_defaults;
+use super::device::ControllerKind;
 use super::file::{Layer, Problem, StickChanges, parse_layer};
 use super::key::GameKey;
 use super::model::{Mapping, PadInput, StickOptions, Target};
@@ -19,6 +21,8 @@ pub enum Source {
     Builtin,
     /// The shipped default, `data/controls/<system>.toml`.
     Default(String),
+    /// The shipped default for the controller type, `data/controls/pads/<type>.toml`.
+    Pad(String),
     /// The user's override for every game of the system.
     System(PathBuf),
     /// The user's override for this game.
@@ -30,6 +34,7 @@ impl fmt::Display for Source {
         match self {
             Self::Builtin => f.write_str("built-in"),
             Self::Default(path) => write!(f, "default ({path})"),
+            Self::Pad(path) => write!(f, "controller default ({path})"),
             Self::System(path) => write!(f, "system ({})", path.display()),
             Self::Game(path) => write!(f, "game ({})", path.display()),
         }
@@ -69,7 +74,7 @@ pub fn user_dir(config: &Path) -> PathBuf {
     config.join("controls")
 }
 
-/// Which user layers to apply on top of the shipped default.
+/// Which user layers to apply on top of the shipped defaults (console and controller type).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UserLayers {
     /// `systems/<system>.toml`.
@@ -84,7 +89,7 @@ impl UserLayers {
         system: true,
         game: true,
     };
-    /// The shipped default only.
+    /// The shipped defaults only.
     pub const NONE: Self = Self {
         system: false,
         game: false,
@@ -111,10 +116,15 @@ pub fn system_file(system: &System, user_dir: &Path) -> PathBuf {
     user_dir.join("systems").join(format!("{}.toml", system.id))
 }
 
-/// Resolves the mapping of a game of `system` with per-game `key`, reading user files under
-/// `user_dir`. `None` if the system declares no controls.
-pub fn resolve(system: &System, key: &GameKey, user_dir: &Path) -> Option<Resolved> {
-    resolve_layers(system, key, user_dir, UserLayers::ALL)
+/// Resolves the mapping of a game of `system` with per-game `key` for a `pad` controller,
+/// reading user files under `user_dir`. `None` if the system declares no controls.
+pub fn resolve(
+    system: &System,
+    key: &GameKey,
+    user_dir: &Path,
+    pad: ControllerKind,
+) -> Option<Resolved> {
+    resolve_layers(system, key, user_dir, pad, UserLayers::ALL)
 }
 
 /// Like [`resolve`], applying only the chosen user layers.
@@ -122,6 +132,7 @@ pub fn resolve_layers(
     system: &System,
     key: &GameKey,
     user_dir: &Path,
+    pad: ControllerKind,
     layers: UserLayers,
 ) -> Option<Resolved> {
     if system.controls.is_empty() {
@@ -133,6 +144,9 @@ pub fn resolve_layers(
             Source::Default(format!("data/controls/{}.toml", system.id)),
             text.to_owned(),
         ));
+    }
+    if let Some((name, text)) = pad_defaults(pad, &system.controls) {
+        files.push((Source::Pad(format!("data/controls/pads/{name}.toml")), text));
     }
     let system_file = system_file(system, user_dir);
     let game_file = game_file(key, user_dir);
@@ -168,7 +182,7 @@ pub fn resolve_layers(
     };
     for (source, text) in files {
         let path = match &source {
-            Source::Default(p) => PathBuf::from(p),
+            Source::Default(p) | Source::Pad(p) => PathBuf::from(p),
             Source::System(p) | Source::Game(p) => p.clone(),
             Source::Builtin => PathBuf::new(),
         };
@@ -277,7 +291,7 @@ fn apply_stick(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::controls::model::{EmulatorAction, PadInput};
+    use crate::controls::model::{EmulatorAction, HearthAction, PadInput};
     use crate::model::SystemId;
     use crate::systems::Systems;
     use crate::testdir::tempdir;
@@ -308,7 +322,7 @@ mod tests {
         let dir = tempdir();
         for id in ["gc", "n64"] {
             let key = GameKey::for_rom(&SystemId::new(id), &dir.path().join("none"), "x");
-            let r = resolve(&system(id), &key, dir.path()).unwrap();
+            let r = resolve(&system(id), &key, dir.path(), ControllerKind::Generic).unwrap();
             assert!(r.problems.is_empty(), "{id}: {:?}", r.problems);
             assert_eq!(r.applied.len(), 1);
         }
@@ -316,7 +330,8 @@ mod tests {
             resolve(
                 &system("wii"),
                 &GameKey::for_rom(&SystemId::new("wii"), Path::new("/x"), "x"),
-                dir.path()
+                dir.path(),
+                ControllerKind::Generic,
             )
             .is_none()
         );
@@ -330,7 +345,13 @@ mod tests {
             user.join("games/gc/GZ2E01.toml"),
             "[player1.right_stick]\ninvert_x = true\n",
         );
-        let r = resolve(&system("gc"), &tp_key(dir.path()), &user).unwrap();
+        let r = resolve(
+            &system("gc"),
+            &tp_key(dir.path()),
+            &user,
+            ControllerKind::Generic,
+        )
+        .unwrap();
         assert!(r.mapping.right_stick.invert_x);
         assert!(!r.mapping.left_stick.invert_x);
         assert!(matches!(r.source("right_stick.invert_x"), Source::Game(_)));
@@ -353,7 +374,13 @@ mod tests {
             user.join("games/gc/GZ2.toml"),
             "[player1.bind]\neast = \"A\"\n",
         );
-        let r = resolve(&system("gc"), &tp_key(dir.path()), &user).unwrap();
+        let r = resolve(
+            &system("gc"),
+            &tp_key(dir.path()),
+            &user,
+            ControllerKind::Generic,
+        )
+        .unwrap();
         assert!(!r.mapping.vibration);
         assert!(matches!(r.source("vibration"), Source::System(_)));
         // A moved from south to east; south is now unbound.
@@ -374,7 +401,13 @@ mod tests {
             user.join("games/gc/GZ2E01.toml"),
             "[player1.bind]\nsouth = \"Zz\"\n[player1.right_stick]\ninvert_x = true\n",
         );
-        let r = resolve(&system("gc"), &tp_key(dir.path()), &user).unwrap();
+        let r = resolve(
+            &system("gc"),
+            &tp_key(dir.path()),
+            &user,
+            ControllerKind::Generic,
+        )
+        .unwrap();
         assert!(r.has_errors());
         assert!(!r.mapping.right_stick.invert_x);
         assert_eq!(
@@ -382,5 +415,66 @@ mod tests {
             Some(&Target::Control("A".into()))
         );
         assert_eq!(r.problems[0].line, Some(2));
+    }
+
+    #[test]
+    fn playstation_create_is_capture_and_select_falls_away_on_gc() {
+        let dir = tempdir();
+        let user = dir.path().join("controls");
+        let r = resolve(
+            &system("gc"),
+            &tp_key(dir.path()),
+            &user,
+            ControllerKind::DualSense,
+        )
+        .unwrap();
+        assert!(r.problems.is_empty(), "{:?}", r.problems);
+        assert_eq!(
+            r.mapping.target(PadInput::Select),
+            Some(&Target::Hearth(HearthAction::Capture))
+        );
+        assert!(
+            matches!(r.source("bind.select"), Source::Pad(p) if p.ends_with("playstation.toml"))
+        );
+        // The GameCube has no Select: the touchpad stays unbound.
+        assert_eq!(r.mapping.target(PadInput::Touchpad), None);
+        // A generic pad gets the console default alone.
+        let r = resolve(
+            &system("gc"),
+            &tp_key(dir.path()),
+            &user,
+            ControllerKind::Generic,
+        )
+        .unwrap();
+        assert_eq!(r.mapping.target(PadInput::Select), None);
+        assert_eq!(r.applied.len(), 1);
+    }
+
+    #[test]
+    fn capture_moves_like_any_other_binding() {
+        let dir = tempdir();
+        let user = dir.path().join("controls");
+        fs::create_dir_all(user.join("systems")).unwrap();
+        fs::write(
+            user.join("systems/gc.toml"),
+            "[player1.bind]\nselect = \"@fast_forward_hold\"\nr3 = \"@capture\"\n",
+        )
+        .unwrap();
+        let r = resolve(
+            &system("gc"),
+            &tp_key(dir.path()),
+            &user,
+            ControllerKind::DualSense,
+        )
+        .unwrap();
+        assert!(r.problems.is_empty(), "{:?}", r.problems);
+        assert_eq!(
+            r.mapping.target(PadInput::R3),
+            Some(&Target::Hearth(HearthAction::Capture))
+        );
+        assert_eq!(
+            r.mapping.target(PadInput::Select),
+            Some(&Target::Action(EmulatorAction::FastForwardHold))
+        );
     }
 }

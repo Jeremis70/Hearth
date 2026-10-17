@@ -15,7 +15,8 @@ use std::path::Path;
 
 use serde::Deserialize;
 
-/// Controller family, for button glyphs and display names. Mappings never depend on it.
+/// Controller family, for button glyphs, display names and the controller type's default
+/// bindings (`data/controls/pads/`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControllerKind {
     /// Sony DualSense / DualSense Edge.

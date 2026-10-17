@@ -253,7 +253,8 @@ pub fn translate(
 
     for (input, target) in &mapping.binds {
         let control = match target {
-            Target::None => continue,
+            // Hearth reads its own buttons; RetroArch gets nothing for them.
+            Target::None | Target::Hearth(_) => continue,
             Target::Action(action) => {
                 if !CAPABILITIES.actions.contains(action) {
                     continue;
@@ -450,7 +451,7 @@ mod tests {
         let systems = Systems::builtin().unwrap();
         let n64 = systems.get(&SystemId::new("n64")).unwrap();
         let key = GameKey::for_rom(&n64.id, &dir.path().join("none"), "OoT");
-        let resolved = resolve(n64, &key, &user).unwrap();
+        let resolved = resolve(n64, &key, &user, crate::controls::ControllerKind::Generic).unwrap();
         assert!(resolved.problems.is_empty(), "{:?}", resolved.problems);
         resolved.mapping
     }
@@ -552,5 +553,24 @@ mod tests {
         assert!(Autoconfig::find(dir.path(), &by_name).is_some());
         let other = ControllerIdentity::from_pad("Other", Some(1), Some(2));
         assert!(Autoconfig::find(dir.path(), &other).is_none());
+    }
+
+    #[test]
+    fn capture_button_is_unbound_for_retroarch() {
+        let mapping = n64_mapping(Some(
+            "[player1.bind]\nsouth = \"@capture\"\nselect = \"@save_state\"\n",
+        ));
+        let auto = Autoconfig::parse("ds.cfg".into(), DUALSENSE);
+        let t = translate(&mapping, &MUPEN64PLUS_NEXT, Some(&auto));
+        assert!(t.warnings.is_empty(), "{:?}", t.warnings);
+        // South is RetroPad B, which drives N64 A by default: now nothing.
+        assert!(rmp(&t).contains("input_player1_btn_b = \"-1\"\n"));
+        // Only the real action became a hotkey (the Create button, raw 8).
+        assert_eq!(setting(&t, "input_save_state_btn"), Some("8"));
+        assert!(
+            !t.settings.iter().any(|(_, v)| v == "0"),
+            "{:?}",
+            t.settings
+        );
     }
 }

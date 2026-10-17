@@ -1,0 +1,4 @@
+# Xbox pads: applied over every console's default. Share (Series controllers) is Hearth's
+# Capture button.
+[player1.bind]
+share = "@capture"

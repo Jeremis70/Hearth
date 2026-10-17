@@ -916,6 +916,11 @@ impl Controller {
         }
     }
 
+    /// Player 1's controller type, as launches see it (see `controls::device`).
+    fn pad_kind(&self) -> ControllerKind {
+        controls::device(&self.activity.pads(), &self.controls_dir).kind
+    }
+
     /// Button glyphs follow the first connected controller (both windows have their own
     /// globals).
     fn sync_controller_type(&self) {
@@ -963,7 +968,13 @@ impl Controller {
             return;
         };
         let key = GameKey::for_rom(&system.id, std::path::Path::new(""), "");
-        let editor = match Editor::new(&system, key, &self.controls_dir, Scope::System) {
+        let editor = match Editor::new(
+            &system,
+            key,
+            &self.controls_dir,
+            self.pad_kind(),
+            Scope::System,
+        ) {
             Ok(editor) => editor,
             Err(err) => {
                 self.toast(&err.to_string());
@@ -994,7 +1005,13 @@ impl Controller {
             return;
         };
         let key = GameKey::for_rom(&system.id, &game.path, &game.title);
-        let editor = match Editor::new(&system, key, &self.controls_dir, Scope::Game) {
+        let editor = match Editor::new(
+            &system,
+            key,
+            &self.controls_dir,
+            self.pad_kind(),
+            Scope::Game,
+        ) {
             Ok(editor) => editor,
             Err(err) => {
                 self.toast(&err.to_string());

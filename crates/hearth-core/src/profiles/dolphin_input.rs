@@ -50,6 +50,7 @@ fn sdl_button(input: PadInput) -> Option<&'static str> {
         PadInput::DpadLeft => "Pad W",
         PadInput::DpadRight => "Pad E",
         PadInput::Touchpad => "Touchpad",
+        PadInput::Share => "Misc 1",
         PadInput::Paddle1 => "Paddle 1",
         PadInput::Paddle2 => "Paddle 2",
         PadInput::Paddle3 => "Paddle 3",
@@ -130,7 +131,8 @@ pub fn translate(mapping: Option<&Mapping>, device: &ControllerIdentity) -> Tran
         let mut lines: Vec<(String, String)> = Vec::new();
         for (input, target) in &mapping.binds {
             match target {
-                Target::None => {}
+                // Hearth reads its own buttons; Dolphin gets nothing for them.
+                Target::None | Target::Hearth(_) => {}
                 // Unsupported actions were reported by `check`.
                 Target::Action(action) => {
                     if let (Some(key), Some(button)) = (hotkey(*action), sdl_button(*input)) {
@@ -260,7 +262,7 @@ mod tests {
         let systems = Systems::builtin().unwrap();
         let gc = systems.get(&SystemId::new("gc")).unwrap();
         let key = GameKey::for_rom(&gc.id, &iso, "TP");
-        let resolved = resolve(gc, &key, &user).unwrap();
+        let resolved = resolve(gc, &key, &user, crate::controls::ControllerKind::Generic).unwrap();
         assert!(resolved.problems.is_empty(), "{:?}", resolved.problems);
         resolved.mapping
     }
@@ -341,5 +343,17 @@ mod tests {
             .filter(|l| !l.starts_with('#') && l.contains(" = "))
             .collect();
         assert_eq!(keys, ["Device = SDL/0/DualSense Wireless Controller"]);
+    }
+
+    #[test]
+    fn capture_button_reaches_neither_the_pad_nor_hotkeys() {
+        let t = translate(
+            Some(&gc_mapping(Some("[player1.bind]\nsouth = \"@capture\"\n"))),
+            &ControllerIdentity::fallback(),
+        );
+        assert!(t.warnings.is_empty(), "{:?}", t.warnings);
+        for name in ["GCPadNew.ini", "Hotkeys.ini"] {
+            assert!(!file(&t, name).contains("Button S"), "{name}");
+        }
     }
 }

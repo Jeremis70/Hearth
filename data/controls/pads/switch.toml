@@ -1,0 +1,4 @@
+# Nintendo Switch Pro Controller: applied over every console's default. Capture is Hearth's
+# Capture button.
+[player1.bind]
+share = "@capture"

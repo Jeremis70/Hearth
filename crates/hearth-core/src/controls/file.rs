@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use toml::Spanned;
 
-use super::model::{EmulatorAction, InputKind, PadInput, Target, TriggerMode};
+use super::model::{EmulatorAction, HearthAction, InputKind, PadInput, Target, TriggerMode};
 use crate::systems::{ConsoleControls, ControlKind};
 
 /// A problem in a controls file.
@@ -252,10 +252,11 @@ fn parse_target(
         return Ok(Target::None);
     }
     if let Some(action) = value.strip_prefix('@') {
-        let action = EmulatorAction::from_name(action).ok_or_else(|| {
-            let names: Vec<_> = EmulatorAction::ALL
+        let target = Target::action(action).ok_or_else(|| {
+            let names: Vec<_> = HearthAction::ALL
                 .iter()
                 .map(|a| format!("@{}", a.name()))
+                .chain(EmulatorAction::ALL.iter().map(|a| format!("@{}", a.name())))
                 .collect();
             format!(
                 "unknown action '{value}' (expected one of: {})",
@@ -263,7 +264,7 @@ fn parse_target(
             )
         })?;
         return match input.kind() {
-            InputKind::Button | InputKind::Trigger => Ok(Target::Action(action)),
+            InputKind::Button | InputKind::Trigger => Ok(target),
             _ => Err(format!("{input} can't drive an action; bind a button")),
         };
     }

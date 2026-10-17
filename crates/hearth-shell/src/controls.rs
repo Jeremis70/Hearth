@@ -49,7 +49,7 @@ pub fn game_input(
     retroarch: &RetroArchProfile,
 ) -> GameInput {
     let key = GameKey::for_rom(&system.id, &game.path, &game.title);
-    let resolved = resolve(system, &key, controls_dir);
+    let resolved = resolve(system, &key, controls_dir, device.kind);
     let mapping = resolved.as_ref().map(|r| &r.mapping);
     let mut autoconfig = None;
     let translation = match kind {

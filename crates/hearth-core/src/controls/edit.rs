@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use toml_edit::{DocumentMut, Item, Table, value};
 
+use super::device::ControllerKind;
 use super::key::GameKey;
 use super::layers::{Resolved, UserLayers, game_file, resolve_layers, system_file};
 use super::model::{InputKind, Mapping, PadInput, StickOptions, Target, TriggerMode};
@@ -115,6 +116,8 @@ pub struct Editor {
     system: System,
     key: GameKey,
     user_dir: PathBuf,
+    /// Controller type, for its default bindings.
+    pad: ControllerKind,
     scope: Scope,
 }
 
@@ -125,6 +128,7 @@ impl Editor {
         system: &System,
         key: GameKey,
         user_dir: &Path,
+        pad: ControllerKind,
         scope: Scope,
     ) -> Result<Self, EditError> {
         if system.controls.is_empty() {
@@ -134,6 +138,7 @@ impl Editor {
             system: system.clone(),
             key,
             user_dir: user_dir.to_path_buf(),
+            pad,
             scope,
         })
     }
@@ -170,7 +175,7 @@ impl Editor {
     }
 
     fn resolve(&self, layers: UserLayers) -> Resolved {
-        resolve_layers(&self.system, &self.key, &self.user_dir, layers)
+        resolve_layers(&self.system, &self.key, &self.user_dir, self.pad, layers)
             .expect("the system has controls (checked in new)")
     }
 
@@ -184,7 +189,7 @@ impl Editor {
         self.resolve(self.layers(false)).mapping
     }
 
-    /// The shipped default alone.
+    /// The shipped defaults alone (console, then controller type).
     pub fn shipped(&self) -> Mapping {
         self.resolve(UserLayers::NONE).mapping
     }
@@ -227,7 +232,9 @@ impl Editor {
     fn check_fits(&self, input: PadInput, target: &Target) -> Result<(), EditError> {
         let fits = match target {
             Target::None => true,
-            Target::Action(_) => matches!(input.kind(), InputKind::Button | InputKind::Trigger),
+            Target::Action(_) | Target::Hearth(_) => {
+                matches!(input.kind(), InputKind::Button | InputKind::Trigger)
+            }
             Target::Control(name) => self.system.controls.find(name).is_some_and(|c| {
                 use crate::systems::ControlKind as K;
                 match input.kind() {
@@ -479,7 +486,14 @@ mod tests {
     }
 
     fn editor(f: &Fixture, scope: Scope) -> Editor {
-        Editor::new(&f.gc, f.key.clone(), &f.user, scope).unwrap()
+        Editor::new(
+            &f.gc,
+            f.key.clone(),
+            &f.user,
+            ControllerKind::Generic,
+            scope,
+        )
+        .unwrap()
     }
 
     #[test]

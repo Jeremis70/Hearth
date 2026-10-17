@@ -47,6 +47,8 @@ pub enum PadInput {
     RightStick,
     /// Touchpad click (DualShock 4, DualSense), when present.
     Touchpad,
+    /// Share / Capture button (Xbox Series Share, Switch Pro Capture; SDL's misc1), when present.
+    Share,
     /// Back paddle 1, when present.
     Paddle1,
     /// Back paddle 2, when present.
@@ -72,7 +74,7 @@ pub enum InputKind {
 
 impl PadInput {
     /// Every input, in file order.
-    pub const ALL: [PadInput; 24] = [
+    pub const ALL: [PadInput; 25] = [
         Self::South,
         Self::East,
         Self::West,
@@ -93,6 +95,7 @@ impl PadInput {
         Self::LeftStick,
         Self::RightStick,
         Self::Touchpad,
+        Self::Share,
         Self::Paddle1,
         Self::Paddle2,
         Self::Paddle3,
@@ -130,6 +133,7 @@ impl PadInput {
             Self::LeftStick => "left_stick",
             Self::RightStick => "right_stick",
             Self::Touchpad => "touchpad",
+            Self::Share => "share",
             Self::Paddle1 => "paddle1",
             Self::Paddle2 => "paddle2",
             Self::Paddle3 => "paddle3",
@@ -156,7 +160,12 @@ impl PadInput {
     pub fn is_extra(self) -> bool {
         matches!(
             self,
-            Self::Touchpad | Self::Paddle1 | Self::Paddle2 | Self::Paddle3 | Self::Paddle4
+            Self::Touchpad
+                | Self::Share
+                | Self::Paddle1
+                | Self::Paddle2
+                | Self::Paddle3
+                | Self::Paddle4
         )
     }
 }
@@ -239,6 +248,47 @@ impl EmulatorAction {
     }
 }
 
+/// A Hearth feature on a controller button. Hearth reads the button itself; it is never sent
+/// to the game or the emulator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum HearthAction {
+    /// Screenshots and clips (for now a notice that they're coming).
+    Capture,
+}
+
+impl HearthAction {
+    /// Every Hearth action.
+    pub const ALL: [HearthAction; 1] = [Self::Capture];
+
+    /// Name used in files, without the `@`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Capture => "capture",
+        }
+    }
+
+    /// Parses a file name (without the `@`).
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|a| a.name() == name)
+    }
+
+    /// What the UI shows.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Capture => "Capture",
+        }
+    }
+
+    /// One line explaining it.
+    pub fn hint(self) -> &'static str {
+        match self {
+            Self::Capture => {
+                "Hearth's capture button: screenshots and clips. The game never sees this button"
+            }
+        }
+    }
+}
+
 /// What an input drives.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Target {
@@ -248,6 +298,17 @@ pub enum Target {
     Control(String),
     /// An emulator action.
     Action(EmulatorAction),
+    /// A Hearth action: the emulator gets nothing for this input.
+    Hearth(HearthAction),
+}
+
+impl Target {
+    /// Parses an `@name` value (without the `@`): a Hearth or an emulator action.
+    pub fn action(name: &str) -> Option<Self> {
+        HearthAction::from_name(name)
+            .map(Self::Hearth)
+            .or_else(|| EmulatorAction::from_name(name).map(Self::Action))
+    }
 }
 
 impl fmt::Display for Target {
@@ -256,6 +317,7 @@ impl fmt::Display for Target {
             Self::None => f.write_str("none"),
             Self::Control(name) => f.write_str(name),
             Self::Action(action) => write!(f, "@{}", action.name()),
+            Self::Hearth(action) => write!(f, "@{}", action.name()),
         }
     }
 }

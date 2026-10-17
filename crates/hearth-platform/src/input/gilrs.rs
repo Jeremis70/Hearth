@@ -14,7 +14,9 @@ use gilrs::{Axis, Button, EventType, Gamepad, GamepadId, Gilrs};
 
 use super::repeat::stick_direction;
 use super::repeat::{DirectionSource, GuidePress, HeldDirections, KeyRepeat, STICK_DEADZONE};
-use super::{Action, Direction, InputBackend, InputError, InputMode, PadActivity, is_at_rest};
+use super::{
+    Action, Direction, InputBackend, InputError, InputMode, PadActivity, PadInfo, is_at_rest,
+};
 
 /// Longest time the input thread sleeps without an event or a pending deadline.
 const IDLE_WAIT: Duration = Duration::from_millis(250);
@@ -79,6 +81,7 @@ fn run(mut gilrs: Gilrs, tx: &Sender<Action>, activity: &PadActivity) {
         tracing::info!(name = pad.name(), "controller connected");
         rest.capture(id, pad);
     }
+    activity.set_pads(pad_infos(&gilrs));
     let mut state = PadState::default();
     let mut out = Vec::new();
     loop {
@@ -103,9 +106,13 @@ fn run(mut gilrs: Gilrs, tx: &Sender<Action>, activity: &PadActivity) {
                     let pad = gilrs.gamepad(event.id);
                     tracing::info!(name = pad.name(), "controller connected");
                     rest.capture(event.id, pad);
+                    activity.set_pads(pad_infos(&gilrs));
                     None
                 }
-                EventType::Disconnected => Some(PadEvent::Disconnected),
+                EventType::Disconnected => {
+                    activity.set_pads(pad_infos(&gilrs));
+                    Some(PadEvent::Disconnected)
+                }
                 _ => None,
             };
             if let Some(input) = input {
@@ -121,6 +128,26 @@ fn run(mut gilrs: Gilrs, tx: &Sender<Action>, activity: &PadActivity) {
             }
         }
     }
+}
+
+/// The connected controllers, as [`PadInfo`]s.
+fn pad_infos(gilrs: &Gilrs) -> Vec<PadInfo> {
+    gilrs
+        .gamepads()
+        .map(|(_, pad)| PadInfo {
+            name: pad.name().to_owned(),
+            os_name: pad.os_name().to_owned(),
+            vendor_id: pad.vendor_id(),
+            product_id: pad.product_id(),
+        })
+        .collect()
+}
+
+/// The controllers connected right now, without starting the input thread (for command-line
+/// tools).
+pub fn connected_pads() -> Result<Vec<PadInfo>, InputError> {
+    let gilrs = Gilrs::new().map_err(|err| InputError::Start(err.to_string()))?;
+    Ok(pad_infos(&gilrs))
 }
 
 /// Each controller's analog values (raw axes and analog buttons) as they were when it

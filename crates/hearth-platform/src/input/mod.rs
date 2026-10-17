@@ -76,6 +76,20 @@ struct ActivityState {
     /// `None` while something is held.
     rest_since: Mutex<Option<Instant>>,
     disarms: AtomicU64,
+    pads: Mutex<Vec<PadInfo>>,
+}
+
+/// What the input backend knows about a connected controller.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PadInfo {
+    /// Name from the SDL mapping database ("PS5 Controller"), or the kernel name.
+    pub name: String,
+    /// Kernel (evdev) name.
+    pub os_name: String,
+    /// USB vendor id.
+    pub vendor_id: Option<u16>,
+    /// USB product id.
+    pub product_id: Option<u16>,
 }
 
 impl PadActivity {
@@ -114,6 +128,20 @@ impl PadActivity {
     /// takes the controller back from a game, so a game's button press can't act in Hearth.
     pub fn disarm(&self) {
         self.0.disarms.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// Connected controllers, first connected first.
+    pub fn pads(&self) -> Vec<PadInfo> {
+        self.0
+            .pads
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Replaces the list of connected controllers.
+    pub fn set_pads(&self, pads: Vec<PadInfo>) {
+        *self.0.pads.lock().unwrap_or_else(PoisonError::into_inner) = pads;
     }
 
     /// Increases with every [`PadActivity::disarm`].

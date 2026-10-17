@@ -10,6 +10,13 @@ export global ControllerType {
 }
 
 export global Glyphs {
+    // Buttons drawn as a pill with their name: the controllers' own symbols for these are thin
+    // pills or tiny icons that don't read from the couch.
+    public pure function is-chip(input: string) -> bool {
+        input == "select" || input == "start" || input == "touchpad" || input == "share"
+            || input == "paddle1" || input == "paddle2" || input == "paddle3" || input == "paddle4"
+    }
+
     // The image for `input` (a Hearth pad input name), or an empty image.
     public pure function image(family: int, input: string) -> image {
         if family == 1 {
@@ -23,8 +30,6 @@ export global Glyphs {
             if input == "r2" { return @image-url("../../../../assets/glyphs/playstation/r2.svg"); }
             if input == "l3" { return @image-url("../../../../assets/glyphs/playstation/l3.svg"); }
             if input == "r3" { return @image-url("../../../../assets/glyphs/playstation/r3.svg"); }
-            if input == "start" { return @image-url("../../../../assets/glyphs/playstation/start.svg"); }
-            if input == "select" { return @image-url("../../../../assets/glyphs/playstation/select.svg"); }
             if input == "dpad" { return @image-url("../../../../assets/glyphs/playstation/dpad.svg"); }
             if input == "dpad_up" { return @image-url("../../../../assets/glyphs/playstation/dpad_up.svg"); }
             if input == "dpad_down" { return @image-url("../../../../assets/glyphs/playstation/dpad_down.svg"); }
@@ -32,7 +37,6 @@ export global Glyphs {
             if input == "dpad_right" { return @image-url("../../../../assets/glyphs/playstation/dpad_right.svg"); }
             if input == "left_stick" { return @image-url("../../../../assets/glyphs/playstation/left_stick.svg"); }
             if input == "right_stick" { return @image-url("../../../../assets/glyphs/playstation/right_stick.svg"); }
-            if input == "touchpad" { return @image-url("../../../../assets/glyphs/playstation/touchpad.svg"); }
         }
         if family == 2 || family == 0 {
             if input == "south" { return @image-url("../../../../assets/glyphs/xbox/south.svg"); }
@@ -45,8 +49,6 @@ export global Glyphs {
             if input == "r2" { return @image-url("../../../../assets/glyphs/xbox/r2.svg"); }
             if input == "l3" { return @image-url("../../../../assets/glyphs/xbox/l3.svg"); }
             if input == "r3" { return @image-url("../../../../assets/glyphs/xbox/r3.svg"); }
-            if input == "start" { return @image-url("../../../../assets/glyphs/xbox/start.svg"); }
-            if input == "select" { return @image-url("../../../../assets/glyphs/xbox/select.svg"); }
             if input == "dpad" { return @image-url("../../../../assets/glyphs/xbox/dpad.svg"); }
             if input == "dpad_up" { return @image-url("../../../../assets/glyphs/xbox/dpad_up.svg"); }
             if input == "dpad_down" { return @image-url("../../../../assets/glyphs/xbox/dpad_down.svg"); }
@@ -67,8 +69,6 @@ export global Glyphs {
             if input == "r2" { return @image-url("../../../../assets/glyphs/nintendo/r2.svg"); }
             if input == "l3" { return @image-url("../../../../assets/glyphs/nintendo/l3.svg"); }
             if input == "r3" { return @image-url("../../../../assets/glyphs/nintendo/r3.svg"); }
-            if input == "start" { return @image-url("../../../../assets/glyphs/nintendo/start.svg"); }
-            if input == "select" { return @image-url("../../../../assets/glyphs/nintendo/select.svg"); }
             if input == "dpad" { return @image-url("../../../../assets/glyphs/nintendo/dpad.svg"); }
             if input == "dpad_up" { return @image-url("../../../../assets/glyphs/nintendo/dpad_up.svg"); }
             if input == "dpad_down" { return @image-url("../../../../assets/glyphs/nintendo/dpad_down.svg"); }
@@ -97,6 +97,7 @@ export global Glyphs {
             if input == "start" { return "Options"; }
             if input == "select" { return "Create"; }
             if input == "guide" { return "PS"; }
+            if input == "share" { return "Share"; }
         }
         if family == 2 || family == 0 {
             if input == "south" { return "A"; }
@@ -112,6 +113,7 @@ export global Glyphs {
             if input == "start" { return "Menu"; }
             if input == "select" { return "View"; }
             if input == "guide" { return "Guide"; }
+            if input == "share" { return "Share"; }
         }
         if family == 3 {
             if input == "south" { return "B"; }
@@ -127,6 +129,7 @@ export global Glyphs {
             if input == "start" { return "+"; }
             if input == "select" { return "−"; }
             if input == "guide" { return "Home"; }
+            if input == "share" { return "Capture"; }
         }
         if input == "dpad" { return "D-pad"; }
         if input == "dpad_up" { return "Up"; }
@@ -136,6 +139,7 @@ export global Glyphs {
         if input == "left_stick" { return "Left stick"; }
         if input == "right_stick" { return "Right stick"; }
         if input == "touchpad" { return "Touchpad"; }
+        if input == "share" { return "Share"; }
         if input == "paddle1" { return "P1"; }
         if input == "paddle2" { return "P2"; }
         if input == "paddle3" { return "P3"; }
@@ -144,19 +148,18 @@ export global Glyphs {
     }
 }
 
-// A Hearth pad input drawn as the connected controller's button (or its name as text when the
-// family has no glyph for it, e.g. back paddles).
+// A Hearth pad input drawn as the connected controller's button. Select, Start and the extra
+// buttons are a pill with the button's name ("Create", "Menu", "−"); so is any input the family
+// has no glyph for.
 export component ButtonGlyph inherits Rectangle {
     in property <string> input;
     in property <color> tint: Theme.text-primary;
     in property <length> size: 36px * Theme.scale;
-    property <image> glyph: Glyphs.image(ControllerType.family, input);
+    property <image> glyph: Glyphs.is-chip(input) ? @image-url("") : Glyphs.image(ControllerType.family, input);
     property <bool> has-glyph: glyph.width > 0;
-    width: has-glyph ? size : max(size, label.preferred-width + 2 * Theme.sp-8);
+    property <length> chip-h: size * 0.72;
+    width: has-glyph ? size : max(size, label.preferred-width + 2 * chip-h * 0.4);
     height: size;
-    border-radius: has-glyph ? 0 : Theme.radius-sm;
-    border-width: has-glyph ? 0 : 2px;
-    border-color: tint;
     if has-glyph: Image {
         source: glyph;
         colorize: tint;
@@ -164,10 +167,17 @@ export component ButtonGlyph inherits Rectangle {
         height: parent.height;
         image-fit: contain;
     }
+    if !has-glyph: Rectangle {
+        y: (parent.height - chip-h) / 2;
+        height: chip-h;
+        border-radius: chip-h / 2;
+        border-width: max(2px, size * 0.06);
+        border-color: tint;
+    }
     label := Text {
         visible: !has-glyph;
         text: Glyphs.name(ControllerType.family, input);
-        font-size: Theme.caption;
+        font-size: max(Theme.caption * 0.8, size * 0.36);
         font-weight: Theme.semibold;
         color: tint;
         horizontal-alignment: center;

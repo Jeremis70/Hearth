@@ -60,8 +60,9 @@ pub trait Compositor: Send + Sync {
     fn set_shell_window(&self, window: Option<u32>, pid: u32) -> Result<(), CompositorError>;
 
     /// Tags every window whose `_NET_WM_PID` is a process of the game (its group `pgid` and
-    /// all descendants) with `app`. Returns how many windows were tagged (0 if the game hasn't
-    /// mapped a window yet).
+    /// all descendants) with `app`, mapped or not. Returns how many of them are mapped (0 while
+    /// the game shows nothing yet). Unmapped windows don't count: toolkits create hidden ones
+    /// first (Dolphin's Qt main window in batch mode), and focusing those shows nothing.
     fn assign_app(&self, pgid: u32, app: AppId) -> Result<usize, CompositorError>;
 
     /// Shows `apps`, first on top.
@@ -259,18 +260,24 @@ impl Gamescope {
         Ok(())
     }
 
+    /// Tags the windows of `pids`; returns how many of them are mapped.
     fn tag_windows_of(&self, pids: &BTreeSet<u32>, app: AppId) -> Result<usize, CompositorError> {
-        let mut tagged = 0;
+        let mut mapped = 0;
         for info in self.windows()? {
             if info.pid.is_some_and(|pid| pids.contains(&pid)) {
                 if info.app != Some(app) {
                     self.set_cardinals(info.window, self.atoms.steam_game, &[app])?;
-                    tracing::debug!(window = info.window, app, "tagged window");
+                    tracing::debug!(
+                        window = info.window,
+                        app,
+                        mapped = info.mapped,
+                        "tagged window"
+                    );
                 }
-                tagged += 1;
+                mapped += usize::from(info.mapped);
             }
         }
-        Ok(tagged)
+        Ok(mapped)
     }
 }
 
@@ -289,8 +296,8 @@ impl Compositor for Gamescope {
                 self.set_cardinals(window, self.atoms.steam_game, &[SHELL_APP_ID])?;
             }
             None => {
-                let tagged = self.tag_windows_of(&BTreeSet::from([pid]), SHELL_APP_ID)?;
-                tracing::debug!(tagged, "tagged shell windows by _NET_WM_PID");
+                let mapped = self.tag_windows_of(&BTreeSet::from([pid]), SHELL_APP_ID)?;
+                tracing::debug!(mapped, "tagged shell windows by _NET_WM_PID");
             }
         }
         Ok(())

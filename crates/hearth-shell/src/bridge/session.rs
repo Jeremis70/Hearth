@@ -461,7 +461,7 @@ impl Controller {
                             tracing::info!(
                                 pgid,
                                 app_id,
-                                windows = n,
+                                mapped_windows = n,
                                 after_ms = started.elapsed().as_millis(),
                                 "found game window"
                             );
@@ -475,7 +475,7 @@ impl Controller {
                             pgid,
                             app_id,
                             secs = WINDOW_SEARCH.as_secs(),
-                            "no window with _NET_WM_PID in the game's process group or its \
+                            "no mapped window with _NET_WM_PID in the game's process group or its \
                              descendants appeared"
                         );
                         defer(move |c| c.on_window_timeout(id));

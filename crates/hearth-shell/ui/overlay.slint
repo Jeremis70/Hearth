@@ -1,0 +1,50 @@
+import { Theme } from "theme.slint";
+
+// In-game overlay (README §4), a separate transparent window marked as a gamescope external
+// overlay. Scrim only: the overlay can't read the game's pixels.
+// TODO(M2a phase B): Now playing card with Resume / Go to Home / Close game, and the dock.
+export component OverlayWindow inherits Window {
+    in property <string> game-title;
+    title: "Hearth overlay";
+    no-frame: true;
+    background: transparent;
+    default-font-family: "Manrope";
+    preferred-width: 1280px;
+    preferred-height: 720px;
+
+    // Globals are per window, so the overlay keeps its own Theme.scale.
+    function update-scale() {
+        Theme.scale = min(self.width / 1920px, self.height / 1080px);
+    }
+    init => { update-scale(); }
+    changed width => { update-scale(); }
+    changed height => { update-scale(); }
+
+    Rectangle {
+        background: Theme.scrim;
+    }
+    Rectangle {
+        x: Theme.safe-x;
+        y: parent.height - Theme.safe-y - self.height - Theme.dock-height - Theme.sp-48;
+        width: 520px * Theme.scale;
+        height: 300px * Theme.scale;
+        border-radius: Theme.radius-lg;
+        background: Theme.surface-raised;
+        VerticalLayout {
+            padding: Theme.sp-32;
+            spacing: Theme.sp-12;
+            Text {
+                text: "NOW PLAYING";
+                font-size: Theme.caption;
+                font-weight: Theme.semibold;
+                color: Theme.accent;
+            }
+            Text {
+                text: game-title;
+                font-size: Theme.title;
+                font-weight: Theme.semibold;
+                color: Theme.text-primary;
+            }
+        }
+    }
+}

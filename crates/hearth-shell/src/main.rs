@@ -2,11 +2,13 @@
 
 mod bridge;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
 use clap::Parser;
 use hearth_core::paths::DataDirs;
+use hearth_platform::gamescope::{self, Compositor};
 use hearth_platform::input::gilrs::GilrsBackend;
 use hearth_platform::network::MockNetworkBackend;
 use slint::ComponentHandle;
@@ -42,8 +44,11 @@ fn main() -> anyhow::Result<()> {
         .select()
         .context("selecting the winit backend")?;
 
+    let compositor: Arc<dyn Compositor> = Arc::from(gamescope::detect());
+
     let app = AppWindow::new()?;
     app.window().set_fullscreen(!args.windowed);
+    bridge::compositor::register_shell(&app, compositor.clone());
 
     bridge::models::install(&app);
     bridge::models::load_network(&app, MockNetworkBackend::new());

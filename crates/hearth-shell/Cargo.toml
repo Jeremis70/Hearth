@@ -17,6 +17,7 @@ anyhow.workspace = true
 chrono.workspace = true
 clap.workspace = true
 slint.workspace = true
+raw-window-handle.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 

@@ -212,8 +212,12 @@ impl Gamescope {
     }
 
     fn window_info(&self, window: Window) -> Result<WindowInfo, CompositorError> {
+        let geometry = self.conn.get_geometry(window)?.reply()?;
+        let attributes = self.conn.get_window_attributes(window)?.reply()?;
         Ok(WindowInfo {
             window,
+            size: (geometry.width, geometry.height),
+            mapped: attributes.map_state == x11rb::protocol::xproto::MapState::VIEWABLE,
             pid: self
                 .cardinals(window, self.atoms.net_wm_pid)?
                 .first()
@@ -320,6 +324,10 @@ impl Compositor for Gamescope {
 pub struct WindowInfo {
     /// X11 window id.
     pub window: u32,
+    /// Width and height in pixels.
+    pub size: (u16, u16),
+    /// Mapped and viewable.
+    pub mapped: bool,
     /// `_NET_WM_PID`, if set.
     pub pid: Option<u32>,
     /// `STEAM_GAME`, if set.

@@ -24,8 +24,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some("windows") => {
             for w in gs.windows()? {
                 println!(
-                    "0x{:08x} pid={:?} STEAM_GAME={:?} overlay={}",
-                    w.window, w.pid, w.app, w.overlay
+                    "0x{:08x} {}x{} mapped={} pid={:?} STEAM_GAME={:?} overlay={}",
+                    w.window, w.size.0, w.size.1, w.mapped, w.pid, w.app, w.overlay
                 );
             }
         }

@@ -4,6 +4,7 @@
 
 use std::sync::mpsc::Sender;
 
+pub mod dev_socket;
 pub mod gilrs;
 pub mod repeat;
 

@@ -12,7 +12,7 @@ use gilrs::{Axis, Button, EventType, Gilrs};
 
 use super::repeat::stick_direction;
 use super::repeat::{DirectionSource, GuidePress, HeldDirections, KeyRepeat, STICK_DEADZONE};
-use super::{Action, Direction, InputBackend, InputError, InputMode};
+use super::{Action, Direction, InputBackend, InputError, InputMode, PadActivity, is_at_rest};
 
 /// Longest time the input thread sleeps without an event or a pending deadline.
 const IDLE_WAIT: Duration = Duration::from_millis(250);
@@ -21,12 +21,18 @@ const IDLE_WAIT: Duration = Duration::from_millis(250);
 #[derive(Debug, Default)]
 pub struct GilrsBackend {
     started: bool,
+    activity: PadActivity,
 }
 
 impl GilrsBackend {
     /// Creates a backend; nothing is opened until [`InputBackend::start`].
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Live "is anything held" state of every controller, updated after each event.
+    pub fn activity(&self) -> PadActivity {
+        self.activity.clone()
     }
 }
 
@@ -37,6 +43,7 @@ impl InputBackend for GilrsBackend {
         }
         // Gilrs isn't Send, so it is created on the thread that uses it.
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        let activity = self.activity.clone();
         thread::Builder::new()
             .name("hearth-gilrs".into())
             .spawn(move || {
@@ -48,7 +55,7 @@ impl InputBackend for GilrsBackend {
                     }
                 };
                 let _ = ready_tx.send(Ok(()));
-                run(gilrs, &tx);
+                run(gilrs, &tx, &activity);
             })
             .map_err(|err| InputError::Start(err.to_string()))?;
         ready_rx
@@ -64,7 +71,7 @@ impl InputBackend for GilrsBackend {
     }
 }
 
-fn run(mut gilrs: Gilrs, tx: &Sender<Action>) {
+fn run(mut gilrs: Gilrs, tx: &Sender<Action>, activity: &PadActivity) {
     for (_, pad) in gilrs.gamepads() {
         tracing::info!(name = pad.name(), "controller connected");
     }
@@ -101,6 +108,7 @@ fn run(mut gilrs: Gilrs, tx: &Sender<Action>) {
             if let Some(input) = input {
                 state.handle(input, now, &mut out);
             }
+            activity.set_held(!all_at_rest(&gilrs));
         }
         state.tick(now, &mut out);
         for action in out.drain(..) {
@@ -110,6 +118,24 @@ fn run(mut gilrs: Gilrs, tx: &Sender<Action>) {
             }
         }
     }
+}
+
+/// Whether no connected controller has anything held. Buttons are read from the raw state, so
+/// unmapped ones (touchpad click, mic button) count too; analog triggers are buttons with a value.
+fn all_at_rest(gilrs: &Gilrs) -> bool {
+    gilrs.gamepads().all(|(_, pad)| {
+        let state = pad.state();
+        let buttons = state.buttons().map(|(_, data)| data.is_pressed());
+        let triggers = state.buttons().map(|(_, data)| data.value());
+        let sticks = [
+            Axis::LeftStickX,
+            Axis::LeftStickY,
+            Axis::RightStickX,
+            Axis::RightStickY,
+        ]
+        .map(|axis| pad.value(axis));
+        is_at_rest(buttons, triggers.chain(sticks))
+    })
 }
 
 /// The subset of gilrs events the state machine cares about.

@@ -4,7 +4,8 @@
 //! Inside gamescope:
 //! - Guide short press while playing: freeze the game, show the overlay over it.
 //! - Guide long press while playing: freeze the game, show Hearth's Home.
-//! - Resume (overlay, Home tile, Guide again in the overlay): unfreeze, show the game.
+//! - Resume (overlay, Home tile, Guide again in the overlay): show the game, and unfreeze it
+//!   once every button and stick is released, so the press that resumed it never reaches it.
 //!
 //! Outside gamescope (or in gamescope without Steam mode, where focus can't be switched) the
 //! game keeps the screen, there is no overlay, and a long press closes the game.
@@ -29,7 +30,7 @@ use hearth_core::scan::scan_roms;
 use hearth_core::session::{ActiveSession, SessionState};
 use hearth_core::systems::{EmulatorKind, SuspendPolicy, Systems};
 use hearth_platform::gamescope::{AppId, Compositor, SHELL_APP_ID};
-use hearth_platform::input::Action;
+use hearth_platform::input::{Action, PadActivity};
 use slint::ComponentHandle;
 
 use super::models;
@@ -45,6 +46,10 @@ const FOCUS_CHECK: Duration = Duration::from_millis(700);
 const TOAST_TIME: Duration = Duration::from_secs(5);
 /// First app id given to games (Hearth is 769).
 const FIRST_GAME_APP_ID: AppId = 10_000;
+/// How often to check whether the controller was released before unfreezing a game.
+const RELEASE_POLL: Duration = Duration::from_millis(16);
+/// Unfreeze anyway if something is still held after this long.
+const RELEASE_TIMEOUT: Duration = Duration::from_secs(2);
 
 thread_local! {
     static CONTROLLER: RefCell<Option<Controller>> = const { RefCell::new(None) };
@@ -79,6 +84,8 @@ enum Mode {
     Shell,
     /// A game was started and its window hasn't been shown yet; Hearth stays in front.
     Launching,
+    /// The game is in front but still frozen until the controller is released; input is dropped.
+    Resuming,
     /// The game is in front; only the Guide button is ours.
     Game,
     /// The overlay is shown over the frozen game.
@@ -104,6 +111,7 @@ pub struct Controller {
     runtime: Arc<ProcessRuntime>,
     systems: Systems,
     profile: RetroArchProfile,
+    activity: PadActivity,
     library_db: PathBuf,
     entries: Vec<LibraryEntry>,
     active: Option<ActiveSession>,
@@ -112,6 +120,7 @@ pub struct Controller {
     events: Sender<RuntimeEvent>,
     next_app_id: AppId,
     toast_timer: slint::Timer,
+    release_timer: slint::Timer,
 }
 
 /// Everything the controller needs at startup.
@@ -126,6 +135,8 @@ pub struct Setup {
     pub systems: Systems,
     /// RetroArch profile.
     pub profile: RetroArchProfile,
+    /// Whether the controller is released (games are unfrozen only then).
+    pub activity: PadActivity,
     /// Library database file.
     pub library_db: PathBuf,
     /// Root scanned for ROMs (read-only).
@@ -186,6 +197,7 @@ pub fn install(setup: Setup) {
         runtime: Arc::new(ProcessRuntime::new()),
         systems: setup.systems,
         profile: setup.profile,
+        activity: setup.activity,
         library_db: setup.library_db,
         entries: Vec::new(),
         active: None,
@@ -194,6 +206,7 @@ pub fn install(setup: Setup) {
         events,
         next_app_id: FIRST_GAME_APP_ID,
         toast_timer: slint::Timer::default(),
+        release_timer: slint::Timer::default(),
     };
     CONTROLLER.with(|cell| *cell.borrow_mut() = Some(controller));
 }
@@ -278,7 +291,7 @@ impl Controller {
                     .as_ref()
                     .map_or(Route::None, |o| Route::Overlay(o.clone_strong())),
                 // The game owns the controller; gilrs can't hide input from it, so drop ours.
-                Mode::Game | Mode::Launching => Route::None,
+                Mode::Game | Mode::Launching | Mode::Resuming => Route::None,
             },
         }
     }
@@ -302,7 +315,7 @@ impl Controller {
                     );
                 }
             }
-            Mode::Game => {
+            Mode::Game | Mode::Resuming => {
                 if long {
                     self.go_home();
                 } else {
@@ -481,14 +494,15 @@ impl Controller {
 
     // --- switching between game, overlay and Home --------------------------------------
 
-    /// Puts the game in front. On any failure Hearth stays in front.
+    /// Puts the game in front; a frozen game is unfrozen once the controller is released.
+    /// On any failure Hearth stays in front.
     fn show_game(&mut self) {
         let Some(app_id) = self.active.as_ref().map(|a| a.app_id) else {
             return;
         };
         self.hide_overlay();
-        self.thaw();
         if !self.compositor.controls_focus() {
+            self.thaw();
             self.mode = Mode::Game;
             return;
         }
@@ -496,7 +510,13 @@ impl Controller {
             self.game_not_shown(&format!("focus switch failed: {err}"));
             return;
         }
-        self.mode = Mode::Game;
+        let frozen = self.active.as_ref().is_some_and(|a| a.frozen);
+        if frozen {
+            self.mode = Mode::Resuming;
+            self.thaw_when_released();
+        } else {
+            self.mode = Mode::Game;
+        }
         if let Some(active) = &mut self.active {
             active.state = SessionState::Playing;
         }
@@ -511,9 +531,48 @@ impl Controller {
         });
     }
 
+    /// Unfreezes the game once nothing is held on any controller (or after [`RELEASE_TIMEOUT`]),
+    /// so the button that resumed it, typically A, isn't seen pressed by the game.
+    fn thaw_when_released(&mut self) {
+        let Some(id) = self.active.as_ref().map(|a| a.session.id()) else {
+            return;
+        };
+        let started = Instant::now();
+        self.release_timer
+            .start(slint::TimerMode::Repeated, RELEASE_POLL, move || {
+                with(|c| c.poll_release(id, started));
+            });
+        // Usually nothing is held any more (keyboard, dev socket): don't wait a tick.
+        self.poll_release(id, started);
+    }
+
+    fn poll_release(&mut self, id: SessionId, started: Instant) {
+        if self.mode != Mode::Resuming || !self.is_current(id) {
+            self.release_timer.stop();
+            return;
+        }
+        let waited = started.elapsed();
+        if !self.activity.is_idle() {
+            if waited < RELEASE_TIMEOUT {
+                return;
+            }
+            tracing::warn!(
+                waited_ms = waited.as_millis(),
+                "controller still held; resuming the game anyway"
+            );
+        }
+        self.release_timer.stop();
+        tracing::debug!(
+            waited_ms = waited.as_millis(),
+            "controller released, resuming"
+        );
+        self.thaw();
+        self.mode = Mode::Game;
+    }
+
     /// Gamescope may accept the property but keep Hearth in front (e.g. not in Steam mode).
     fn check_focus(&mut self, app_id: AppId) {
-        if self.mode != Mode::Game {
+        if !matches!(self.mode, Mode::Game | Mode::Resuming) {
             return;
         }
         match self.compositor.focused_app() {

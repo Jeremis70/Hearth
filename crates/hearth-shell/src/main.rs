@@ -100,12 +100,14 @@ fn main() -> anyhow::Result<()> {
         None
     };
 
+    let gilrs = GilrsBackend::new();
     bridge::session::install(bridge::session::Setup {
         app: app.as_weak(),
         overlay,
         compositor,
         systems,
         profile: RetroArchProfile::new(dirs.retroarch()),
+        activity: gilrs.activity(),
         library_db: dirs.library_db(),
         games_dir,
     });
@@ -123,7 +125,7 @@ fn main() -> anyhow::Result<()> {
         },
     );
 
-    let mut backends: Vec<Box<dyn InputBackend>> = vec![Box::new(GilrsBackend::new())];
+    let mut backends: Vec<Box<dyn InputBackend>> = vec![Box::new(gilrs)];
     if let Some(path) = args.dev_socket {
         backends.push(Box::new(DevSocketBackend::new(path)));
     }

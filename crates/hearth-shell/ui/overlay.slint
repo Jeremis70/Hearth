@@ -46,8 +46,6 @@ export component OverlayWindow inherits Window {
     in property <string> clock;
     // Whether the overlay is open. Set by the session controller together with STEAM_OVERLAY.
     in property <bool> shown: false;
-    // Resume was chosen but a button or stick is still held.
-    in property <bool> release-hint: false;
 
     callback resume();
     callback go-home();
@@ -196,11 +194,6 @@ export component OverlayWindow inherits Window {
                             icon: Icons.play;
                             label: "Resume";
                             focused: item == 0;
-                        }
-                        if release-hint: Text {
-                            text: "Release buttons to resume";
-                            font-size: Theme.body;
-                            color: Theme.text-secondary;
                         }
                         HorizontalLayout {
                             spacing: Theme.sp-16;

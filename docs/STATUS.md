@@ -65,9 +65,9 @@ resume and close it. Verified end to end inside `scripts/run-gamescope.sh` with 
 
 - Menu and overlay actions fire on button **release**. A press that began in a game is disarmed
   when Hearth takes the pad back (`PadActivity::disarm`).
-- Resume keeps the overlay (or Home) up until the pad has been at rest for 100 ms; after 300 ms
-  it shows "Release buttons to resume". Back or Guide cancels. There is no timeout. "At rest" is
-  judged against each pad's resting values (logged at connect, learned when first seen).
+- Resume unfreezes the game at once. Waiting until the pad was at rest was tried and removed:
+  it got stuck (the pad never looked at rest), and players want input to reach the game as soon
+  as they resume.
 - A focus switch is retried for 3 s; on failure Hearth comes back and the game keeps running
   (never left frozen).
 - **Controls files** (`crates/hearth-core/src/controls/`): Hearth pad by position → console
@@ -178,7 +178,7 @@ read the controller.
   first.
 
 **Checks:** `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
-`cargo test --workspace` (core 59, platform 25, shell 4 tests).
+`cargo test --workspace` (core 59, platform 24, shell 4 tests).
 
 ## 4. Gotchas for a fresh session
 

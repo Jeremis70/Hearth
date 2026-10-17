@@ -4,19 +4,15 @@
 //! running game still sees the controller. That is fine on the laptop; the appliance uses
 //! InputPlumber instead (TODO(M3)).
 
-use std::collections::HashMap;
 use std::sync::mpsc::{self, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use gilrs::ev::Code;
-use gilrs::{Axis, Button, EventType, Gamepad, GamepadId, Gilrs};
+use gilrs::{Axis, Button, EventType, Gilrs};
 
 use super::repeat::stick_direction;
 use super::repeat::{DirectionSource, GuidePress, HeldDirections, KeyRepeat, STICK_DEADZONE};
-use super::{
-    Action, Direction, InputBackend, InputError, InputMode, PadActivity, PadInfo, is_at_rest,
-};
+use super::{Action, Direction, InputBackend, InputError, InputMode, PadActivity, PadInfo};
 
 /// Longest time the input thread sleeps without an event or a pending deadline.
 const IDLE_WAIT: Duration = Duration::from_millis(250);
@@ -76,10 +72,8 @@ impl InputBackend for GilrsBackend {
 }
 
 fn run(mut gilrs: Gilrs, tx: &Sender<Action>, activity: &PadActivity) {
-    let mut rest = RestValues::default();
-    for (id, pad) in gilrs.gamepads() {
+    for (_, pad) in gilrs.gamepads() {
         tracing::info!(name = pad.name(), "controller connected");
-        rest.capture(id, pad);
     }
     activity.set_pads(pad_infos(&gilrs));
     let mut state = PadState::default();
@@ -105,7 +99,6 @@ fn run(mut gilrs: Gilrs, tx: &Sender<Action>, activity: &PadActivity) {
                 EventType::Connected => {
                     let pad = gilrs.gamepad(event.id);
                     tracing::info!(name = pad.name(), "controller connected");
-                    rest.capture(event.id, pad);
                     activity.set_pads(pad_infos(&gilrs));
                     None
                 }
@@ -118,7 +111,6 @@ fn run(mut gilrs: Gilrs, tx: &Sender<Action>, activity: &PadActivity) {
             if let Some(input) = input {
                 state.handle(input, now, activity.disarm_count(), &mut out);
             }
-            activity.set_at_rest(rest.all_at_rest(&gilrs), now);
         }
         state.tick(now, &mut out);
         for action in out.drain(..) {
@@ -148,61 +140,6 @@ fn pad_infos(gilrs: &Gilrs) -> Vec<PadInfo> {
 pub fn connected_pads() -> Result<Vec<PadInfo>, InputError> {
     let gilrs = Gilrs::new().map_err(|err| InputError::Start(err.to_string()))?;
     Ok(pad_infos(&gilrs))
-}
-
-/// Each controller's analog values (raw axes and analog buttons) as they were when it
-/// connected: what "released" looks like for it. Triggers don't always rest at 0 (a raw trigger
-/// axis can rest at -1), so rest is judged against these rather than against 0.
-#[derive(Debug, Default)]
-struct RestValues(HashMap<GamepadId, HashMap<Code, f32>>);
-
-impl RestValues {
-    fn capture(&mut self, id: GamepadId, pad: Gamepad<'_>) {
-        let state = pad.state();
-        let axes: Vec<_> = state
-            .axes()
-            .map(|(code, data)| (code, data.value()))
-            .collect();
-        let buttons: Vec<_> = state
-            .buttons()
-            .map(|(code, data)| (code, data.value()))
-            .collect();
-        tracing::info!(
-            name = pad.name(),
-            ?axes,
-            ?buttons,
-            "controller resting values (raw axes and button values at connect)"
-        );
-        self.0.insert(id, axes.into_iter().chain(buttons).collect());
-    }
-
-    /// Whether no connected controller has anything held. Buttons are read from the raw
-    /// state, so unmapped ones (touchpad click, mic button) count too. An analog value not
-    /// reported at connect is learned the first time it shows up while no button is pressed.
-    fn all_at_rest(&mut self, gilrs: &Gilrs) -> bool {
-        gilrs.gamepads().all(|(id, pad)| {
-            let state = pad.state();
-            let pressed = state.buttons().any(|(_, data)| data.is_pressed());
-            let values: Vec<(Code, f32)> = state
-                .axes()
-                .map(|(code, data)| (code, data.value()))
-                .chain(state.buttons().map(|(code, data)| (code, data.value())))
-                .collect();
-            let rest = self.0.entry(id).or_default();
-            if !pressed {
-                for (code, value) in &values {
-                    rest.entry(*code).or_insert_with(|| {
-                        tracing::info!(name = pad.name(), ?code, value, "learned resting value");
-                        *value
-                    });
-                }
-            }
-            let analog = values
-                .iter()
-                .map(|(code, value)| (*value, rest.get(code).copied().unwrap_or(0.0)));
-            is_at_rest([pressed], analog)
-        })
-    }
 }
 
 /// The subset of gilrs events the state machine cares about.

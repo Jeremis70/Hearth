@@ -4,9 +4,8 @@
 //! Inside gamescope:
 //! - Guide short press while playing: freeze the game, show the overlay over it.
 //! - Guide long press while playing: freeze the game, show Hearth's Home.
-//! - Resume (overlay, Home tile, Guide again in the overlay): once every button and stick has
-//!   been released, show the game and unfreeze it, so the press that resumed it never reaches
-//!   it. Until then the overlay (or Home) stays up, saying "Release buttons to resume".
+//! - Resume (overlay, Home tile, Guide again in the overlay): unfreeze, show the game. Menu
+//!   buttons act on release, so the press that resumed the game is already over.
 //!
 //! Outside gamescope (or in gamescope without Steam mode, where focus can't be switched) the
 //! game keeps the screen, there is no overlay, and a long press closes the game.
@@ -50,12 +49,6 @@ const FOCUS_RETRY: Duration = Duration::from_secs(3);
 const TOAST_TIME: Duration = Duration::from_secs(5);
 /// First app id given to games (Hearth is 769).
 const FIRST_GAME_APP_ID: AppId = 10_000;
-/// How often to check whether the controller was released before resuming a game.
-const RELEASE_POLL: Duration = Duration::from_millis(16);
-/// The controller must have been at rest this long before a game resumes.
-const REST_BEFORE_RESUME: Duration = Duration::from_millis(100);
-/// Say "Release buttons to resume" when something is still held after this long.
-const RELEASE_HINT_AFTER: Duration = Duration::from_millis(300);
 
 thread_local! {
     static CONTROLLER: RefCell<Option<Controller>> = const { RefCell::new(None) };
@@ -90,12 +83,6 @@ enum Mode {
     Shell,
     /// A game was started and its window hasn't been shown yet; Hearth stays in front.
     Launching,
-    /// Resume was chosen; the overlay (or Home) stays in front, input dropped, until the
-    /// controller is at rest. Back or Guide cancels.
-    Waiting {
-        /// Resume came from the overlay (else from Home).
-        from_overlay: bool,
-    },
     /// The game is in front; only the Guide button is ours.
     Game,
     /// The overlay is shown over the frozen game.
@@ -132,8 +119,6 @@ pub struct Controller {
     events: Sender<RuntimeEvent>,
     next_app_id: AppId,
     toast_timer: slint::Timer,
-    release_timer: slint::Timer,
-    release_hint: bool,
     focus_timer: slint::Timer,
 }
 
@@ -153,7 +138,7 @@ pub struct Setup {
     pub dolphin: DolphinProfile,
     /// The user's controls files (`<config>/controls`).
     pub controls_dir: PathBuf,
-    /// Whether the controller is released (games are unfrozen only then).
+    /// Live controller state: connected pads, disarming held buttons.
     pub activity: PadActivity,
     /// Library database file.
     pub library_db: PathBuf,
@@ -226,8 +211,6 @@ pub fn install(setup: Setup) {
         events,
         next_app_id: FIRST_GAME_APP_ID,
         toast_timer: slint::Timer::default(),
-        release_timer: slint::Timer::default(),
-        release_hint: false,
         focus_timer: slint::Timer::default(),
     };
     CONTROLLER.with(|cell| *cell.borrow_mut() = Some(controller));
@@ -312,12 +295,6 @@ impl Controller {
                     .overlay
                     .as_ref()
                     .map_or(Route::None, |o| Route::Overlay(o.clone_strong())),
-                Mode::Waiting { .. } => {
-                    if action == Action::Back {
-                        self.cancel_resume();
-                    }
-                    Route::None
-                }
                 // The game owns the controller; gilrs can't hide input from it, so drop ours.
                 Mode::Game | Mode::Launching => Route::None,
             },
@@ -343,7 +320,6 @@ impl Controller {
                     );
                 }
             }
-            Mode::Waiting { .. } => self.go_home(),
             Mode::Game => {
                 if long {
                     self.go_home();
@@ -556,7 +532,6 @@ impl Controller {
         let Some(app_id) = self.active.as_ref().map(|a| a.app_id) else {
             return;
         };
-        self.release_timer.stop();
         self.hide_overlay();
         self.thaw();
         self.mode = Mode::Game;
@@ -648,7 +623,6 @@ impl Controller {
     }
 
     fn hide_overlay(&mut self) {
-        self.set_release_hint(false);
         if let Some(overlay) = &self.overlay {
             overlay.set_shown(false);
         }
@@ -659,91 +633,15 @@ impl Controller {
         }
     }
 
-    /// Resume from the overlay or from Home: a frozen game resumes once the controller has
-    /// been at rest for [`REST_BEFORE_RESUME`]; until then Hearth stays in front.
+    /// Resume from the overlay or from Home.
     fn resume_game(&mut self) {
-        let Some(active) = &self.active else {
-            return;
-        };
-        if !active.frozen || !self.compositor.controls_focus() {
+        if self.active.is_some() {
             self.show_game();
-            return;
-        }
-        let id = active.session.id();
-        self.mode = Mode::Waiting {
-            from_overlay: self.mode == Mode::Overlay,
-        };
-        let started = Instant::now();
-        self.release_timer
-            .start(slint::TimerMode::Repeated, RELEASE_POLL, move || {
-                with(|c| c.poll_release(id, started));
-            });
-        // Usually the controller has long been at rest (keyboard, dev socket): no tick wait.
-        self.poll_release(id, started);
-    }
-
-    fn poll_release(&mut self, id: SessionId, started: Instant) {
-        let Mode::Waiting { from_overlay } = self.mode else {
-            self.release_timer.stop();
-            return;
-        };
-        if !self.is_current(id) {
-            self.release_timer.stop();
-            return;
-        }
-        let now = Instant::now();
-        let waited = now.saturating_duration_since(started);
-        if self
-            .activity
-            .rest_duration(now)
-            .is_some_and(|rest| rest >= REST_BEFORE_RESUME)
-        {
-            tracing::debug!(
-                waited_ms = waited.as_millis(),
-                "controller at rest, resuming"
-            );
-            if !from_overlay {
-                self.clear_toast();
-            }
-            self.show_game();
-            return;
-        }
-        if !self.release_hint && waited >= RELEASE_HINT_AFTER {
-            tracing::debug!("controller still held, waiting to resume");
-            if from_overlay {
-                self.set_release_hint(true);
-            } else {
-                self.release_hint = true;
-                self.toast("Release buttons to resume");
-            }
-        }
-    }
-
-    /// Back while waiting to resume: stay in the overlay's place (Home) or on Home.
-    fn cancel_resume(&mut self) {
-        let Mode::Waiting { from_overlay } = self.mode else {
-            return;
-        };
-        self.release_timer.stop();
-        if from_overlay {
-            self.go_home();
-        } else {
-            self.release_hint = false;
-            self.clear_toast();
-            self.mode = Mode::Shell;
-        }
-    }
-
-    fn set_release_hint(&mut self, shown: bool) {
-        self.release_hint = shown;
-        if let Some(overlay) = &self.overlay {
-            overlay.set_release_hint(shown);
         }
     }
 
     /// Freezes the game and shows Home with focus on its tile.
     fn go_home(&mut self) {
-        self.release_timer.stop();
         self.activity.disarm();
         self.hide_overlay();
         self.freeze();
@@ -848,7 +746,6 @@ impl Controller {
         let closed_by_us = std::mem::take(&mut self.closing);
         tracing::info!(%game, played_secs = played.as_secs(), success, "session ended");
 
-        self.release_timer.stop();
         self.activity.disarm();
         self.hide_overlay();
         let _ = self.compositor.focus(&[SHELL_APP_ID]);

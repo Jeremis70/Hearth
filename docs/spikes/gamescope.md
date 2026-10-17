@@ -26,8 +26,8 @@ properties inspected with `gamescope_probe`, `xprop` and `gamescopectl focus_inf
 - Run gamescope with `-e`. It only changes how that gamescope instance behaves (it expects
   Steam's window conventions); nothing system-wide.
 - Tag game windows ourselves via `_NET_WM_PID` + process group; don't rely on `SteamGameId`.
-- The overlay window uses `STEAM_OVERLAY` plus `GAMESCOPE_EXTERNAL_OVERLAY`, both 1 to show and
-  both 0 to hide, and its content is transparent while hidden (see follow-ups).
+- The overlay window uses `STEAM_OVERLAY` only (1 to show, 0 to hide) and its content is
+  transparent while hidden (see follow-ups). `GAMESCOPE_EXTERNAL_OVERLAY` stays 0.
 - `gamescopectl screenshot` captures the base layer only (no overlay plane), so overlay checks
   were done by eye.
 
@@ -52,3 +52,7 @@ properties inspected with `gamescope_probe`, `xprop` and `gamescopectl focus_inf
   kept the window drawn over the game and Home, passing input through. The spike had only
   checked `focus_info`, not the screen. Hearth now clears both properties and renders the
   overlay fully transparent unless it is open; verified by eye in Steam mode.
+- Double overlay: with both `STEAM_OVERLAY` and `GAMESCOPE_EXTERNAL_OVERLAY` at 1, gamescope
+  drew the window on two overlay layers. They coincide normally (the scrim just looks darker)
+  but separate when the nested window is resized: one copy at the old size, one at the new,
+  both live. `STEAM_OVERLAY` alone draws one copy and resizes correctly (verified by eye).

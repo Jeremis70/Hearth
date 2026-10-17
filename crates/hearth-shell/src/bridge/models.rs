@@ -18,7 +18,7 @@ fn home_tiles() -> Vec<HomeTile> {
     let games = demo::recent_games().into_iter().map(|g| HomeTile {
         id: g.game.id.as_str().into(),
         title: g.game.title.into(),
-        badge: g.game.system_short.into(),
+        badge: g.system_short.into(),
         subtitle: format!("{} · {}", g.playtime, g.last_played).into(),
         kind: TileKind::Game,
         art_a: color(g.art[0]),

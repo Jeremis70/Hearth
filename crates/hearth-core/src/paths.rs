@@ -37,6 +37,7 @@ pub struct DataDirs {
     config: PathBuf,
     data: PathBuf,
     cache: PathBuf,
+    retroarch: PathBuf,
 }
 
 impl DataDirs {
@@ -56,6 +57,7 @@ impl DataDirs {
                     config: dirs.config_dir().to_path_buf(),
                     data: dirs.data_dir().to_path_buf(),
                     cache: dirs.cache_dir().to_path_buf(),
+                    retroarch: dirs.data_dir().join("retroarch"),
                 })
             }
         }
@@ -66,12 +68,13 @@ impl DataDirs {
             config: root.join("config"),
             data: root.join("data"),
             cache: root.join("cache"),
+            retroarch: root.join("retroarch"),
         }
     }
 
     /// Creates the directories if they don't exist yet.
     pub fn create_all(&self) -> Result<(), PathsError> {
-        for dir in [&self.config, &self.data, &self.cache] {
+        for dir in [&self.config, &self.data, &self.cache, &self.retroarch] {
             std::fs::create_dir_all(dir).map_err(|source| PathsError::Create {
                 path: dir.clone(),
                 source,
@@ -94,6 +97,16 @@ impl DataDirs {
     pub fn cache(&self) -> &Path {
         &self.cache
     }
+
+    /// Hearth's isolated RetroArch profile (config, saves, states, logs).
+    pub fn retroarch(&self) -> &Path {
+        &self.retroarch
+    }
+
+    /// The library database file.
+    pub fn library_db(&self) -> PathBuf {
+        self.data.join("library.sqlite3")
+    }
 }
 
 #[cfg(test)]
@@ -106,6 +119,11 @@ mod tests {
         assert_eq!(dirs.config(), Path::new("./.dev-data/config"));
         assert_eq!(dirs.data(), Path::new("./.dev-data/data"));
         assert_eq!(dirs.cache(), Path::new("./.dev-data/cache"));
+        assert_eq!(dirs.retroarch(), Path::new("./.dev-data/retroarch"));
+        assert_eq!(
+            dirs.library_db(),
+            Path::new("./.dev-data/data/library.sqlite3")
+        );
     }
 
     #[test]

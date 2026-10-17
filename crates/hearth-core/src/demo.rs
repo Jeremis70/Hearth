@@ -2,6 +2,8 @@
 //!
 //! TODO(M2): replace with the library's recent-games query.
 
+use std::path::PathBuf;
+
 use crate::model::{Game, GameId, SystemId};
 
 /// An sRGB color.
@@ -13,6 +15,8 @@ pub struct Rgb(pub u8, pub u8, pub u8);
 pub struct DemoGame {
     /// The game itself.
     pub game: Game,
+    /// Short system label for badges ("GameCube").
+    pub system_short: String,
     /// Human playtime ("12 h played").
     pub playtime: String,
     /// Human last-played ("last played yesterday").
@@ -86,8 +90,9 @@ pub fn recent_games() -> Vec<DemoGame> {
                 id: GameId::new(id),
                 title: title.to_owned(),
                 system: SystemId::new(system),
-                system_short: short.to_owned(),
+                path: PathBuf::new(),
             },
+            system_short: short.to_owned(),
             playtime: playtime.to_owned(),
             last_played: last_played.to_owned(),
             art,

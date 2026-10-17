@@ -1,6 +1,7 @@
 //! The game model shared by every library source and runtime.
 
 use std::fmt;
+use std::path::PathBuf;
 
 /// Stable identifier of a game across sources (e.g. `steam:620`, `roms:gc/zelda-tp`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -25,7 +26,8 @@ impl fmt::Display for GameId {
 }
 
 /// Identifier of a system ("gc", "n64", "steam"), as in `systems.toml`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Deserialize)]
+#[serde(transparent)]
 pub struct SystemId(String);
 
 impl SystemId {
@@ -55,6 +57,6 @@ pub struct Game {
     pub title: String,
     /// System the game runs on.
     pub system: SystemId,
-    /// Short system label for badges ("GameCube").
-    pub system_short: String,
+    /// The ROM or disc image to launch.
+    pub path: PathBuf,
 }

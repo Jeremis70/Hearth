@@ -2,9 +2,14 @@
 //!
 //! No Slint and no D-Bus in this crate.
 //!
-//! TODO(M2): `systems` (load systems.toml), `sources` (LibrarySource + roms/steam/ports),
-//! `library` (SQLite cache), `runtime` (Runtime trait, ProcessRuntime), `profiles`.
+//! TODO(M2): ES-DE import for all systems, `sources` (LibrarySource + steam/ports).
 
 pub mod demo;
 pub mod model;
 pub mod paths;
+pub mod scan;
+pub mod systems;
+pub mod title;
+
+#[cfg(test)]
+pub(crate) mod testdir;

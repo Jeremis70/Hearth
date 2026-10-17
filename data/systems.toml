@@ -1,0 +1,17 @@
+# Systems Hearth knows about. M2a: N64 only.
+# TODO(M2): generated from ES-DE's es_systems.xml + es_find_rules.xml by tools/import-esde.
+
+[[system]]
+id = "n64"
+name = "Nintendo 64"
+short = "N64"
+extensions = ["z64", "n64", "v64"]
+folders = ["n64"]
+default_emulator = "retroarch"
+# Freeze the emulator with SIGSTOP while the overlay or Home is shown.
+suspend = "sigstop"
+
+  [[system.emulator]]
+  id = "retroarch"
+  kind = "retroarch"
+  core = "/usr/lib/libretro/mupen64plus_next_libretro.so"

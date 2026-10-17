@@ -49,6 +49,10 @@ pub trait Compositor: Send + Sync {
     /// Whether a real compositor is being driven (false for [`NoCompositor`]).
     fn is_active(&self) -> bool;
 
+    /// Whether focus switching and the overlay plane work (gamescope in Steam mode, `-e`).
+    /// When false, games keep the screen once they open a window.
+    fn controls_focus(&self) -> bool;
+
     /// Gives Hearth's main window [`SHELL_APP_ID`]. Without a known window id, windows owned
     /// by `pid` are used.
     fn set_shell_window(&self, window: Option<u32>, pid: u32) -> Result<(), CompositorError>;
@@ -76,6 +80,9 @@ impl Compositor for NoCompositor {
     fn is_active(&self) -> bool {
         false
     }
+    fn controls_focus(&self) -> bool {
+        false
+    }
     fn set_shell_window(&self, _: Option<u32>, _: u32) -> Result<(), CompositorError> {
         Ok(())
     }
@@ -94,21 +101,25 @@ impl Compositor for NoCompositor {
 }
 
 /// Returns a [`Gamescope`] compositor when running inside gamescope, else [`NoCompositor`].
+///
+/// Requires both `GAMESCOPE_WAYLAND_DISPLAY` (gamescope exports it to its children) and
+/// gamescope's properties on `DISPLAY`'s root window. Root properties alone aren't enough:
+/// a desktop's Xwayland can carry stale `GAMESCOPE_*` properties written by other clients
+/// (seen on KDE after Steam ran).
 pub fn detect() -> Box<dyn Compositor> {
-    if std::env::var_os("DISPLAY").is_none() {
+    if std::env::var_os("DISPLAY").is_none()
+        || std::env::var_os("GAMESCOPE_WAYLAND_DISPLAY").is_none()
+    {
         return Box::new(NoCompositor);
     }
     match Gamescope::connect() {
         Ok(Some(gamescope)) => {
-            let steam_mode = gamescope
-                .root_property_names()
-                .is_ok_and(|names| names.iter().any(|n| n == "GAMESCOPE_FOCUSED_APP"));
-            if steam_mode {
+            if gamescope.steam_mode {
                 tracing::info!("running inside gamescope");
             } else {
                 tracing::warn!(
                     "gamescope is not in Steam mode (-e): focus switching and the overlay \
-                     won't work"
+                     won't work; Guide long press will close games instead"
                 );
             }
             Box::new(gamescope)
@@ -137,11 +148,12 @@ pub struct Gamescope {
     conn: RustConnection,
     root: Window,
     atoms: Atoms,
+    steam_mode: bool,
 }
 
 impl Gamescope {
-    /// Connects to `DISPLAY`. Returns `None` if the root window carries no gamescope
-    /// properties (i.e. this X server isn't gamescope's).
+    /// Connects to `DISPLAY`. Returns `None` if the root window lacks the properties gamescope
+    /// sets on its own Xwayland.
     pub fn connect() -> Result<Option<Self>, CompositorError> {
         let (conn, screen) = RustConnection::connect(None)?;
         let root = conn.setup().roots[screen].root;
@@ -156,11 +168,20 @@ impl Gamescope {
             },
             conn,
             root,
+            steam_mode: false,
         };
+        // Set by gamescope itself (clients only ever write GAMESCOPECTRL_* and per-window
+        // properties).
         let is_gamescope = gamescope
             .root_property_names()?
             .iter()
-            .any(|name| name.starts_with("GAMESCOPE_"));
+            .any(|name| name == "GAMESCOPE_FOCUSABLE_WINDOWS" || name == "GAMESCOPE_FOCUS_DISPLAY");
+        let mut gamescope = gamescope;
+        // GAMESCOPE_FOCUSED_APP only exists in Steam mode.
+        gamescope.steam_mode = gamescope
+            .root_property_names()?
+            .iter()
+            .any(|n| n == "GAMESCOPE_FOCUSED_APP");
         Ok(is_gamescope.then_some(gamescope))
     }
 
@@ -252,6 +273,10 @@ impl Compositor for Gamescope {
         true
     }
 
+    fn controls_focus(&self) -> bool {
+        self.steam_mode
+    }
+
     fn set_shell_window(&self, window: Option<u32>, pid: u32) -> Result<(), CompositorError> {
         match window {
             Some(window) => {
@@ -312,6 +337,7 @@ mod tests {
     fn no_compositor_is_inert() {
         let c = NoCompositor;
         assert!(!c.is_active());
+        assert!(!c.controls_focus());
         assert_eq!(c.assign_app(1234, 10_000).unwrap(), 0);
         assert_eq!(c.focused_app().unwrap(), None);
     }

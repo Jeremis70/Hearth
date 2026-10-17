@@ -1,0 +1,22 @@
+import { Theme } from "../theme.slint";
+import { Status } from "../data.slint";
+
+// Short status message at the bottom center (Status.toast; empty hides it).
+export component Toast inherits Rectangle {
+    property <bool> shown: Status.toast != "";
+    width: text.preferred-width + 2 * Theme.sp-32;
+    height: text.preferred-height + 2 * Theme.sp-16;
+    border-radius: self.height / 2;
+    background: Theme.surface-raised;
+    drop-shadow-blur: Theme.sp-24;
+    drop-shadow-color: #00000080;
+    opacity: shown ? 1 : 0;
+    animate opacity { duration: Theme.base; easing: ease-out; }
+
+    text := Text {
+        text: Status.toast;
+        font-size: Theme.body;
+        font-weight: Theme.medium;
+        color: Theme.text-primary;
+    }
+}

@@ -3,3 +3,4 @@
 pub mod compositor;
 pub mod input;
 pub mod models;
+pub mod session;

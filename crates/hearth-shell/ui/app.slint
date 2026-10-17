@@ -4,13 +4,14 @@ import "../../../assets/fonts/Manrope-SemiBold.ttf";
 
 import { Theme } from "theme.slint";
 import { UiAction, InputMap } from "input.slint";
-import { HomeData, SettingsData, Status, HomeTile, TileKind, SettingsCategory, WifiRow } from "data.slint";
+import { HomeData, SettingsData, Status, Session, HomeTile, TileKind, SettingsCategory, WifiRow } from "data.slint";
 import { Home } from "home.slint";
 import { SettingsScreen } from "settings/settings.slint";
 import { Placeholder } from "placeholder.slint";
 import { OverlayWindow } from "overlay.slint";
+import { Toast } from "components/toast.slint";
 
-export { Theme, OverlayWindow, HomeData, SettingsData, Status, HomeTile, TileKind, SettingsCategory, WifiRow }
+export { Theme, OverlayWindow, HomeData, SettingsData, Status, Session, HomeTile, TileKind, SettingsCategory, WifiRow }
 
 enum Screen { home, settings, placeholder }
 
@@ -36,15 +37,20 @@ export component AppWindow inherits Window {
     changed width => { update-scale(); }
     changed height => { update-scale(); }
 
+    // Shows Home with focus on the first tile (the running game, if any).
+    public function go-home() {
+        screen = Screen.home;
+        home.reset();
+    }
+
     // Every key (and every controller action, injected as a key) goes through here.
     function dispatch(action: UiAction) -> bool {
         if action == UiAction.none {
             return false;
         }
-        // TODO(M3): HomeShort opens the overlay and HomeLong focuses Home while a game runs.
+        // The Guide button belongs to the session logic in Rust (overlay, Home, close).
         if action == UiAction.home-short || action == UiAction.home-long {
-            screen = Screen.home;
-            home.reset();
+            Session.home-button(action == UiAction.home-long);
             return true;
         }
         if screen == Screen.settings {
@@ -89,6 +95,11 @@ export component AppWindow inherits Window {
             opacity: screen == Screen.placeholder ? 1 : 0;
             visible: self.opacity > 0;
             animate opacity { duration: Theme.base; easing: ease-out; }
+        }
+
+        Toast {
+            x: (parent.width - self.width) / 2;
+            y: parent.height - Theme.safe-y - Theme.sp-96 - self.height;
         }
     }
 }

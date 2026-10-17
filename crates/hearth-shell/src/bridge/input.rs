@@ -1,5 +1,7 @@
 //! Turns controller [`Action`]s into Slint key events, so the UI only ever handles keys and the
 //! keyboard behaves exactly like a controller. The key table lives in `ui/input.slint`.
+//! The session controller decides which window gets them (or drops them while a game is in
+//! front); the Guide button always reaches it.
 
 use std::sync::mpsc;
 use std::thread;
@@ -9,30 +11,43 @@ use hearth_platform::input::{Action, InputBackend};
 use slint::ComponentHandle;
 use slint::platform::{Key, WindowEvent};
 
-use crate::AppWindow;
+use super::session::{self, Route};
 
-/// Starts `backend` and forwards its actions to the window from a bridge thread.
-pub fn start(app: &AppWindow, mut backend: impl InputBackend + 'static) -> anyhow::Result<()> {
+/// Starts every backend (each failure is logged and skipped) and forwards their actions to the
+/// UI from one bridge thread.
+pub fn start(backends: Vec<Box<dyn InputBackend>>) -> anyhow::Result<()> {
     let (tx, rx) = mpsc::channel();
-    backend.start(tx).context("starting input backend")?;
-    let weak = app.as_weak();
+    let mut running = Vec::new();
+    for mut backend in backends {
+        match backend.start(tx.clone()) {
+            Ok(()) => running.push(backend),
+            Err(err) => tracing::warn!("input backend unavailable: {err}"),
+        }
+    }
+    drop(tx);
+    anyhow::ensure!(!running.is_empty(), "no input backend started");
     thread::Builder::new()
         .name("hearth-input-bridge".into())
         .spawn(move || {
-            // The backend lives as long as the bridge.
-            let _backend = backend;
+            // The backends live as long as the bridge.
+            let _backends = running;
             for action in rx {
                 tracing::debug!(?action, "controller action");
-                if weak
-                    .upgrade_in_event_loop(move |app| inject(&app, action))
-                    .is_err()
-                {
+                if slint::invoke_from_event_loop(move || dispatch(action)).is_err() {
                     break;
                 }
             }
         })
         .context("spawning input bridge thread")?;
     Ok(())
+}
+
+fn dispatch(action: Action) {
+    match session::route(action) {
+        Route::Main(app) => inject(app.window(), action),
+        Route::Overlay(overlay) => inject(overlay.window(), action),
+        Route::None => {}
+    }
 }
 
 /// The key each action is injected as; must be the first key for it in `ui/input.slint`.
@@ -52,9 +67,8 @@ fn key_for(action: Action) -> Key {
     }
 }
 
-fn inject(app: &AppWindow, action: Action) {
+fn inject(window: &slint::Window, action: Action) {
     let text: slint::SharedString = key_for(action).into();
-    let window = app.window();
     window.dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
     window.dispatch_event(WindowEvent::KeyReleased { text });
 }

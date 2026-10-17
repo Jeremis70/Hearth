@@ -57,6 +57,18 @@ export component Tile inherits Rectangle {
         }
     }
 
+    // Running game: `success` dot in the top-right corner.
+    if data.running: Rectangle {
+        width: Theme.sp-16;
+        height: self.width;
+        x: parent.width - self.width - Theme.sp-12;
+        y: Theme.sp-12;
+        border-radius: self.width / 2;
+        background: Theme.success;
+        border-width: 2px;
+        border-color: #00000080;
+    }
+
     FocusRing {
         shown: focused;
         radius: Theme.radius-lg;

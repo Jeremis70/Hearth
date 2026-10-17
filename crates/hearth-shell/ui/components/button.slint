@@ -7,12 +7,13 @@ export component HButton inherits Rectangle {
     in property <image> icon;
     in property <bool> has-icon: false;
     in property <bool> primary: false;
+    in property <bool> danger: false;
     in property <bool> focused: false;
 
     height: Theme.button-height;
     width: label == "" ? self.height : content.preferred-width + 2 * Theme.sp-32;
     border-radius: Theme.radius-md;
-    background: primary ? Theme.accent : (focused ? Theme.surface-raised : Theme.surface);
+    background: primary ? Theme.accent : danger ? Theme.danger : (focused ? Theme.surface-raised : Theme.surface);
 
     content := HorizontalLayout {
         alignment: center;
@@ -29,7 +30,7 @@ export component HButton inherits Rectangle {
             vertical-alignment: center;
             font-size: Theme.body-lg;
             font-weight: Theme.semibold;
-            color: primary ? Theme.on-accent : Theme.text-primary;
+            color: primary || danger ? Theme.on-accent : Theme.text-primary;
         }
     }
 

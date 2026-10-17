@@ -1,0 +1,52 @@
+import { Theme } from "../theme.slint";
+import { HButton } from "button.slint";
+
+// Modal confirmation: scrim, centered card, a danger action and Cancel. The owner handles
+// navigation; `index` 0 is the action, 1 is Cancel.
+export component ConfirmDialog inherits Rectangle {
+    in property <string> heading;
+    in property <string> message;
+    in property <string> confirm-label;
+    in property <int> index;
+
+    background: Theme.scrim;
+
+    Rectangle {
+        width: 720px * Theme.scale;
+        height: layout.preferred-height;
+        border-radius: Theme.radius-lg;
+        background: Theme.surface-raised;
+
+        layout := VerticalLayout {
+            padding: Theme.sp-48;
+            spacing: Theme.sp-24;
+            Text {
+                text: heading;
+                font-size: Theme.title;
+                font-weight: Theme.semibold;
+                color: Theme.text-primary;
+                wrap: word-wrap;
+            }
+            Text {
+                text: message;
+                font-size: Theme.body;
+                color: Theme.text-secondary;
+                wrap: word-wrap;
+            }
+            HorizontalLayout {
+                padding-top: Theme.sp-16;
+                spacing: Theme.sp-16;
+                alignment: start;
+                HButton {
+                    label: confirm-label;
+                    danger: true;
+                    focused: index == 0;
+                }
+                HButton {
+                    label: "Cancel";
+                    focused: index == 1;
+                }
+            }
+        }
+    }
+}

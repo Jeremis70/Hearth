@@ -11,6 +11,7 @@ export struct HomeTile {
     kind: TileKind,
     art-a: color,       // placeholder art gradient
     art-b: color,
+    running: bool,      // this game's session is running (frozen or not)
 }
 
 export struct SettingsCategory {
@@ -41,4 +42,19 @@ export global SettingsData {
 export global Status {
     in property <string> clock;
     in property <string> controller-battery;
+    in property <string> toast;     // empty: hidden
+}
+
+// The running game, and the actions that control it (handled in src/bridge/session.rs).
+export global Session {
+    in property <bool> active;
+    in property <string> title;
+    in property <string> badge;
+    in property <string> played;    // "Playing for 12 min"
+    callback launch(/* game id */ string);
+    callback resume();
+    callback close-game();
+    // Guide button pressed on the keyboard (F1 short / F2 long); controller presses don't
+    // come through here.
+    callback home-button(/* long */ bool);
 }

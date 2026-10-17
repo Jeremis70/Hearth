@@ -63,3 +63,11 @@ pub fn register_shell(app: &crate::AppWindow, compositor: Arc<dyn Compositor>) {
         }
     });
 }
+
+/// Hands the overlay window's X11 id to the session controller once it exists.
+pub fn register_overlay(overlay: &crate::OverlayWindow) {
+    when_x11_window(overlay.as_weak(), |window| match window {
+        Some(window) => super::session::defer(move |c| c.set_overlay_window(window)),
+        None => tracing::warn!("overlay window has no X11 id; the overlay won't show"),
+    });
+}

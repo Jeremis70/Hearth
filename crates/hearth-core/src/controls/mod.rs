@@ -6,6 +6,7 @@
 
 pub mod defaults;
 pub mod device;
+pub mod edit;
 pub mod file;
 pub mod key;
 pub mod layers;

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use super::file::{Layer, Problem, StickChanges, parse_layer};
 use super::key::GameKey;
-use super::model::{Mapping, StickOptions, Target};
+use super::model::{Mapping, PadInput, StickOptions, Target};
 use crate::systems::System;
 
 /// Where a value came from.
@@ -69,9 +69,61 @@ pub fn user_dir(config: &Path) -> PathBuf {
     config.join("controls")
 }
 
+/// Which user layers to apply on top of the shipped default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UserLayers {
+    /// `systems/<system>.toml`.
+    pub system: bool,
+    /// The game's file.
+    pub game: bool,
+}
+
+impl UserLayers {
+    /// Every layer.
+    pub const ALL: Self = Self {
+        system: true,
+        game: true,
+    };
+    /// The shipped default only.
+    pub const NONE: Self = Self {
+        system: false,
+        game: false,
+    };
+}
+
+/// The per-game file that applies to `key`: the first candidate that exists, else the
+/// full-serial one (where a new override is created).
+pub fn game_file(key: &GameKey, user_dir: &Path) -> PathBuf {
+    let candidates: Vec<_> = key
+        .candidates()
+        .into_iter()
+        .map(|rel| user_dir.join("games").join(rel))
+        .collect();
+    candidates
+        .iter()
+        .find(|p| p.is_file())
+        .unwrap_or(&candidates[0])
+        .clone()
+}
+
+/// The user's file for every game of `system`.
+pub fn system_file(system: &System, user_dir: &Path) -> PathBuf {
+    user_dir.join("systems").join(format!("{}.toml", system.id))
+}
+
 /// Resolves the mapping of a game of `system` with per-game `key`, reading user files under
 /// `user_dir`. `None` if the system declares no controls.
 pub fn resolve(system: &System, key: &GameKey, user_dir: &Path) -> Option<Resolved> {
+    resolve_layers(system, key, user_dir, UserLayers::ALL)
+}
+
+/// Like [`resolve`], applying only the chosen user layers.
+pub fn resolve_layers(
+    system: &System,
+    key: &GameKey,
+    user_dir: &Path,
+    layers: UserLayers,
+) -> Option<Resolved> {
     if system.controls.is_empty() {
         return None;
     }
@@ -82,21 +134,20 @@ pub fn resolve(system: &System, key: &GameKey, user_dir: &Path) -> Option<Resolv
             text.to_owned(),
         ));
     }
-    let system_file = user_dir.join("systems").join(format!("{}.toml", system.id));
-    let game_file = key
-        .candidates()
-        .into_iter()
-        .map(|rel| user_dir.join("games").join(rel))
-        .find(|path| path.is_file());
+    let system_file = system_file(system, user_dir);
+    let game_file = game_file(key, user_dir);
     let mut problems = Vec::new();
-    for (path, source) in [
-        (Some(system_file.clone()), Source::System(system_file)),
+    for (path, source, wanted) in [
         (
-            game_file.clone(),
-            Source::Game(game_file.unwrap_or_default()),
+            system_file.clone(),
+            Source::System(system_file),
+            layers.system,
         ),
+        (game_file.clone(), Source::Game(game_file), layers.game),
     ] {
-        let Some(path) = path else { continue };
+        if !wanted {
+            continue;
+        }
         match fs::read_to_string(&path) {
             Ok(text) => files.push((source, text)),
             Err(err) if err.kind() == io::ErrorKind::NotFound => {}
@@ -125,7 +176,7 @@ pub fn resolve(system: &System, key: &GameKey, user_dir: &Path) -> Option<Resolv
         match parse_layer(&path, &text, &system.controls, shipped) {
             Ok((layer, warnings)) => {
                 resolved.problems.extend(warnings);
-                resolved.apply(&layer, &source, &path);
+                resolved.apply(&layer, &source);
                 resolved.applied.push(source);
             }
             Err(errors) => {
@@ -138,30 +189,30 @@ pub fn resolve(system: &System, key: &GameKey, user_dir: &Path) -> Option<Resolv
 }
 
 impl Resolved {
-    fn apply(&mut self, layer: &Layer, source: &Source, path: &Path) {
+    fn apply(&mut self, layer: &Layer, source: &Source) {
         for (input, target) in &layer.binds {
-            if *target != Target::None {
-                let taken = self
-                    .mapping
-                    .binds
-                    .iter()
-                    .find(|(other, t)| *t == target && *other != input)
-                    .map(|(other, _)| *other);
-                if let Some(other) = taken {
-                    self.problems.push(Problem {
-                        file: path.to_path_buf(),
-                        line: None,
-                        message: format!(
-                            "{target} was bound to {other} by {}; now on {input} only",
-                            self.source(&format!("bind.{other}"))
-                        ),
-                    });
-                    self.mapping.binds.insert(other, Target::None);
-                    self.sources.insert(format!("bind.{other}"), source.clone());
-                }
-            }
             self.mapping.binds.insert(*input, target.clone());
             self.sources.insert(format!("bind.{input}"), source.clone());
+        }
+        // A control this layer puts on a button leaves the button an earlier layer gave it
+        // (an override moves controls, it doesn't duplicate them).
+        for (input, target) in &layer.binds {
+            if *target == Target::None {
+                continue;
+            }
+            let stale: Vec<PadInput> = self
+                .mapping
+                .binds
+                .iter()
+                .filter(|(other, t)| {
+                    *t == target && *other != input && !layer.binds.iter().any(|(i, _)| i == *other)
+                })
+                .map(|(other, _)| *other)
+                .collect();
+            for other in stale {
+                self.mapping.binds.insert(other, Target::None);
+                self.sources.insert(format!("bind.{other}"), source.clone());
+            }
         }
         let sources = &mut self.sources;
         let mut set = |key: &str| {
@@ -305,14 +356,13 @@ mod tests {
         let r = resolve(&system("gc"), &tp_key(dir.path()), &user).unwrap();
         assert!(!r.mapping.vibration);
         assert!(matches!(r.source("vibration"), Source::System(_)));
-        // A moved from south to east; south is now unbound, with a warning.
+        // A moved from south to east; south is now unbound.
         assert_eq!(
             r.mapping.target(PadInput::East),
             Some(&Target::Control("A".into()))
         );
         assert_eq!(r.mapping.target(PadInput::South), None);
-        assert_eq!(r.problems.len(), 1);
-        assert!(r.problems[0].message.contains("A was bound to south"));
+        assert!(r.problems.is_empty(), "{:?}", r.problems);
         assert_eq!(r.applied.len(), 3);
     }
 

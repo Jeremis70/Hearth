@@ -15,6 +15,8 @@ use std::path::Path;
 
 use serde::Deserialize;
 
+use super::model::PadInput;
+
 /// Controller family, for button glyphs, display names and the controller type's default
 /// bindings (`data/controls/pads/`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,6 +107,26 @@ impl ControllerIdentity {
         self
     }
 
+    /// The extra inputs this controller has (touchpad, share, back paddles), for the
+    /// controls page. Only what the controller physically has; whether Hearth or an emulator
+    /// can read it is another matter (gilrs can't see the DualSense touchpad).
+    pub fn extra_inputs(&self) -> Vec<PadInput> {
+        match (self.kind, self.product_id) {
+            (ControllerKind::DualSense | ControllerKind::DualShock4, _) => vec![PadInput::Touchpad],
+            (ControllerKind::SwitchPro, _) => vec![PadInput::Share],
+            // Xbox Series X|S controller (USB, Bluetooth).
+            (ControllerKind::Xbox, Some(0x0b12 | 0x0b13)) => vec![PadInput::Share],
+            // Xbox Elite Series 2 (USB, Bluetooth).
+            (ControllerKind::Xbox, Some(0x0b00 | 0x0b05 | 0x0b22)) => vec![
+                PadInput::Paddle1,
+                PadInput::Paddle2,
+                PadInput::Paddle3,
+                PadInput::Paddle4,
+            ],
+            _ => Vec::new(),
+        }
+    }
+
     /// Dolphin's device string for this controller.
     pub fn dolphin_device(&self) -> String {
         format!("SDL/0/{}", self.sdl_name)
@@ -154,6 +176,21 @@ mod tests {
             assert_eq!(id.kind, ControllerKind::DualSense);
             assert_eq!(id.dolphin_device(), "SDL/0/DualSense Wireless Controller");
         }
+    }
+
+    #[test]
+    fn extras_by_controller() {
+        assert_eq!(
+            ControllerIdentity::fallback().extra_inputs(),
+            [PadInput::Touchpad]
+        );
+        let series =
+            ControllerIdentity::from_pad("Xbox Wireless Controller", Some(0x045e), Some(0x0b13));
+        assert_eq!(series.extra_inputs(), [PadInput::Share]);
+        let one = ControllerIdentity::from_pad("Xbox One Controller", Some(0x045e), Some(0x02ea));
+        assert!(one.extra_inputs().is_empty());
+        let elite = ControllerIdentity::from_pad("Xbox Elite", Some(0x045e), Some(0x0b00));
+        assert_eq!(elite.extra_inputs().len(), 4);
     }
 
     #[test]

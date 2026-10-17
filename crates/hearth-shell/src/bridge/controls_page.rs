@@ -64,7 +64,10 @@ pub struct Page {
     /// Whether changes reach a running game at once.
     live: bool,
     caps: Capabilities,
+    emulator: EmulatorKind,
     layout: Layout,
+    /// The controller's extra inputs (touchpad, share, paddles), listed below the drawing.
+    extras: Vec<PadInput>,
     /// Something was saved since the page opened.
     pub changed: bool,
 }
@@ -99,17 +102,26 @@ impl Page {
         game_title: Option<String>,
         affects_running: bool,
         live: bool,
+        extras: Vec<PadInput>,
     ) -> Self {
-        let caps = capabilities(emulator_kind(editor.system()));
+        let emulator = emulator_kind(editor.system());
         Self {
             editor,
             game_title,
             affects_running,
             live,
-            caps,
+            caps: capabilities(emulator),
+            emulator,
             layout: Layout::generic(),
+            extras,
             changed: false,
         }
+    }
+
+    /// Why `input` can't do anything on this page's console, if it can't.
+    fn unreadable(&self, input: PadInput) -> Option<&'static str> {
+        (input.is_extra() && self.emulator == EmulatorKind::Retroarch)
+            .then_some("RetroArch can't read this button, so it does nothing in these games.")
     }
 
     fn system(&self) -> &System {
@@ -139,6 +151,11 @@ impl Page {
         let target = current.binds.get(&input).cloned().unwrap_or(Target::None);
         let below = base.binds.get(&input).cloned().unwrap_or(Target::None);
         let (label, hint, unassigned) = match self.target_label(&target) {
+            _ if self.unreadable(input).is_some() => (
+                "—".to_owned(),
+                self.unreadable(input).unwrap_or_default().to_owned(),
+                true,
+            ),
             Some((label, hint)) => (label, hint, false),
             None => (
                 "—".to_owned(),
@@ -226,7 +243,7 @@ impl Page {
         data.set_draw_y(draw.y);
         data.set_draw_w(draw.w);
         data.set_draw_h(draw.h);
-        let placed = callouts::place(&self.layout, &[]);
+        let placed = callouts::place(&self.layout, &self.extras);
         let count = |side| {
             let n = placed.iter().filter(|p| p.side == side).count();
             i32::try_from(n).unwrap_or(0)
@@ -408,7 +425,8 @@ impl Page {
         let mut targets: Vec<Target> = Vec::new();
         let controls = &self.system().controls;
         let stick_like = matches!(input, PadInput::LeftStick | PadInput::RightStick);
-        for c in controls.declared() {
+        let usable = self.unreadable(input).is_none();
+        for c in controls.declared().iter().filter(|_| usable) {
             let fits = match c.kind {
                 ControlKind::Stick | ControlKind::Dpad => stick_like,
                 ControlKind::Button | ControlKind::Trigger => !stick_like,
@@ -417,11 +435,14 @@ impl Page {
                 targets.push(Target::Control(c.name.clone()));
             }
         }
-        if !stick_like {
+        if !stick_like && usable {
             for c in controls.all().into_iter().skip(controls.declared().len()) {
                 targets.push(Target::Control(c.name));
             }
-            targets.extend(HearthAction::ALL.map(Target::Hearth));
+            // Hearth reads buttons through gilrs, which can't see the touchpad.
+            if input != PadInput::Touchpad {
+                targets.extend(HearthAction::ALL.map(Target::Hearth));
+            }
             for action in EmulatorAction::ALL {
                 if self.caps.actions.contains(&action) {
                     targets.push(Target::Action(action));

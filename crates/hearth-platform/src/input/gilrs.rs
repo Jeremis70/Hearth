@@ -78,6 +78,8 @@ fn run(mut gilrs: Gilrs, tx: &Sender<Action>, activity: &PadActivity) {
     activity.set_pads(pad_infos(&gilrs));
     let mut state = PadState::default();
     let mut out = Vec::new();
+    // Extra buttons held (gilrs has no `Button` for them), by Hearth name.
+    let mut extras: Vec<&'static str> = Vec::new();
     loop {
         let now = Instant::now();
         let wait = state.deadline().map_or(IDLE_WAIT, |d| {
@@ -87,6 +89,18 @@ fn run(mut gilrs: Gilrs, tx: &Sender<Action>, activity: &PadActivity) {
         let now = Instant::now();
         if let Some(event) = event {
             let input = match event.event {
+                EventType::ButtonPressed(Button::Unknown, code) => {
+                    if let Some(name) = extra_name(code.into_u32())
+                        && !extras.contains(&name)
+                    {
+                        extras.push(name);
+                    }
+                    None
+                }
+                EventType::ButtonReleased(Button::Unknown, code) => {
+                    extras.retain(|n| Some(*n) != extra_name(code.into_u32()));
+                    None
+                }
                 EventType::ButtonPressed(button, _) => Some(PadEvent::Pressed(button)),
                 EventType::ButtonReleased(button, _) => Some(PadEvent::Released(button)),
                 EventType::AxisChanged(Axis::LeftStickX | Axis::LeftStickY, _, _) => {
@@ -111,7 +125,13 @@ fn run(mut gilrs: Gilrs, tx: &Sender<Action>, activity: &PadActivity) {
             if let Some(input) = input {
                 state.handle(input, now, activity.disarm_count(), &mut out);
             }
-            activity.set_pressed(pressed_inputs(&gilrs));
+            let mut pressed = pressed_inputs(&gilrs);
+            for name in &extras {
+                if !pressed.contains(name) {
+                    pressed.push(name);
+                }
+            }
+            activity.set_pressed(pressed);
         }
         state.tick(now, &mut out);
         for action in out.drain(..) {
@@ -143,6 +163,28 @@ fn position_name(button: Button) -> Option<&'static str> {
         Button::DPadLeft => "dpad_left",
         Button::DPadRight => "dpad_right",
         Button::Mode => "guide",
+        _ => return None,
+    })
+}
+
+/// Hearth name of a button gilrs reports as `Button::Unknown`, from its raw evdev code
+/// (`EV_KEY << 16 | key`): the kernel drivers' codes for SDL's misc1 and the back paddles.
+/// Unverified on hardware (no such pad here); the DualSense has none of these.
+fn extra_name(code: u32) -> Option<&'static str> {
+    const EV_KEY: u32 = 1;
+    if code >> 16 != EV_KEY {
+        return None;
+    }
+    Some(match code & 0xffff {
+        // xpad: Xbox Series Share.
+        167 => "share",
+        // hid-nintendo: Switch Pro Capture.
+        0x135 => "share",
+        // xpad: Xbox Elite Series 2 paddles (BTN_TRIGGER_HAPPY5–8).
+        0x2c4 => "paddle1",
+        0x2c5 => "paddle2",
+        0x2c6 => "paddle3",
+        0x2c7 => "paddle4",
         _ => return None,
     })
 }
@@ -315,6 +357,18 @@ impl PadState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extra_buttons_by_raw_code() {
+        let key = |code: u32| (1 << 16) | code;
+        assert_eq!(extra_name(key(167)), Some("share"));
+        assert_eq!(extra_name(key(0x135)), Some("share"));
+        assert_eq!(extra_name(key(0x2c4)), Some("paddle1"));
+        assert_eq!(extra_name(key(0x2c7)), Some("paddle4"));
+        assert_eq!(extra_name(key(0x130)), None);
+        // An absolute axis with the same number isn't a key.
+        assert_eq!(extra_name((3 << 16) | 167), None);
+    }
 
     fn feed(state: &mut PadState, event: PadEvent, now: Instant) -> Vec<Action> {
         feed_with(state, event, now, 0)

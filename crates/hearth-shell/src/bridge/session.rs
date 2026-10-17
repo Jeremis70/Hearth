@@ -921,6 +921,11 @@ impl Controller {
         controls::device(&self.activity.pads(), &self.controls_dir).kind
     }
 
+    /// Player 1's extra inputs (touchpad, share, paddles).
+    fn pad_extras(&self) -> Vec<PadInput> {
+        controls::device(&self.activity.pads(), &self.controls_dir).extra_inputs()
+    }
+
     /// Button glyphs follow the first connected controller (both windows have their own
     /// globals).
     fn sync_controller_type(&self) {
@@ -985,7 +990,13 @@ impl Controller {
             .active
             .as_ref()
             .is_some_and(|a| a.game.system == system.id);
-        self.pages[MAIN] = Some(Page::new(editor, None, affects, self.applier.is_live()));
+        self.pages[MAIN] = Some(Page::new(
+            editor,
+            None,
+            affects,
+            self.applier.is_live(),
+            self.pad_extras(),
+        ));
         self.with_page_data(MAIN, |page, data| {
             data.set_message("".into());
             page.fill(data);
@@ -1023,6 +1034,7 @@ impl Controller {
             Some(game.title.clone()),
             true,
             self.applier.is_live(),
+            self.pad_extras(),
         ));
         self.with_page_data(which, |page, data| {
             data.set_message("".into());

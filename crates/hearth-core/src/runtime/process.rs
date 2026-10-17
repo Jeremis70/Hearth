@@ -2,6 +2,10 @@
 //!
 //! Each game runs in its own process group (pgid = pid of the spawned process). Signals only
 //! ever go to that group, never to anything else.
+//!
+//! A game never outlives Hearth: the kernel sends it SIGKILL when the thread that launched it
+//! exits (`PR_SET_PDEATHSIG`). Launch games from a thread that lives as long as Hearth (the UI
+//! thread). Normal shutdown closes the game properly first ([`Runtime::close`]).
 
 use std::fs::OpenOptions;
 use std::os::unix::process::CommandExt;
@@ -11,7 +15,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use nix::sys::signal::{Signal, killpg};
+use nix::sys::prctl;
+use nix::sys::signal::{SigSet, SigmaskHow, Signal, killpg, pthread_sigmask};
 use nix::unistd::{Pid, getpgrp};
 
 use super::{LaunchCtx, Runtime, RuntimeError, RuntimeEvent, Session, SessionId};
@@ -64,6 +69,20 @@ impl Runtime for ProcessRuntime {
         let spec = &ctx.command;
         let mut cmd = Command::new(&spec.program);
         cmd.args(&spec.args).process_group(0).stdin(Stdio::null());
+        // SAFETY: runs in the forked child before exec and only makes two async-signal-safe
+        // syscalls (prctl, sigprocmask); no allocation or locking.
+        #[allow(unsafe_code)]
+        unsafe {
+            cmd.pre_exec(|| {
+                // Die with Hearth: a frozen (SIGSTOPped) game would otherwise linger forever.
+                prctl::set_pdeathsig(Signal::SIGKILL).map_err(std::io::Error::from)?;
+                // Hearth blocks SIGINT/SIGTERM/SIGHUP for its signal thread; games must not
+                // inherit that.
+                pthread_sigmask(SigmaskHow::SIG_SETMASK, Some(&SigSet::empty()), None)
+                    .map_err(std::io::Error::from)?;
+                Ok(())
+            });
+        }
         for key in &spec.env_remove {
             cmd.env_remove(key);
         }
@@ -301,6 +320,56 @@ mod tests {
             signal_group(0, None),
             Err(RuntimeError::ForeignGroup(0))
         ));
+    }
+
+    /// Field of `/proc/<pid>/status`, e.g. "SigBlk".
+    fn status_field(pid: u32, key: &str) -> Option<String> {
+        let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+        status.lines().find_map(|l| {
+            l.strip_prefix(&format!("{key}:"))
+                .map(|v| v.trim().to_owned())
+        })
+    }
+
+    #[test]
+    fn game_dies_with_the_thread_that_launched_it() {
+        let runtime = Arc::new(ProcessRuntime::new());
+        let (ctx, rx) = ctx(&["30"]);
+        let launcher = {
+            let runtime = runtime.clone();
+            thread::spawn(move || runtime.launch(&game(), &ctx).unwrap())
+        };
+        let session = launcher.join().unwrap();
+        // The launching thread is gone: the kernel kills the game.
+        let event = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(matches!(event, RuntimeEvent::Exited { success: false, .. }));
+        assert!(!runtime.is_running(&session));
+    }
+
+    #[test]
+    fn child_does_not_inherit_blocked_signals() {
+        let runtime = ProcessRuntime::new();
+        let (ctx, rx) = ctx(&["5"]);
+        let mut blocked = SigSet::empty();
+        blocked.add(Signal::SIGUSR2);
+        blocked.thread_block().unwrap();
+        let session = runtime.launch(&game(), &ctx).unwrap();
+        blocked.thread_unblock().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut sigblk = None;
+        while Instant::now() < deadline {
+            // Before exec, /proc still describes the forked copy of the test process.
+            if std::fs::read_link(format!("/proc/{}/exe", session.pgid()))
+                .is_ok_and(|exe| exe.ends_with("sleep"))
+            {
+                sigblk = status_field(session.pgid(), "SigBlk");
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(sigblk.as_deref(), Some("0000000000000000"));
+        runtime.close(&session).unwrap();
+        let _ = rx.recv_timeout(Duration::from_secs(2));
     }
 
     #[test]

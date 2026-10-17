@@ -22,7 +22,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use hearth_core::library::{Library, LibraryEntry};
 use hearth_core::model::GameId;
-use hearth_core::profiles::RetroArchProfile;
+use hearth_core::profiles::{DolphinProfile, RetroArchProfile};
 use hearth_core::runtime::{
     LaunchCtx, ProcessRuntime, Runtime, RuntimeEvent, Session as RuntimeSession, SessionId,
 };
@@ -111,6 +111,7 @@ pub struct Controller {
     runtime: Arc<ProcessRuntime>,
     systems: Systems,
     profile: RetroArchProfile,
+    dolphin: DolphinProfile,
     activity: PadActivity,
     library_db: PathBuf,
     entries: Vec<LibraryEntry>,
@@ -135,6 +136,8 @@ pub struct Setup {
     pub systems: Systems,
     /// RetroArch profile.
     pub profile: RetroArchProfile,
+    /// Dolphin profile.
+    pub dolphin: DolphinProfile,
     /// Whether the controller is released (games are unfrozen only then).
     pub activity: PadActivity,
     /// Library database file.
@@ -197,6 +200,7 @@ pub fn install(setup: Setup) {
         runtime: Arc::new(ProcessRuntime::new()),
         systems: setup.systems,
         profile: setup.profile,
+        dolphin: setup.dolphin,
         activity: setup.activity,
         library_db: setup.library_db,
         entries: Vec::new(),
@@ -373,11 +377,20 @@ impl Controller {
                 return;
             }
             (EmulatorKind::Dolphin, _) => {
-                self.toast(&format!("{} games can't be launched yet", system.name));
-                return;
+                let Some(command) = self.dolphin.command(&game.path) else {
+                    tracing::warn!("Dolphin not found (dolphin-emu in PATH or Flatpak)");
+                    self.toast("Dolphin isn't installed");
+                    return;
+                };
+                if let Err(err) = self.dolphin.prepare() {
+                    self.toast(&format!("Couldn't write the Dolphin config: {err}"));
+                    return;
+                }
+                command
             }
         };
-        if !self.profile.has_autoconfig() {
+        let retroarch = emulator.kind == EmulatorKind::Retroarch;
+        if retroarch && !self.profile.has_autoconfig() {
             self.toast("No controller profiles for RetroArch: the pad won't work in the game");
         } else if !self.compositor.controls_focus() {
             self.toast("No overlay outside gamescope: hold the Guide button to close the game");
@@ -387,7 +400,7 @@ impl Controller {
             command.force_x11();
         }
         // Debugging aid: extra RetroArch arguments, e.g. HEARTH_RETROARCH_ARGS=--max-frames=600
-        if let Some(extra) = std::env::var_os("HEARTH_RETROARCH_ARGS") {
+        if let Some(extra) = std::env::var_os("HEARTH_RETROARCH_ARGS").filter(|_| retroarch) {
             let extra = extra.to_string_lossy().into_owned();
             tracing::info!(%extra, "extra RetroArch arguments");
             for (i, arg) in extra.split_whitespace().enumerate() {

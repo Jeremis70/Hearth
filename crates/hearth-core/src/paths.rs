@@ -43,6 +43,7 @@ pub struct DataDirs {
     data: PathBuf,
     cache: PathBuf,
     retroarch: PathBuf,
+    dolphin: PathBuf,
 }
 
 impl DataDirs {
@@ -63,6 +64,7 @@ impl DataDirs {
                     data: dirs.data_dir().to_path_buf(),
                     cache: dirs.cache_dir().to_path_buf(),
                     retroarch: dirs.data_dir().join("retroarch"),
+                    dolphin: dirs.data_dir().join("dolphin"),
                 })
             }
         }
@@ -74,12 +76,19 @@ impl DataDirs {
             data: root.join("data"),
             cache: root.join("cache"),
             retroarch: root.join("retroarch"),
+            dolphin: root.join("dolphin"),
         }
     }
 
     /// Creates the directories if they don't exist yet.
     pub fn create_all(&self) -> Result<(), PathsError> {
-        for dir in [&self.config, &self.data, &self.cache, &self.retroarch] {
+        for dir in [
+            &self.config,
+            &self.data,
+            &self.cache,
+            &self.retroarch,
+            &self.dolphin,
+        ] {
             std::fs::create_dir_all(dir).map_err(|source| PathsError::Create {
                 path: dir.clone(),
                 source,
@@ -108,6 +117,11 @@ impl DataDirs {
         &self.retroarch
     }
 
+    /// Hearth's isolated Dolphin user directory (config, saves, NAND, logs).
+    pub fn dolphin(&self) -> &Path {
+        &self.dolphin
+    }
+
     /// The library database file.
     pub fn library_db(&self) -> PathBuf {
         self.data.join("library.sqlite3")
@@ -125,6 +139,7 @@ mod tests {
         assert_eq!(dirs.data(), Path::new("./.dev-data/data"));
         assert_eq!(dirs.cache(), Path::new("./.dev-data/cache"));
         assert_eq!(dirs.retroarch(), Path::new("./.dev-data/retroarch"));
+        assert_eq!(dirs.dolphin(), Path::new("./.dev-data/dolphin"));
         assert_eq!(
             dirs.library_db(),
             Path::new("./.dev-data/data/library.sqlite3")

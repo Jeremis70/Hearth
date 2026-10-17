@@ -9,7 +9,7 @@ use std::time::Duration;
 use anyhow::Context;
 use clap::Parser;
 use hearth_core::paths::{self, DataDirs};
-use hearth_core::profiles::RetroArchProfile;
+use hearth_core::profiles::{DolphinInstall, DolphinProfile, RetroArchProfile};
 use hearth_core::systems::Systems;
 use hearth_platform::gamescope::{self, Compositor};
 use hearth_platform::input::InputBackend;
@@ -100,6 +100,12 @@ fn main() -> anyhow::Result<()> {
         None
     };
 
+    let dolphin = DolphinInstall::detect();
+    match &dolphin {
+        Some(install) => tracing::info!(?install, "Dolphin found"),
+        None => tracing::info!("Dolphin not found: GameCube and Wii games won't launch"),
+    }
+
     let gilrs = GilrsBackend::new();
     bridge::session::install(bridge::session::Setup {
         app: app.as_weak(),
@@ -107,6 +113,7 @@ fn main() -> anyhow::Result<()> {
         compositor,
         systems,
         profile: RetroArchProfile::new(dirs.retroarch()),
+        dolphin: DolphinProfile::new(dirs.dolphin(), dolphin),
         activity: gilrs.activity(),
         library_db: dirs.library_db(),
         games_dir,

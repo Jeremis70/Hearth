@@ -16,7 +16,9 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 clap = { version = "4.6", features = ["derive"] }
 directories = "6.0"
 gilrs = "0.11"
-slint = "1.18"
+x11rb = "0.14"
+slint = { version = "1.18", features = ["raw-window-handle-06"] }
+raw-window-handle = "0.6"
 slint-build = "1.18"
 thiserror = "2.0"
 tracing = "0.1"

@@ -538,6 +538,7 @@ impl Controller {
         self.freeze();
         self.sync_session_ui();
         overlay.invoke_reset();
+        overlay.set_shown(true);
         if let Err(err) = self.compositor.set_overlay(window, true) {
             tracing::warn!("showing the overlay failed: {err}");
             self.go_home();
@@ -550,6 +551,9 @@ impl Controller {
     }
 
     fn hide_overlay(&mut self) {
+        if let Some(overlay) = &self.overlay {
+            overlay.set_shown(false);
+        }
         if let Some(window) = self.overlay_window
             && let Err(err) = self.compositor.set_overlay(window, false)
         {

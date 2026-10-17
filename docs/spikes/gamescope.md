@@ -17,7 +17,7 @@ properties inspected with `gamescope_probe`, `xprop` and `gamescopectl focus_inf
 | `GAMESCOPECTRL_BASELAYER_APPID` focus switching | **ignored** (newest window keeps focus) | **works** both ways; `GAMESCOPE_FOCUSED_APP` confirms |
 | `GAMESCOPECTRL_BASELAYER_WINDOW` | ignored | not needed |
 | `GAMESCOPE_EXTERNAL_OVERLAY = 1` | drew once over the running game | **not drawn** (fresh or remapped window, running or frozen game) |
-| `STEAM_OVERLAY = 1` | not tested | **works**, also over a SIGSTOPped game; `0` hides it again |
+| `STEAM_OVERLAY = 1` | not tested | **works**, also over a SIGSTOPped game (see hiding below) |
 | `GAMESCOPE_FOCUSED_APP` feedback | absent | present |
 | SIGSTOP / SIGCONT on the game's process group | frozen frame stays on screen, resumes | same |
 
@@ -26,8 +26,8 @@ properties inspected with `gamescope_probe`, `xprop` and `gamescopectl focus_inf
 - Run gamescope with `-e`. It only changes how that gamescope instance behaves (it expects
   Steam's window conventions); nothing system-wide.
 - Tag game windows ourselves via `_NET_WM_PID` + process group; don't rely on `SteamGameId`.
-- The overlay window uses `STEAM_OVERLAY` (plus `GAMESCOPE_EXTERNAL_OVERLAY`, which was set
-  when it was verified) and is shown/hidden by toggling `STEAM_OVERLAY`.
+- The overlay window uses `STEAM_OVERLAY` plus `GAMESCOPE_EXTERNAL_OVERLAY`, both 1 to show and
+  both 0 to hide, and its content is transparent while hidden (see follow-ups).
 - `gamescopectl screenshot` captures the base layer only (no overlay plane), so overlay checks
   were done by eye.
 
@@ -48,3 +48,7 @@ properties inspected with `gamescope_probe`, `xprop` and `gamescopectl focus_inf
 - Without `-e`, gamescope keeps the newest window in front regardless of the baselayer, so a
   frozen game would leave a black screen. Hearth treats that case like running outside
   gamescope: no freezing, no overlay, Guide long press closes the game.
+- Hiding the overlay: setting only `STEAM_OVERLAY = 0` (leaving `GAMESCOPE_EXTERNAL_OVERLAY = 1`)
+  kept the window drawn over the game and Home, passing input through. The spike had only
+  checked `focus_info`, not the screen. Hearth now clears both properties and renders the
+  overlay fully transparent unless it is open; verified by eye in Steam mode.

@@ -44,6 +44,8 @@ export component OverlayWindow inherits Window {
     in property <string> badge;
     in property <string> played;
     in property <string> clock;
+    // Whether the overlay is open. Set by the session controller together with STEAM_OVERLAY.
+    in property <bool> shown: false;
 
     callback resume();
     callback go-home();
@@ -131,97 +133,104 @@ export component OverlayWindow inherits Window {
             root.handle(InputMap.from-key(event)) ? EventResult.accept : EventResult.reject
         }
 
+        // Everything is drawn only while `shown`: gamescope may keep compositing this window
+        // even when it isn't the active overlay, so a hidden overlay must be fully transparent.
         Rectangle {
-            background: Theme.scrim;
-        }
+            opacity: shown ? 1 : 0;
+            animate opacity { duration: shown ? Theme.overlay-in : Theme.overlay-out; easing: ease-out; }
 
-        // Clock, top right.
-        Text {
-            x: parent.width - Theme.safe-x - self.width;
-            y: Theme.safe-y;
-            text: clock;
-            font-size: Theme.tab;
-            font-weight: Theme.semibold;
-            letter-spacing: Theme.tab-tracking;
-            color: Theme.text-primary;
-        }
+            Rectangle {
+                background: Theme.scrim;
+            }
 
-        // Now playing card.
-        Rectangle {
-            x: Theme.safe-x;
-            y: parent.height - Theme.safe-y - Theme.dock-height - Theme.sp-64 - self.height;
-            width: 640px * Theme.scale;
-            height: card.preferred-height;
-            border-radius: Theme.radius-lg;
-            background: Theme.surface-raised;
+            // Clock, top right.
+            Text {
+                x: parent.width - Theme.safe-x - self.width;
+                y: Theme.safe-y;
+                text: clock;
+                font-size: Theme.tab;
+                font-weight: Theme.semibold;
+                letter-spacing: Theme.tab-tracking;
+                color: Theme.text-primary;
+            }
 
-            card := VerticalLayout {
-                padding: Theme.sp-32;
-                spacing: Theme.sp-12;
-                Text {
-                    text: "NOW PLAYING";
-                    font-size: Theme.caption;
-                    font-weight: Theme.semibold;
-                    letter-spacing: Theme.tab-tracking;
-                    color: Theme.accent;
-                }
-                Text {
-                    text: game-title;
-                    font-size: Theme.title;
-                    font-weight: Theme.semibold;
-                    color: Theme.text-primary;
-                    wrap: word-wrap;
-                }
-                Text {
-                    text: badge + " · " + played;
-                    font-size: Theme.body;
-                    color: Theme.text-secondary;
-                }
-                VerticalLayout {
-                    padding-top: Theme.sp-16;
-                    spacing: Theme.sp-16;
-                    HButton {
-                        primary: true;
-                        has-icon: true;
-                        icon: Icons.play;
-                        label: "Resume";
-                        focused: item == 0;
+            // Now playing card.
+            Rectangle {
+                x: Theme.safe-x;
+                y: parent.height - Theme.safe-y - Theme.dock-height - Theme.sp-64 - self.height;
+                width: 640px * Theme.scale;
+                height: card.preferred-height;
+                border-radius: Theme.radius-lg;
+                background: Theme.surface-raised;
+
+                card := VerticalLayout {
+                    padding: Theme.sp-32;
+                    spacing: Theme.sp-12;
+                    Text {
+                        text: "NOW PLAYING";
+                        font-size: Theme.caption;
+                        font-weight: Theme.semibold;
+                        letter-spacing: Theme.tab-tracking;
+                        color: Theme.accent;
                     }
-                    HorizontalLayout {
+                    Text {
+                        text: game-title;
+                        font-size: Theme.title;
+                        font-weight: Theme.semibold;
+                        color: Theme.text-primary;
+                        wrap: word-wrap;
+                    }
+                    Text {
+                        text: badge + " · " + played;
+                        font-size: Theme.body;
+                        color: Theme.text-secondary;
+                    }
+                    VerticalLayout {
+                        padding-top: Theme.sp-16;
                         spacing: Theme.sp-16;
-                        alignment: start;
                         HButton {
-                            label: "Go to Home";
-                            focused: item == 1;
+                            primary: true;
+                            has-icon: true;
+                            icon: Icons.play;
+                            label: "Resume";
+                            focused: item == 0;
                         }
-                        HButton {
-                            label: "Close game";
-                            focused: item == 2;
+                        HorizontalLayout {
+                            spacing: Theme.sp-16;
+                            alignment: start;
+                            HButton {
+                                label: "Go to Home";
+                                focused: item == 1;
+                            }
+                            HButton {
+                                label: "Close game";
+                                focused: item == 2;
+                            }
                         }
                     }
                 }
             }
-        }
 
-        // Dock. TODO(M3+): Library, Media, Volume, Controllers and Power do something.
-        HorizontalLayout {
-            y: parent.height - Theme.safe-y - self.height;
-            height: Theme.dock-height + Theme.sp-32;
-            alignment: center;
-            spacing: Theme.sp-48;
-            DockButton { icon: Icons.house; label: "Home"; focused: item == 10; }
-            DockButton { icon: Icons.library; label: "Library"; focused: item == 11; }
-            DockButton { icon: Icons.clapperboard; label: "Media"; focused: item == 12; }
-            DockButton { icon: Icons.volume; label: "Volume"; focused: item == 13; }
-            DockButton { icon: Icons.gamepad; label: "Controllers"; focused: item == 14; }
-            DockButton { icon: Icons.power; label: "Power"; focused: item == 15; }
-        }
+            // Dock. TODO(M3+): Library, Media, Volume, Controllers and Power do something.
+            HorizontalLayout {
+                y: parent.height - Theme.safe-y - self.height;
+                height: Theme.dock-height + Theme.sp-32;
+                alignment: center;
+                spacing: Theme.sp-48;
+                DockButton { icon: Icons.house; label: "Home"; focused: item == 10; }
+                DockButton { icon: Icons.library; label: "Library"; focused: item == 11; }
+                DockButton { icon: Icons.clapperboard; label: "Media"; focused: item == 12; }
+                DockButton { icon: Icons.volume; label: "Volume"; focused: item == 13; }
+                DockButton { icon: Icons.gamepad; label: "Controllers"; focused: item == 14; }
+                DockButton { icon: Icons.power; label: "Power"; focused: item == 15; }
+            }
 
-        if confirm-open: ConfirmDialog {
-            heading: "Close " + game-title + "?";
-            message: "Unsaved progress in the game will be lost. Playtime is saved.";
-            confirm-label: "Close game";
-            index: confirm-index;
+            if confirm-open: ConfirmDialog {
+                heading: "Close " + game-title + "?";
+                message: "Unsaved progress in the game will be lost. Playtime is saved.";
+                confirm-label: "Close game";
+                index: confirm-index;
+            }
         }
     }
 }

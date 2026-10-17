@@ -8,8 +8,9 @@
 //!   `_NET_WM_PID` is in the game's process group. Gamescope ignores a `SteamGameId` env var.
 //! - `GAMESCOPECTRL_BASELAYER_APPID` (CARDINAL list) on the root window chooses what is shown,
 //!   first id on top: `[game, 769]` shows the game, `[769]` shows Hearth.
-//! - `STEAM_OVERLAY = 1` on a window draws it on the overlay plane above the focused app;
-//!   `0` hides it again. (`GAMESCOPE_EXTERNAL_OVERLAY` alone is not drawn in Steam mode.)
+//! - `STEAM_OVERLAY = 1` (with `GAMESCOPE_EXTERNAL_OVERLAY = 1`) on a window draws it on the
+//!   overlay plane above the focused app. Hiding needs both back at 0, and the window's own
+//!   content must be transparent too: gamescope can keep compositing it.
 //! - `GAMESCOPE_FOCUSED_APP` on the root is gamescope's feedback (Steam mode only).
 //!
 //! Outside gamescope, [`NoCompositor`] makes every call a no-op.
@@ -299,9 +300,11 @@ impl Compositor for Gamescope {
     }
 
     fn set_overlay(&self, window: u32, visible: bool) -> Result<(), CompositorError> {
-        // Both were set when the overlay was verified to draw; only STEAM_OVERLAY toggles it.
-        self.set_cardinals(window, self.atoms.external_overlay, &[1])?;
-        self.set_cardinals(window, self.atoms.steam_overlay, &[u32::from(visible)])
+        // Both were set when the overlay was verified to draw. Both are cleared to hide it:
+        // with GAMESCOPE_EXTERNAL_OVERLAY left at 1 gamescope kept drawing the window.
+        let value = [u32::from(visible)];
+        self.set_cardinals(window, self.atoms.external_overlay, &value)?;
+        self.set_cardinals(window, self.atoms.steam_overlay, &value)
     }
 
     fn focused_app(&self) -> Result<Option<AppId>, CompositorError> {

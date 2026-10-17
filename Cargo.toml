@@ -22,6 +22,7 @@ serde = { version = "1.0", features = ["derive"] }
 tempfile = "3"
 toml = "1"
 toml_edit = "0.25"
+usvg = { version = "0.48", default-features = false }
 walkdir = "2.5"
 x11rb = "0.14"
 slint = { version = "1.18", features = ["raw-window-handle-06"] }

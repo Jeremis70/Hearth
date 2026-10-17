@@ -206,8 +206,8 @@ impl Page {
                 callouts.push(self.callout(a.input, a.x, a.y, &current, &base));
             }
         }
-        data.set_left_count(i32::try_from(self.layout.column(Side::Left).count()).unwrap_or(0));
-        data.set_right_count(i32::try_from(self.layout.column(Side::Right).count()).unwrap_or(0));
+        data.set_left_count(i32::try_from(self.layout.column(Side::Left).len()).unwrap_or(0));
+        data.set_right_count(i32::try_from(self.layout.column(Side::Right).len()).unwrap_or(0));
         data.set_callouts(model(callouts));
         data.set_options(model(self.options(&resolved.mapping, &base_mapping)));
     }

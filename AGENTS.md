@@ -26,7 +26,7 @@ An open, controller-first living-room console for Linux: one library for Steam g
 - Test: `cargo test --workspace`
 - Run (dev): `HEARTH_HOME=./.dev-data cargo run -p hearth-shell -- --windowed`
 - Preview a .slint file live: `slint-viewer --auto-reload crates/hearth-shell/ui/app.slint`
-- Run inside a nested gamescope (Steam mode): `scripts/run-gamescope.sh` (extra args go to hearth-shell)
+- Run inside a nested gamescope (Steam mode): `scripts/run-gamescope.sh` (extra args go to hearth-shell; uses the display's native size, override with `HEARTH_GS_SIZE=1920x1080`; `HEARTH_GS_FULLSCREEN=1` starts it fullscreen). This is the way to test the overlay: plain `cargo run` has no gamescope, so games open their own window and Guide long press closes them.
 - Drive a running Hearth from scripts: start it with `--dev-socket ./.dev-data/actions.sock`, then `scripts/send-action.sh down accept home_short`
 - Inspect gamescope properties: `DISPLAY=:1 cargo run -p hearth-platform --example gamescope_probe -- props|windows`
 

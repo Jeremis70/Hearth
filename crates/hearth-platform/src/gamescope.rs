@@ -14,13 +14,15 @@
 //!
 //! Outside gamescope, [`NoCompositor`] makes every call a no-op.
 
-use std::fs;
+use std::collections::BTreeSet;
 
 use x11rb::connection::Connection;
 use x11rb::errors::{ConnectError, ConnectionError, ReplyError};
 use x11rb::protocol::xproto::{Atom, AtomEnum, ConnectionExt as _, PropMode, Window};
 use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
+
+use crate::process::game_pids;
 
 /// A gamescope app id (`STEAM_GAME` value).
 pub type AppId = u32;
@@ -51,8 +53,9 @@ pub trait Compositor: Send + Sync {
     /// by `pid` are used.
     fn set_shell_window(&self, window: Option<u32>, pid: u32) -> Result<(), CompositorError>;
 
-    /// Tags every window owned by a process in group `pgid` with `app`. Returns how many
-    /// windows were tagged (0 if the game hasn't mapped a window yet).
+    /// Tags every window whose `_NET_WM_PID` is a process of the game (its group `pgid` and
+    /// all descendants) with `app`. Returns how many windows were tagged (0 if the game hasn't
+    /// mapped a window yet).
     fn assign_app(&self, pgid: u32, app: AppId) -> Result<usize, CompositorError>;
 
     /// Shows `apps`, first on top.
@@ -229,7 +232,7 @@ impl Gamescope {
         Ok(())
     }
 
-    fn tag_windows_of(&self, pids: &[u32], app: AppId) -> Result<usize, CompositorError> {
+    fn tag_windows_of(&self, pids: &BTreeSet<u32>, app: AppId) -> Result<usize, CompositorError> {
         let mut tagged = 0;
         for info in self.windows()? {
             if info.pid.is_some_and(|pid| pids.contains(&pid)) {
@@ -255,7 +258,7 @@ impl Compositor for Gamescope {
                 self.set_cardinals(window, self.atoms.steam_game, &[SHELL_APP_ID])?;
             }
             None => {
-                let tagged = self.tag_windows_of(&[pid], SHELL_APP_ID)?;
+                let tagged = self.tag_windows_of(&BTreeSet::from([pid]), SHELL_APP_ID)?;
                 tracing::debug!(tagged, "tagged shell windows by _NET_WM_PID");
             }
         }
@@ -263,7 +266,7 @@ impl Compositor for Gamescope {
     }
 
     fn assign_app(&self, pgid: u32, app: AppId) -> Result<usize, CompositorError> {
-        self.tag_windows_of(&pids_in_group(pgid), app)
+        self.tag_windows_of(&game_pids(pgid), app)
     }
 
     fn focus(&self, apps: &[AppId]) -> Result<(), CompositorError> {
@@ -301,48 +304,9 @@ fn intern(conn: &RustConnection, name: &str) -> Result<Atom, CompositorError> {
     Ok(conn.intern_atom(false, name.as_bytes())?.reply()?.atom)
 }
 
-/// Pids of every process in group `pgid`, read from `/proc` (read-only).
-pub fn pids_in_group(pgid: u32) -> Vec<u32> {
-    let Ok(entries) = fs::read_dir("/proc") else {
-        return Vec::new();
-    };
-    entries
-        .filter_map(Result::ok)
-        .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok())
-        .filter(|&pid| {
-            fs::read_to_string(format!("/proc/{pid}/stat"))
-                .ok()
-                .and_then(|stat| parse_pgrp(&stat))
-                == Some(pgid)
-        })
-        .collect()
-}
-
-/// Process group from a `/proc/<pid>/stat` line. The command name can contain spaces and
-/// parentheses, so fields are counted from the last `)`: state, ppid, pgrp.
-fn parse_pgrp(stat: &str) -> Option<u32> {
-    let rest = &stat[stat.rfind(')')? + 1..];
-    rest.split_whitespace().nth(2)?.parse().ok()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn pgrp_is_third_field_after_comm() {
-        let stat = "4242 (retro arch (x)) S 1 4242 4242 0 -1 4194560";
-        assert_eq!(parse_pgrp(stat), Some(4242));
-        assert_eq!(parse_pgrp("garbage"), None);
-    }
-
-    #[test]
-    fn own_process_is_in_its_group() {
-        let pid = std::process::id();
-        let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
-        let pgid = parse_pgrp(&stat).unwrap();
-        assert!(pids_in_group(pgid).contains(&pid));
-    }
 
     #[test]
     fn no_compositor_is_inert() {

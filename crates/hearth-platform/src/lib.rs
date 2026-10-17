@@ -6,3 +6,4 @@
 pub mod gamescope;
 pub mod input;
 pub mod network;
+pub mod process;

@@ -1,15 +1,32 @@
 // The controls page's data (src/bridge/controls_page.rs fills it). A global per window: the
 // main window and the overlay each have their own copy.
 
-// One input's callout on the Buttons tab.
+// One input's callout on the Buttons tab. Geometry is in page pixels at 1920×1080
+// (src/callouts.rs); the page multiplies it by Theme.scale.
 export struct Callout {
     input: string,      // Hearth pad position ("south", "dpad_up", "left_stick")
     label: string,      // what it does on this console ("A", "Fast-forward (hold)"), "—" if nothing
     hint: string,       // one line for the description panel
     unassigned: bool,
     changed: bool,      // differs from the layer below (accent dot)
-    ax: float,          // anchor on the drawing, in drawing units
+    side: int,          // 0 left column, 1 right column, 2 below the drawing
+    glyph-last: bool,   // label then glyph (glyph nearest the drawing)
+    bx: float,          // the callout's box
+    by: float,
+    bw: float,
+    bh: float,
+    has-line: bool,     // leader line: label edge (lx, ly) → elbow (ex, ey) → shape edge (ax, ay)
+    lx: float,
+    ly: float,
+    ex: float,
+    ey: float,
+    ax: float,
     ay: float,
+    has-shape: bool,    // the input's shape on the drawing, for the focus highlight
+    sx: float,
+    sy: float,
+    sw: float,
+    sh: float,
 }
 
 // One entry of the "what can this button do" menu.
@@ -45,11 +62,17 @@ export global ControlsData {
     in property <string> message;           // short feedback ("Z and R swapped"), empty: none
     in property <string> changed-label;     // what the dot means on this page
     in property <string> reset-message;     // what Reset goes back to
-    in property <float> drawing-width: 760;
+    in property <float> drawing-width: 760;  // drawing units (button test)
     in property <float> drawing-height: 460;
+    in property <float> draw-x;              // the drawing on the controls page, page pixels
+    in property <float> draw-y;
+    in property <float> draw-w;
+    in property <float> draw-h;
     in property <[Callout]> callouts;       // left column, then right column, then bottom row
     in property <int> left-count;
     in property <int> right-count;
+    in property <int> down-left;            // bottom callout reached going down from each column
+    in property <int> down-right;
     in property <[Choice]> choices;
     in property <[OptionRow]> options;
     in property <[TestInput]> test-inputs;

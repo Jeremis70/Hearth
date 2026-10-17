@@ -11,6 +11,7 @@ use hearth_core::profiles::{dolphin_input, retroarch_input};
 use hearth_core::systems::{ControlKind, EmulatorKind, System};
 use slint::{ModelRc, VecModel};
 
+use crate::callouts::{self, Align, Placed, Point, Rect};
 use crate::controller_layout::{Layout, Side};
 use crate::{Callout, Choice, ControlsData, OptionRow, TestInput};
 
@@ -132,14 +133,8 @@ impl Page {
         }
     }
 
-    fn callout(
-        &self,
-        input: PadInput,
-        ax: f32,
-        ay: f32,
-        current: &Mapping,
-        base: &Mapping,
-    ) -> Callout {
+    fn callout(&self, placed: &Placed, current: &Mapping, base: &Mapping) -> Callout {
+        let input = placed.input;
         let target = current.binds.get(&input).cloned().unwrap_or(Target::None);
         let below = base.binds.get(&input).cloned().unwrap_or(Target::None);
         let (label, hint, unassigned) = match self.target_label(&target) {
@@ -150,14 +145,41 @@ impl Page {
                 true,
             ),
         };
+        let [line_start, elbow, end] = placed.leader.unwrap_or([Point { x: 0.0, y: 0.0 }; 3]);
+        let shape = placed.shape.unwrap_or(Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 0.0,
+            h: 0.0,
+        });
         Callout {
             input: input.name().into(),
             label: label.into(),
             hint: hint.into(),
             unassigned,
             changed: target != below,
-            ax,
-            ay,
+            side: match placed.side {
+                Side::Left => 0,
+                Side::Right => 1,
+                Side::Bottom => 2,
+            },
+            glyph_last: placed.align == Align::GlyphLast,
+            bx: placed.label.x,
+            by: placed.label.y,
+            bw: placed.label.w,
+            bh: placed.label.h,
+            has_line: placed.leader.is_some(),
+            lx: line_start.x,
+            ly: line_start.y,
+            ex: elbow.x,
+            ey: elbow.y,
+            ax: end.x,
+            ay: end.y,
+            has_shape: placed.shape.is_some(),
+            sx: shape.x,
+            sy: shape.y,
+            sw: shape.w,
+            sh: shape.h,
         }
     }
 
@@ -198,17 +220,35 @@ impl Page {
             }
             .into(),
         );
-        data.set_drawing_width(self.layout.width);
-        data.set_drawing_height(self.layout.height);
-        let mut callouts = Vec::new();
-        for side in [Side::Left, Side::Right, Side::Bottom] {
-            for a in self.layout.column(side) {
-                callouts.push(self.callout(a.input, a.x, a.y, &current, &base));
-            }
-        }
-        data.set_left_count(i32::try_from(self.layout.column(Side::Left).len()).unwrap_or(0));
-        data.set_right_count(i32::try_from(self.layout.column(Side::Right).len()).unwrap_or(0));
-        data.set_callouts(model(callouts));
+        let draw = callouts::drawing(&self.layout);
+        data.set_draw_x(draw.x);
+        data.set_draw_y(draw.y);
+        data.set_draw_w(draw.w);
+        data.set_draw_h(draw.h);
+        let placed = callouts::place(&self.layout, &[]);
+        let count = |side| {
+            let n = placed.iter().filter(|p| p.side == side).count();
+            i32::try_from(n).unwrap_or(0)
+        };
+        data.set_left_count(count(Side::Left));
+        data.set_right_count(count(Side::Right));
+        // Going down from a column lands on the bottom callout nearest the middle on that side.
+        let first_bottom = count(Side::Left) + count(Side::Right);
+        let middle = callouts::PAGE_W / 2.0;
+        let bottom: Vec<_> = placed.iter().filter(|p| p.side == Side::Bottom).collect();
+        let left_of_middle = bottom
+            .iter()
+            .filter(|p| p.label.x + p.label.w / 2.0 < middle)
+            .count();
+        let at = |i: usize| first_bottom + i32::try_from(i).unwrap_or(0);
+        data.set_down_left(at(left_of_middle.saturating_sub(1)));
+        data.set_down_right(at(left_of_middle.min(bottom.len().saturating_sub(1))));
+        data.set_callouts(model(
+            placed
+                .iter()
+                .map(|p| self.callout(p, &current, &base))
+                .collect(),
+        ));
         data.set_options(model(self.options(&resolved.mapping, &base_mapping)));
     }
 

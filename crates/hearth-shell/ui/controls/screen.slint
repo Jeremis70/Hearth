@@ -25,8 +25,9 @@ component CalloutBox inherits Rectangle {
     background: focused ? Theme.surface-raised : transparent;
 
     HorizontalLayout {
-        padding-left: Theme.sp-16;
-        padding-right: Theme.sp-16;
+        // Below the drawing, glyphs sit closer to the edge where their line starts.
+        padding-left: callout.side == 2 ? 8px * Theme.scale : Theme.sp-16;
+        padding-right: callout.side == 2 ? 8px * Theme.scale : Theme.sp-16;
         spacing: Theme.sp-12;
         alignment: align == 0 ? end : start;
         if align == 0: ChangedDot {
@@ -85,20 +86,11 @@ export component ControlsScreen inherits Rectangle {
     property <int> count: ControlsData.callouts.length;
     property <Callout> current: ControlsData.callouts[index];
 
-    // Geometry at 1920×1080 (× Theme.scale).
+    // Geometry: callouts come in page pixels at 1920×1080 (src/callouts.rs), × Theme.scale,
+    // centered horizontally when the window is wider than 16:9.
     property <length> s: 1px * Theme.scale;
-    property <length> draw-h: 520 * s;
-    property <float> k: draw-h / 1px / ControlsData.drawing-height;
-    property <length> draw-w: ControlsData.drawing-width * k * 1px;
-    property <length> draw-x: (root.width - draw-w) / 2;
-    property <length> draw-y: 236 * s;
-    property <length> col-w: 400 * s;
-    property <length> row-h: 52 * s;
-    property <length> row-step: 58 * s;
-    property <length> left-x: Theme.safe-x;
-    property <length> right-x: root.width - Theme.safe-x - col-w;
-    property <length> bottom-w: 260 * s;
-    property <length> bottom-y: draw-y + draw-h + 12 * s;
+    property <length> ox: (root.width - 1920 * s) / 2;
+    property <length> content-y: 236 * s;
     property <length> menu-row: 56 * s;
     property <int> menu-visible: 9;
     property <int> menu-first: max(0, min(ControlsData.choices.length - menu-visible, menu-index - 4));
@@ -115,49 +107,16 @@ export component ControlsScreen inherits Rectangle {
     }
 
     function side-of(i: int) -> int {
-        if i < left-count { return 0; }
-        if i < left-count + right-count { return 1; }
-        2
+        ControlsData.callouts[i].side
     }
     function row-of(i: int) -> int {
-        if i < left-count { return i; }
-        if i < left-count + right-count { return i - left-count; }
-        i - left-count - right-count
+        i - first-of(side-of(i))
     }
-    // Each column starts level with its first anchor, so rows sit close to their buttons.
-    function column-top(side: int) -> length {
-        draw-y + ControlsData.callouts[first-of(side)].ay * k * 1px - row-h / 2
-    }
-    function box-x(i: int) -> length {
-        if side-of(i) == 0 { return left-x; }
-        if side-of(i) == 1 { return right-x; }
-        // Under its button: the first one extends left, the other right, glyph at the line.
-        let ax = draw-x + ControlsData.callouts[i].ax * k * 1px;
-        row-of(i) == 0 ? ax - bottom-w + 36 * s : ax - 36 * s
-    }
-    function box-y(i: int) -> length {
-        if side-of(i) == 2 { return bottom-y; }
-        column-top(side-of(i)) + row-of(i) * row-step
-    }
-    function box-w(i: int) -> length {
-        side-of(i) == 2 ? bottom-w : col-w
-    }
-    // Leader line from the callout to its anchor on the drawing, in pixels.
-    function leader(i: int) -> string {
-        let c = ControlsData.callouts[i];
-        let ax = (draw-x + c.ax * k * 1px) / 1px;
-        let ay = (draw-y + c.ay * k * 1px) / 1px;
-        let y1 = (box-y(i) + row-h / 2) / 1px;
-        if side-of(i) == 0 {
-            let x1 = (left-x + col-w) / 1px;
-            return "M \{x1} \{y1} L \{x1 + 24 * Theme.scale} \{y1} L \{ax} \{ay}";
-        }
-        if side-of(i) == 1 {
-            let x1 = right-x / 1px;
-            return "M \{x1} \{y1} L \{x1 - 24 * Theme.scale} \{y1} L \{ax} \{ay}";
-        }
-        let top = box-y(i) / 1px;
-        "M \{ax} \{top} L \{ax} \{ay}"
+    // Leader line from the callout to its input, in pixels.
+    function leader(c: Callout) -> string {
+        let k = Theme.scale;
+        let x0 = ox / 1px;
+        "M \{x0 + c.lx * k} \{c.ly * k} L \{x0 + c.ex * k} \{c.ey * k} L \{x0 + c.ax * k} \{c.ay * k}"
     }
 
     function first-of(side: int) -> int {
@@ -177,7 +136,7 @@ export component ControlsScreen inherits Rectangle {
             if action == UiAction.left && row > 0 { index -= 1; }
             if action == UiAction.right && row + 1 < count-of(2) { index += 1; }
             if action == UiAction.up {
-                let to = row == 0 ? 0 : 1;
+                let to = current.bx + current.bw / 2 < 960 ? 0 : 1;
                 index = first-of(to) + count-of(to) - 1;
             }
             return;
@@ -187,7 +146,7 @@ export component ControlsScreen inherits Rectangle {
             if row + 1 < count-of(side) {
                 index += 1;
             } else if count-of(2) > 0 {
-                index = first-of(2) + min(side, count-of(2) - 1);
+                index = side == 0 ? ControlsData.down-left : ControlsData.down-right;
             }
         }
         if action == UiAction.left && side == 1 { index = first-of(0) + min(row, left-count - 1); }
@@ -317,15 +276,30 @@ export component ControlsScreen inherits Rectangle {
         visible: tab == 0;
 
         Image {
-            x: draw-x;
-            y: draw-y;
-            width: draw-w;
-            height: draw-h;
+            x: ox + ControlsData.draw-x * s;
+            y: ControlsData.draw-y * s;
+            width: ControlsData.draw-w * s;
+            height: ControlsData.draw-h * s;
             source: @image-url("../../../../assets/controllers/generic.svg");
             colorize: Theme.text-secondary;
             image-fit: contain;
         }
+        // The focused input lights up on the drawing.
+        if current.has-shape && !menu-open: Rectangle {
+            property <length> pad: 8 * s;
+            x: ox + current.sx * s - pad;
+            y: current.sy * s - pad;
+            width: current.sw * s + 2 * pad;
+            height: current.sh * s + 2 * pad;
+            border-radius: min(self.width, self.height) / 2;
+            border-width: 3 * s;
+            border-color: Theme.accent;
+            background: Theme.accent-soft;
+            drop-shadow-blur: Theme.focus-glow-radius;
+            drop-shadow-color: Theme.focus-glow;
+        }
         for c[i] in ControlsData.callouts: Path {
+            visible: c.has-line;
             x: 0;
             y: 0;
             width: root.width;
@@ -334,18 +308,18 @@ export component ControlsScreen inherits Rectangle {
             viewbox-y: 0;
             viewbox-width: root.width / 1px;
             viewbox-height: root.height / 1px;
-            commands: leader(i);
+            commands: c.has-line ? leader(c) : "";
             stroke: i == index ? Theme.accent : Theme.text-disabled;
             stroke-width: (i == index ? 3 : 2) * s;
         }
         for c[i] in ControlsData.callouts: CalloutBox {
-            x: box-x(i);
-            y: box-y(i);
-            width: box-w(i);
-            height: row-h;
+            x: ox + c.bx * s;
+            y: c.by * s;
+            width: c.bw * s;
+            height: c.bh * s;
             callout: c;
             focused: i == index && !menu-open;
-            align: side-of(i) == 0 || (side-of(i) == 2 && row-of(i) == 0) ? 0 : 1;
+            align: c.glyph-last ? 0 : 1;
         }
     }
 
@@ -353,7 +327,7 @@ export component ControlsScreen inherits Rectangle {
     Rectangle {
         visible: tab == 1;
         x: (root.width - 1100 * s) / 2;
-        y: draw-y;
+        y: content-y;
         width: 1100 * s;
         height: options-visible * option-step;
         clip: true;
@@ -467,7 +441,7 @@ export component ControlsScreen inherits Rectangle {
         background: Theme.scrim;
         Rectangle {
             x: (parent.width - self.width) / 2;
-            y: draw-y - 20 * s;
+            y: content-y - 20 * s;
             width: 720 * s;
             height: min(ControlsData.choices.length, menu-visible) * menu-row + 2 * Theme.sp-12 + 64 * s;
             border-radius: Theme.radius-lg;

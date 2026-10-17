@@ -1,6 +1,7 @@
 //! Hearth shell: the Slint UI and the glue to core and platform services.
 
 mod bridge;
+mod callouts;
 mod controller_layout;
 mod controls;
 

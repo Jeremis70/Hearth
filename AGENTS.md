@@ -26,6 +26,9 @@ An open, controller-first living-room console for Linux: one library for Steam g
 - Test: `cargo test --workspace`
 - Run (dev): `HEARTH_HOME=./.dev-data cargo run -p hearth-shell -- --windowed`
 - Preview a .slint file live: `slint-viewer --auto-reload crates/hearth-shell/ui/app.slint`
+- Run inside a nested gamescope (Steam mode): `scripts/run-gamescope.sh` (extra args go to hearth-shell)
+- Drive a running Hearth from scripts: start it with `--dev-socket ./.dev-data/actions.sock`, then `scripts/send-action.sh down accept home_short`
+- Inspect gamescope properties: `DISPLAY=:1 cargo run -p hearth-platform --example gamescope_probe -- props|windows`
 
 ## Conventions
 

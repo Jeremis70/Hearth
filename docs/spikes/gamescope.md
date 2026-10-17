@@ -38,3 +38,13 @@ properties inspected with `gamescope_probe`, `xprop` and `gamescopectl focus_inf
   host's `wayland-0` and RetroArch opens on the desktop instead.
 - Not tested: keyboard focus inside the overlay window (controller actions are injected, so
   this only matters for keyboard use under gamescope).
+
+## Follow-ups found while building M2a
+
+- Detection: a desktop's Xwayland can carry stale `GAMESCOPE_*` root properties (seen on KDE's
+  `:0`, probably from Steam). Hearth now requires `GAMESCOPE_WAYLAND_DISPLAY` in its
+  environment (gamescope exports it to children) plus `GAMESCOPE_FOCUSABLE_WINDOWS` /
+  `GAMESCOPE_FOCUS_DISPLAY` on the root.
+- Without `-e`, gamescope keeps the newest window in front regardless of the baselayer, so a
+  frozen game would leave a black screen. Hearth treats that case like running outside
+  gamescope: no freezing, no overlay, Guide long press closes the game.

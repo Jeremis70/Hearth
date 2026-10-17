@@ -96,6 +96,31 @@ mod tests {
     }
 
     #[test]
+    fn shared_extensions_take_the_system_from_the_folder() {
+        let dir = tempdir();
+        let root = dir.path();
+        touch(root, "gc/Pikmin (USA).iso");
+        touch(root, "gamecube/Metroid Prime (USA).rvz");
+        touch(root, "wii/Wii Sports (USA).iso");
+        touch(root, "n64/Stray (USA).iso"); // N64 doesn't take .iso
+        touch(root, "Loose (USA).iso"); // not in a system folder
+
+        let games = scan_roms(root, &Systems::builtin().unwrap());
+        let found: Vec<_> = games
+            .iter()
+            .map(|g| (g.title.as_str(), g.system.as_str()))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                ("Metroid Prime", "gc"),
+                ("Pikmin", "gc"),
+                ("Wii Sports", "wii")
+            ]
+        );
+    }
+
+    #[test]
     fn missing_root_has_no_games() {
         let dir = tempdir();
         let games = scan_roms(&dir.path().join("nope"), &Systems::builtin().unwrap());

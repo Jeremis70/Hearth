@@ -372,6 +372,10 @@ impl Controller {
                 self.toast(&format!("RetroArch core not found: {core}"));
                 return;
             }
+            (EmulatorKind::Dolphin, _) => {
+                self.toast(&format!("{} games can't be launched yet", system.name));
+                return;
+            }
         };
         if !self.profile.has_autoconfig() {
             self.toast("No controller profiles for RetroArch: the pad won't work in the game");

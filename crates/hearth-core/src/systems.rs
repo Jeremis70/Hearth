@@ -34,6 +34,8 @@ pub enum SuspendPolicy {
 pub enum EmulatorKind {
     /// RetroArch with a libretro core, launched through the RetroArch profile.
     Retroarch,
+    /// Dolphin (GameCube, Wii), launched through the Dolphin profile.
+    Dolphin,
 }
 
 /// One way to run a system's games.
@@ -133,6 +135,20 @@ mod tests {
                 .unwrap()
                 .ends_with("mupen64plus_next_libretro.so")
         );
+    }
+
+    #[test]
+    fn builtin_has_gamecube_and_wii_with_dolphin() {
+        let systems = Systems::builtin().unwrap();
+        for id in ["gc", "wii"] {
+            let system = systems.get(&SystemId::new(id)).unwrap();
+            assert_eq!(system.suspend, SuspendPolicy::Sigstop);
+            assert_eq!(system.emulator().unwrap().kind, EmulatorKind::Dolphin);
+            assert!(system.accepts(Path::new("Game (USA).iso")));
+        }
+        let gc = systems.get(&SystemId::new("gc")).unwrap();
+        assert_eq!(gc.short, "GameCube");
+        assert_eq!(gc.folders, ["gc", "gamecube"]);
     }
 
     #[test]

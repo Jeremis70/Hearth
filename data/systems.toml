@@ -1,4 +1,6 @@
-# Systems Hearth knows about. M2a: N64 only.
+# Systems Hearth knows about.
+# A game's system comes from the folder it is in, never from the extension alone: GameCube and
+# Wii share .iso and .rvz.
 # TODO(M2): generated from ES-DE's es_systems.xml + es_find_rules.xml by tools/import-esde.
 
 [[system]]
@@ -15,3 +17,30 @@ suspend = "sigstop"
   id = "retroarch"
   kind = "retroarch"
   core = "/usr/lib/libretro/mupen64plus_next_libretro.so"
+
+[[system]]
+id = "gc"
+name = "Nintendo GameCube"
+short = "GameCube"
+extensions = ["iso", "rvz", "gcz", "ciso", "gcm"]
+folders = ["gc", "gamecube"]
+default_emulator = "dolphin"
+suspend = "sigstop"
+
+  [[system.emulator]]
+  id = "dolphin"
+  kind = "dolphin"
+
+# Listed so Wii games show up and launch; Wiimote emulation isn't set up yet.
+[[system]]
+id = "wii"
+name = "Nintendo Wii"
+short = "Wii"
+extensions = ["iso", "rvz", "wbfs", "wad"]
+folders = ["wii"]
+default_emulator = "dolphin"
+suspend = "sigstop"
+
+  [[system.emulator]]
+  id = "dolphin"
+  kind = "dolphin"

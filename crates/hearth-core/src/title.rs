@@ -5,8 +5,19 @@
 
 const ARTICLES: [&str; 3] = ["The", "A", "An"];
 
+/// Inner extensions left in the stem by double extensions (`Game (USA).nkit.iso`).
+const INNER_EXTENSIONS: [&str; 1] = [".nkit"];
+
 /// Cleans a file stem (no extension) into a display title.
 pub fn clean_title(stem: &str) -> String {
+    let stem = INNER_EXTENSIONS
+        .iter()
+        .find_map(|ext| {
+            let cut = stem.len().checked_sub(ext.len())?;
+            let tail = stem.get(cut..)?;
+            tail.eq_ignore_ascii_case(ext).then(|| &stem[..cut])
+        })
+        .unwrap_or(stem);
     let stripped = strip_tags(&stem.replace('_', " "));
     let mut parts: Vec<String> = stripped
         .split(" - ")
@@ -79,6 +90,15 @@ mod tests {
     fn other_articles_and_underscores() {
         assert_eq!(clean_title("Bug's Life, A (USA)"), "A Bug's Life");
         assert_eq!(clean_title("Star_Fox_64_(U)"), "Star Fox 64");
+    }
+
+    #[test]
+    fn nkit_inner_extension_is_removed() {
+        assert_eq!(
+            clean_title("Legend of Zelda, The - Twilight Princess (USA).nkit"),
+            "The Legend of Zelda: Twilight Princess"
+        );
+        assert_eq!(clean_title("Pikmin (USA).NKit"), "Pikmin");
     }
 
     #[test]

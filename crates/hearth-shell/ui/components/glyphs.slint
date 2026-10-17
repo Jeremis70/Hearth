@@ -1,0 +1,176 @@
+// Button glyphs from assets/glyphs (Kenney Input Prompts, CC0), one per controller family and
+// Hearth pad position; keep in sync with that folder. Families: 0 generic (Xbox glyphs),
+// 1 PlayStation, 2 Xbox, 3 Nintendo (by position: south is B on Nintendo).
+
+import { Theme } from "../theme.slint";
+
+// The connected controller's family, set by the app (per window).
+export global ControllerType {
+    in-out property <int> family: 0;
+}
+
+export global Glyphs {
+    // The image for `input` (a Hearth pad input name), or an empty image.
+    public pure function image(family: int, input: string) -> image {
+        if family == 1 {
+            if input == "south" { return @image-url("../../../../assets/glyphs/playstation/south.svg"); }
+            if input == "east" { return @image-url("../../../../assets/glyphs/playstation/east.svg"); }
+            if input == "west" { return @image-url("../../../../assets/glyphs/playstation/west.svg"); }
+            if input == "north" { return @image-url("../../../../assets/glyphs/playstation/north.svg"); }
+            if input == "l1" { return @image-url("../../../../assets/glyphs/playstation/l1.svg"); }
+            if input == "r1" { return @image-url("../../../../assets/glyphs/playstation/r1.svg"); }
+            if input == "l2" { return @image-url("../../../../assets/glyphs/playstation/l2.svg"); }
+            if input == "r2" { return @image-url("../../../../assets/glyphs/playstation/r2.svg"); }
+            if input == "l3" { return @image-url("../../../../assets/glyphs/playstation/l3.svg"); }
+            if input == "r3" { return @image-url("../../../../assets/glyphs/playstation/r3.svg"); }
+            if input == "start" { return @image-url("../../../../assets/glyphs/playstation/start.svg"); }
+            if input == "select" { return @image-url("../../../../assets/glyphs/playstation/select.svg"); }
+            if input == "dpad" { return @image-url("../../../../assets/glyphs/playstation/dpad.svg"); }
+            if input == "dpad_up" { return @image-url("../../../../assets/glyphs/playstation/dpad_up.svg"); }
+            if input == "dpad_down" { return @image-url("../../../../assets/glyphs/playstation/dpad_down.svg"); }
+            if input == "dpad_left" { return @image-url("../../../../assets/glyphs/playstation/dpad_left.svg"); }
+            if input == "dpad_right" { return @image-url("../../../../assets/glyphs/playstation/dpad_right.svg"); }
+            if input == "left_stick" { return @image-url("../../../../assets/glyphs/playstation/left_stick.svg"); }
+            if input == "right_stick" { return @image-url("../../../../assets/glyphs/playstation/right_stick.svg"); }
+            if input == "touchpad" { return @image-url("../../../../assets/glyphs/playstation/touchpad.svg"); }
+        }
+        if family == 2 || family == 0 {
+            if input == "south" { return @image-url("../../../../assets/glyphs/xbox/south.svg"); }
+            if input == "east" { return @image-url("../../../../assets/glyphs/xbox/east.svg"); }
+            if input == "west" { return @image-url("../../../../assets/glyphs/xbox/west.svg"); }
+            if input == "north" { return @image-url("../../../../assets/glyphs/xbox/north.svg"); }
+            if input == "l1" { return @image-url("../../../../assets/glyphs/xbox/l1.svg"); }
+            if input == "r1" { return @image-url("../../../../assets/glyphs/xbox/r1.svg"); }
+            if input == "l2" { return @image-url("../../../../assets/glyphs/xbox/l2.svg"); }
+            if input == "r2" { return @image-url("../../../../assets/glyphs/xbox/r2.svg"); }
+            if input == "l3" { return @image-url("../../../../assets/glyphs/xbox/l3.svg"); }
+            if input == "r3" { return @image-url("../../../../assets/glyphs/xbox/r3.svg"); }
+            if input == "start" { return @image-url("../../../../assets/glyphs/xbox/start.svg"); }
+            if input == "select" { return @image-url("../../../../assets/glyphs/xbox/select.svg"); }
+            if input == "dpad" { return @image-url("../../../../assets/glyphs/xbox/dpad.svg"); }
+            if input == "dpad_up" { return @image-url("../../../../assets/glyphs/xbox/dpad_up.svg"); }
+            if input == "dpad_down" { return @image-url("../../../../assets/glyphs/xbox/dpad_down.svg"); }
+            if input == "dpad_left" { return @image-url("../../../../assets/glyphs/xbox/dpad_left.svg"); }
+            if input == "dpad_right" { return @image-url("../../../../assets/glyphs/xbox/dpad_right.svg"); }
+            if input == "left_stick" { return @image-url("../../../../assets/glyphs/xbox/left_stick.svg"); }
+            if input == "right_stick" { return @image-url("../../../../assets/glyphs/xbox/right_stick.svg"); }
+            if input == "guide" { return @image-url("../../../../assets/glyphs/xbox/guide.svg"); }
+        }
+        if family == 3 {
+            if input == "south" { return @image-url("../../../../assets/glyphs/nintendo/south.svg"); }
+            if input == "east" { return @image-url("../../../../assets/glyphs/nintendo/east.svg"); }
+            if input == "west" { return @image-url("../../../../assets/glyphs/nintendo/west.svg"); }
+            if input == "north" { return @image-url("../../../../assets/glyphs/nintendo/north.svg"); }
+            if input == "l1" { return @image-url("../../../../assets/glyphs/nintendo/l1.svg"); }
+            if input == "r1" { return @image-url("../../../../assets/glyphs/nintendo/r1.svg"); }
+            if input == "l2" { return @image-url("../../../../assets/glyphs/nintendo/l2.svg"); }
+            if input == "r2" { return @image-url("../../../../assets/glyphs/nintendo/r2.svg"); }
+            if input == "l3" { return @image-url("../../../../assets/glyphs/nintendo/l3.svg"); }
+            if input == "r3" { return @image-url("../../../../assets/glyphs/nintendo/r3.svg"); }
+            if input == "start" { return @image-url("../../../../assets/glyphs/nintendo/start.svg"); }
+            if input == "select" { return @image-url("../../../../assets/glyphs/nintendo/select.svg"); }
+            if input == "dpad" { return @image-url("../../../../assets/glyphs/nintendo/dpad.svg"); }
+            if input == "dpad_up" { return @image-url("../../../../assets/glyphs/nintendo/dpad_up.svg"); }
+            if input == "dpad_down" { return @image-url("../../../../assets/glyphs/nintendo/dpad_down.svg"); }
+            if input == "dpad_left" { return @image-url("../../../../assets/glyphs/nintendo/dpad_left.svg"); }
+            if input == "dpad_right" { return @image-url("../../../../assets/glyphs/nintendo/dpad_right.svg"); }
+            if input == "left_stick" { return @image-url("../../../../assets/glyphs/nintendo/left_stick.svg"); }
+            if input == "right_stick" { return @image-url("../../../../assets/glyphs/nintendo/right_stick.svg"); }
+            if input == "guide" { return @image-url("../../../../assets/glyphs/nintendo/guide.svg"); }
+        }
+        return @image-url("");
+    }
+
+    // What the button is called on that controller ("Cross", "RB"), for text fallbacks.
+    public pure function name(family: int, input: string) -> string {
+        if family == 1 {
+            if input == "south" { return "Cross"; }
+            if input == "east" { return "Circle"; }
+            if input == "west" { return "Square"; }
+            if input == "north" { return "Triangle"; }
+            if input == "l1" { return "L1"; }
+            if input == "r1" { return "R1"; }
+            if input == "l2" { return "L2"; }
+            if input == "r2" { return "R2"; }
+            if input == "l3" { return "L3"; }
+            if input == "r3" { return "R3"; }
+            if input == "start" { return "Options"; }
+            if input == "select" { return "Create"; }
+            if input == "guide" { return "PS"; }
+        }
+        if family == 2 || family == 0 {
+            if input == "south" { return "A"; }
+            if input == "east" { return "B"; }
+            if input == "west" { return "X"; }
+            if input == "north" { return "Y"; }
+            if input == "l1" { return "LB"; }
+            if input == "r1" { return "RB"; }
+            if input == "l2" { return "LT"; }
+            if input == "r2" { return "RT"; }
+            if input == "l3" { return "LS"; }
+            if input == "r3" { return "RS"; }
+            if input == "start" { return "Menu"; }
+            if input == "select" { return "View"; }
+            if input == "guide" { return "Guide"; }
+        }
+        if family == 3 {
+            if input == "south" { return "B"; }
+            if input == "east" { return "A"; }
+            if input == "west" { return "Y"; }
+            if input == "north" { return "X"; }
+            if input == "l1" { return "L"; }
+            if input == "r1" { return "R"; }
+            if input == "l2" { return "ZL"; }
+            if input == "r2" { return "ZR"; }
+            if input == "l3" { return "L stick"; }
+            if input == "r3" { return "R stick"; }
+            if input == "start" { return "+"; }
+            if input == "select" { return "−"; }
+            if input == "guide" { return "Home"; }
+        }
+        if input == "dpad" { return "D-pad"; }
+        if input == "dpad_up" { return "Up"; }
+        if input == "dpad_down" { return "Down"; }
+        if input == "dpad_left" { return "Left"; }
+        if input == "dpad_right" { return "Right"; }
+        if input == "left_stick" { return "Left stick"; }
+        if input == "right_stick" { return "Right stick"; }
+        if input == "touchpad" { return "Touchpad"; }
+        if input == "paddle1" { return "P1"; }
+        if input == "paddle2" { return "P2"; }
+        if input == "paddle3" { return "P3"; }
+        if input == "paddle4" { return "P4"; }
+        return input;
+    }
+}
+
+// A Hearth pad input drawn as the connected controller's button (or its name as text when the
+// family has no glyph for it, e.g. back paddles).
+export component ButtonGlyph inherits Rectangle {
+    in property <string> input;
+    in property <color> tint: Theme.text-primary;
+    in property <length> size: 36px * Theme.scale;
+    property <image> glyph: Glyphs.image(ControllerType.family, input);
+    property <bool> has-glyph: glyph.width > 0;
+    width: has-glyph ? size : max(size, label.preferred-width + 2 * Theme.sp-8);
+    height: size;
+    border-radius: has-glyph ? 0 : Theme.radius-sm;
+    border-width: has-glyph ? 0 : 2px;
+    border-color: tint;
+    if has-glyph: Image {
+        source: glyph;
+        colorize: tint;
+        width: parent.width;
+        height: parent.height;
+        image-fit: contain;
+    }
+    label := Text {
+        visible: !has-glyph;
+        text: Glyphs.name(ControllerType.family, input);
+        font-size: Theme.caption;
+        font-weight: Theme.semibold;
+        color: tint;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}

@@ -372,9 +372,9 @@ export component Home inherits Rectangle {
         height: Theme.sp-32;
         y: parent.height - Theme.safe-y - self.height;
         hints: [
-            { key: "Enter", label: "Select" },
-            { key: "O", label: "Options" },
-            { key: "Q / E", label: "Tabs" },
+            { input: "south", label: "Select" },
+            { input: "start", label: "Options" },
+            { input: "l1", input2: "r1", label: "Tabs" },
         ];
     }
 

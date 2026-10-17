@@ -20,6 +20,7 @@ use std::sync::mpsc::{self, Sender};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use hearth_core::controls::ControllerKind;
 use hearth_core::library::{Library, LibraryEntry};
 use hearth_core::model::GameId;
 use hearth_core::profiles::{DolphinProfile, RetroArchProfile};
@@ -35,7 +36,7 @@ use slint::ComponentHandle;
 
 use super::models;
 use crate::controls;
-use crate::{AppWindow, OverlayWindow, Session, Status};
+use crate::{AppWindow, ControllerType, OverlayWindow, Session, Status};
 
 /// How long to look for a game's window before giving up.
 const WINDOW_SEARCH: Duration = Duration::from_secs(15);
@@ -255,6 +256,16 @@ fn load_library(db: PathBuf, games_dir: PathBuf, systems: Systems) {
     }
 }
 
+/// `ControllerType.family` in `ui/components/glyphs.slint`.
+fn glyph_family(kind: ControllerKind) -> i32 {
+    match kind {
+        ControllerKind::DualSense | ControllerKind::DualShock4 => 1,
+        ControllerKind::Xbox => 2,
+        ControllerKind::SwitchPro => 3,
+        ControllerKind::Generic => 0,
+    }
+}
+
 fn unix_now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -276,6 +287,7 @@ impl Controller {
         if let Some(overlay) = &self.overlay {
             overlay.set_clock(clock.into());
         }
+        self.sync_controller_type();
         self.sync_session_ui();
     }
 
@@ -828,6 +840,25 @@ impl Controller {
             overlay.set_game_title(title.into());
             overlay.set_badge(badge.into());
             overlay.set_played(played.into());
+        }
+    }
+
+    /// Button glyphs follow the first connected controller (both windows have their own
+    /// globals).
+    fn sync_controller_type(&self) {
+        let kind = self
+            .activity
+            .pads()
+            .first()
+            .map_or(ControllerKind::Generic, |pad| {
+                ControllerKind::from_ids(pad.vendor_id, pad.product_id)
+            });
+        let family = glyph_family(kind);
+        if let Some(app) = self.app.upgrade() {
+            app.global::<ControllerType>().set_family(family);
+        }
+        if let Some(overlay) = &self.overlay {
+            overlay.global::<ControllerType>().set_family(family);
         }
     }
 

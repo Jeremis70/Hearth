@@ -1,28 +1,30 @@
 import { Theme } from "../theme.slint";
+import { ButtonGlyph } from "glyphs.slint";
 
+// `input` (and `input2`, e.g. "l1" + "r1" for tabs) are Hearth pad positions, drawn as the
+// connected controller's buttons.
 export struct Hint {
-    key: string,
+    input: string,
+    input2: string,
     label: string,
 }
 
-// Bottom-right button hints. Text-only until Kenney glyphs are added (TODO(M4)).
+// Bottom-right button hints.
 export component HintBar inherits HorizontalLayout {
     in property <[Hint]> hints;
     spacing: Theme.sp-32;
     alignment: end;
     for hint in hints: HorizontalLayout {
         spacing: Theme.sp-8;
-        Rectangle {
-            width: key-text.preferred-width + 2 * Theme.sp-8;
-            border-radius: Theme.radius-sm;
-            border-width: 1px;
-            border-color: Theme.text-secondary;
-            key-text := Text {
-                text: hint.key;
-                font-size: Theme.caption;
-                font-weight: Theme.semibold;
-                color: Theme.text-secondary;
-            }
+        ButtonGlyph {
+            input: hint.input;
+            tint: Theme.text-secondary;
+            size: 32px * Theme.scale;
+        }
+        if hint.input2 != "": ButtonGlyph {
+            input: hint.input2;
+            tint: Theme.text-secondary;
+            size: 32px * Theme.scale;
         }
         Text {
             text: hint.label;

@@ -369,6 +369,14 @@ impl Controller {
             // Launcher rule: inside gamescope, games must never reach the host's Wayland.
             command.force_x11();
         }
+        // Debugging aid: extra RetroArch arguments, e.g. HEARTH_RETROARCH_ARGS=--max-frames=600
+        if let Some(extra) = std::env::var_os("HEARTH_RETROARCH_ARGS") {
+            let extra = extra.to_string_lossy().into_owned();
+            tracing::info!(%extra, "extra RetroArch arguments");
+            for (i, arg) in extra.split_whitespace().enumerate() {
+                command.args.insert(i, arg.into());
+            }
+        }
         let ctx = LaunchCtx {
             command,
             events: self.events.clone(),

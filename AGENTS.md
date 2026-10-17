@@ -28,6 +28,7 @@ An open, controller-first living-room console for Linux: one library for Steam g
 - Preview a .slint file live: `slint-viewer --auto-reload crates/hearth-shell/ui/app.slint`
 - Run inside a nested gamescope (Steam mode): `scripts/run-gamescope.sh` (extra args go to hearth-shell; uses the display's native size, override with `HEARTH_GS_SIZE=1920x1080`; `HEARTH_GS_FULLSCREEN=1` starts it fullscreen). This is the way to test the overlay: plain `cargo run` has no gamescope, so games open their own window and Guide long press closes them.
 - Drive a running Hearth from scripts: start it with `--dev-socket ./.dev-data/actions.sock`, then `scripts/send-action.sh down accept home_short`
+- Game running slowly? Show RetroArch's FPS counter: `HEARTH_RETROARCH_ARGS="--appendconfig=data/dev/retroarch-fps.cfg" scripts/run-gamescope.sh` (`HEARTH_RETROARCH_ARGS` adds any RetroArch arguments). `cargo run -p hearth-core --example launch_timing -- ./.dev-data/retroarch <core> <rom> 600` times frames outside the UI.
 - Inspect gamescope properties: `DISPLAY=:1 cargo run -p hearth-platform --example gamescope_probe -- props|windows`
 
 ## Conventions

@@ -13,6 +13,7 @@ path = "src/main.rs"
 [dependencies]
 hearth-core.workspace = true
 hearth-platform.workspace = true
+nix.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 clap.workspace = true

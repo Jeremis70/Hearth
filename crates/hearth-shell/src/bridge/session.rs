@@ -198,6 +198,11 @@ pub fn install(setup: Setup) {
     CONTROLLER.with(|cell| *cell.borrow_mut() = Some(controller));
 }
 
+/// Closes the running game, if any, before Hearth exits (blocks a few seconds at most).
+pub fn shutdown() {
+    with(Controller::shutdown);
+}
+
 /// Updates time-based text; call every second.
 pub fn tick(clock: &str) {
     with(|c| c.tick(clock));
@@ -357,6 +362,8 @@ impl Controller {
         };
         if !self.profile.has_autoconfig() {
             self.toast("No controller profiles for RetroArch: the pad won't work in the game");
+        } else if !self.compositor.controls_focus() {
+            self.toast("No overlay outside gamescope: hold the Guide button to close the game");
         }
         if self.compositor.is_active() {
             // Launcher rule: inside gamescope, games must never reach the host's Wayland.
@@ -645,6 +652,17 @@ impl Controller {
             });
         if let Err(err) = spawned {
             tracing::error!("cannot start close thread: {err}");
+        }
+    }
+
+    fn shutdown(&mut self) {
+        let Some(active) = self.active.take() else {
+            return;
+        };
+        tracing::info!(game = %active.game.id, "closing the game before exiting");
+        self.hide_overlay();
+        if let Err(err) = self.runtime.close(&active.session) {
+            tracing::warn!("closing the game failed: {err}");
         }
     }
 

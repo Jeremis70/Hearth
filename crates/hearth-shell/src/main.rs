@@ -17,6 +17,7 @@ use hearth_platform::input::dev_socket::DevSocketBackend;
 use hearth_platform::input::gilrs::GilrsBackend;
 use hearth_platform::network::MockNetworkBackend;
 use hearth_platform::process;
+use nix::sys::signal::{SigSet, Signal};
 use slint::ComponentHandle;
 use tracing_subscriber::EnvFilter;
 
@@ -42,6 +43,9 @@ struct Args {
 }
 
 fn main() -> anyhow::Result<()> {
+    // Before any thread exists, so every thread inherits the mask and only the signal thread
+    // receives these.
+    let shutdown_signals = block_shutdown_signals()?;
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
@@ -71,7 +75,14 @@ fn main() -> anyhow::Result<()> {
 
     let compositor: Arc<dyn Compositor> = Arc::from(gamescope::detect());
 
+    spawn_signal_thread(shutdown_signals)?;
+
     let app = AppWindow::new()?;
+    // The overlay window keeps the event loop alive, so quit explicitly when Hearth is closed.
+    app.window().on_close_requested(|| {
+        let _ = slint::quit_event_loop();
+        slint::CloseRequestResponse::HideWindow
+    });
     app.window().set_fullscreen(!args.windowed);
     bridge::compositor::register_shell(&app, compositor.clone());
 
@@ -123,6 +134,34 @@ fn main() -> anyhow::Result<()> {
     // run_event_loop: the overlay window being hidden must not end the app.
     app.show()?;
     slint::run_event_loop_until_quit()?;
+    tracing::info!("shutting down");
+    bridge::session::shutdown();
+    Ok(())
+}
+
+fn block_shutdown_signals() -> anyhow::Result<SigSet> {
+    let mut set = SigSet::empty();
+    for signal in [Signal::SIGINT, Signal::SIGTERM, Signal::SIGHUP] {
+        set.add(signal);
+    }
+    set.thread_block().context("blocking shutdown signals")?;
+    Ok(set)
+}
+
+/// Ctrl+C, SIGTERM or SIGHUP (terminal or gamescope going away) end the event loop, so the
+/// running game is closed properly instead of being left behind.
+fn spawn_signal_thread(set: SigSet) -> anyhow::Result<()> {
+    std::thread::Builder::new()
+        .name("hearth-signals".into())
+        .spawn(move || {
+            if let Ok(signal) = set.wait() {
+                tracing::info!(?signal, "quitting on signal");
+                let _ = slint::invoke_from_event_loop(|| {
+                    let _ = slint::quit_event_loop();
+                });
+            }
+        })
+        .context("spawning signal thread")?;
     Ok(())
 }
 

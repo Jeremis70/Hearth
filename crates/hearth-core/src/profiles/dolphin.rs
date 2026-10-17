@@ -35,6 +35,8 @@ const SETTINGS: &[(&str, &str)] = &[
     // Render window fullscreen, no cursor. Batch mode already forces RenderToMain off.
     ("Dolphin.Display.Fullscreen", "True"),
     ("Dolphin.Interface.CursorVisibility", "0"), // ShowCursor::Never
+    // No on-screen messages ("Video Info: …" at boot, memory card saves).
+    ("Dolphin.Interface.OnScreenDisplayMessages", "False"),
     // No dialogs: stop confirmation, NKit warning, panic alerts (logged instead), analytics.
     ("Dolphin.Interface.ConfirmStop", "False"),
     ("Dolphin.Interface.SkipNKitWarning", "True"),
@@ -51,6 +53,9 @@ const SETTINGS: &[(&str, &str)] = &[
     // Read the pad even if Dolphin thinks its window isn't focused (gamescope focus isn't
     // always X11 focus). Harmless: whenever Hearth is in front, the game is frozen.
     ("Dolphin.Input.BackgroundInput", "True"),
+    // Log controller hotplug ("Added device: SDL/0/<name>") to stdout, i.e. hearth-launch.log.
+    ("Logger.Logs.CI", "True"),
+    ("Logger.Options.Verbosity", "3"), // LogLevel::LWARNING: notices, errors, warnings
     // Port 1: standard controller (SIDEVICE_GC_CONTROLLER); ports 2-4: nothing.
     ("Dolphin.Core.SIDevice0", "6"),
     ("Dolphin.Core.SIDevice1", "0"),
@@ -228,6 +233,7 @@ mod tests {
             "Dolphin.Core.SIDevice0=6",
             "Dolphin.Core.SIDevice3=0",
             "Dolphin.General.UseDiscordPresence=False",
+            "Dolphin.Interface.OnScreenDisplayMessages=False",
         ] {
             let at = args.iter().position(|a| *a == expected).unwrap();
             assert_eq!(args[at - 1], "-C", "{expected}");

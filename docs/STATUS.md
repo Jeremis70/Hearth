@@ -84,6 +84,27 @@ resume and close it. Verified end to end inside `scripts/run-gamescope.sh` with 
 - `hearth-shell --print-controls <game id | key | part of title>` prints the resolved mapping,
   the layer of every value and the generated files.
 
+## 1d. Controls UI, glyphs, single instance
+
+- **Single instance:** `flock` on `<data>/hearth.lock` (pid inside); a second Hearth exits
+  naming the first. `--print-controls` may run alongside.
+- **Console controls** are declared in `data/controls/<system>.toml` (`[[console]]`: name, kind,
+  label, hint). Each stick and D-pad control also offers "<name> up/down/left/right" as a button
+  target, so D-pad directions and L3/R3 take any button target.
+- **`controls::edit`** writes a system or game file with `toml_edit`: only differences from the
+  layers below, comments and order kept; taking a function from another button swaps them.
+- **Glyphs:** Kenney Input Prompts in `assets/glyphs/<family>/<input>.svg`;
+  `ui/components/glyphs.slint` (`ButtonGlyph`, `ControllerType`, set from the first pad's USB ids).
+- **Drawing:** `assets/controllers/generic.svg` plus `generic.toml` (anchor, column, row per input).
+- **Settings → Controllers:** connected pads, Test buttons (hold Guide to exit), one row per
+  console. **Controls page** (`ui/controls/`, `bridge/controls_page.rs`): Buttons tab with callouts
+  and a choice menu, Sticks & options tab (only what the emulator supports), Reset with
+  confirmation. Game-scoped from the overlay dock ("Controls") and Home → Options → Controls.
+- **Live apply:** not possible today. Dolphin reads controller config only at boot
+  (`Core.cpp` `Pad::LoadConfig`), RetroArch loads remaps with the content and has no network
+  command for it. `MappingApplier` (`EmulatorConfigApplier` → `NextLaunch`) is where
+  InputPlumber goes; the page says "Applies next time you start the game".
+
 ## 2. Known issues and untested areas
 
 **Untested or unverified**
@@ -178,7 +199,7 @@ read the controller.
   first.
 
 **Checks:** `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
-`cargo test --workspace` (core 59, platform 24, shell 4 tests).
+`cargo test --workspace` (core 67, platform 24, shell 6 tests).
 
 ## 4. Gotchas for a fresh session
 

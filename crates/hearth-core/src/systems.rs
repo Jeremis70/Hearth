@@ -49,6 +49,64 @@ pub struct Emulator {
     pub core: Option<PathBuf>,
 }
 
+/// What kind of control a console control is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControlKind {
+    /// On/off.
+    Button,
+    /// Analog trigger with a digital click (GameCube L/R).
+    Trigger,
+    /// Analog stick.
+    Stick,
+    /// Four-way pad.
+    Dpad,
+}
+
+/// The controls of a console's controller that a mapping can bind to.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConsoleControls {
+    /// Buttons.
+    #[serde(default)]
+    pub buttons: Vec<String>,
+    /// Analog triggers.
+    #[serde(default)]
+    pub triggers: Vec<String>,
+    /// Sticks.
+    #[serde(default)]
+    pub sticks: Vec<String>,
+    /// D-pads.
+    #[serde(default)]
+    pub dpads: Vec<String>,
+}
+
+impl ConsoleControls {
+    /// Looks a control up, ignoring case; returns its canonical name and kind.
+    pub fn find(&self, name: &str) -> Option<(&str, ControlKind)> {
+        self.all()
+            .find(|(control, _)| control.eq_ignore_ascii_case(name))
+    }
+
+    /// Every control with its kind.
+    pub fn all(&self) -> impl Iterator<Item = (&str, ControlKind)> {
+        self.buttons
+            .iter()
+            .map(|c| (c.as_str(), ControlKind::Button))
+            .chain(
+                self.triggers
+                    .iter()
+                    .map(|c| (c.as_str(), ControlKind::Trigger)),
+            )
+            .chain(self.sticks.iter().map(|c| (c.as_str(), ControlKind::Stick)))
+            .chain(self.dpads.iter().map(|c| (c.as_str(), ControlKind::Dpad)))
+    }
+
+    /// Whether the system declares no controls (no mapping is generated).
+    pub fn is_empty(&self) -> bool {
+        self.all().next().is_none()
+    }
+}
+
 /// A console or platform.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct System {
@@ -67,6 +125,9 @@ pub struct System {
     /// Suspend behaviour while Hearth is in front.
     #[serde(default)]
     pub suspend: SuspendPolicy,
+    /// Controls a mapping can bind to.
+    #[serde(default)]
+    pub controls: ConsoleControls,
     /// Available emulators.
     #[serde(rename = "emulator", default)]
     pub emulators: Vec<Emulator>,
@@ -148,6 +209,18 @@ mod tests {
         }
         let gc = systems.get(&SystemId::new("gc")).unwrap();
         assert_eq!(gc.short, "GameCube");
+        assert_eq!(
+            gc.controls.find("c-stick"),
+            Some(("C-stick", ControlKind::Stick))
+        );
+        assert_eq!(gc.controls.find("L"), Some(("L", ControlKind::Trigger)));
+        assert!(
+            systems
+                .get(&SystemId::new("wii"))
+                .unwrap()
+                .controls
+                .is_empty()
+        );
         assert_eq!(gc.folders, ["gc", "gamecube"]);
     }
 

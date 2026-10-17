@@ -1,0 +1,30 @@
+# Nintendo 64: Hearth's default controls for player 1 (mupen64plus-next's standard layout).
+# Inputs are Hearth pad positions (south = Xbox A / PlayStation Cross). User overrides:
+#   <HEARTH_HOME>/config/controls/systems/n64.toml      every N64 game
+#   <HEARTH_HOME>/config/controls/games/n64/<ID>.toml   one game (game code, e.g. CZLE)
+# They only need the settings they change.
+
+[player1]
+vibration = true
+swap_sticks = false
+
+[player1.bind]
+south = "A"
+west = "B"
+l2 = "Z"
+l1 = "L"
+r1 = "R"
+start = "Start"
+dpad = "D-pad"
+left_stick = "Stick"
+right_stick = "C-buttons"
+
+[player1.left_stick]
+invert_x = false
+invert_y = false
+deadzone = 0.15
+sensitivity = 1.0
+
+[player1.right_stick]
+invert_x = false
+invert_y = false

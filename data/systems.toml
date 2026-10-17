@@ -13,6 +13,13 @@ default_emulator = "retroarch"
 # Freeze the emulator with SIGSTOP while the overlay or Home is shown.
 suspend = "sigstop"
 
+  # Controls a mapping can bind to (data/controls/n64.toml). C-up..C-right are also driven by
+  # the "C-buttons" stick.
+  [system.controls]
+  buttons = ["A", "B", "Z", "L", "R", "Start", "C-up", "C-down", "C-left", "C-right"]
+  sticks = ["Stick", "C-buttons"]
+  dpads = ["D-pad"]
+
   [[system.emulator]]
   id = "retroarch"
   kind = "retroarch"
@@ -26,6 +33,12 @@ extensions = ["iso", "rvz", "gcz", "ciso", "gcm"]
 folders = ["gc", "gamecube"]
 default_emulator = "dolphin"
 suspend = "sigstop"
+
+  [system.controls]
+  buttons = ["A", "B", "X", "Y", "Z", "Start"]
+  triggers = ["L", "R"]
+  sticks = ["Main stick", "C-stick"]
+  dpads = ["D-pad"]
 
   [[system.emulator]]
   id = "dolphin"

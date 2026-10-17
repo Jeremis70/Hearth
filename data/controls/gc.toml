@@ -1,0 +1,40 @@
+# Nintendo GameCube: Hearth's default controls for player 1.
+# Inputs are Hearth pad positions (south = Xbox A / PlayStation Cross). User overrides:
+#   <HEARTH_HOME>/config/controls/systems/gc.toml       every GameCube game
+#   <HEARTH_HOME>/config/controls/games/gc/<ID>.toml    one game (disc ID, e.g. GZ2E01)
+# They only need the settings they change.
+
+[player1]
+vibration = true
+swap_sticks = false
+
+[player1.bind]
+south = "A"
+east = "B"
+west = "X"
+north = "Y"
+r1 = "Z"
+l2 = "L"
+r2 = "R"
+start = "Start"
+dpad = "D-pad"
+left_stick = "Main stick"
+right_stick = "C-stick"
+# L1 is unused on GameCube: hold it to run the game unthrottled.
+l1 = "@fast_forward_hold"
+
+[player1.left_stick]
+invert_x = false
+invert_y = false
+deadzone = 0.0
+sensitivity = 1.0
+
+[player1.right_stick]
+invert_x = false
+invert_y = false
+deadzone = 0.0
+sensitivity = 1.0
+
+[player1.triggers]
+mode = "analog"
+threshold = 0.9

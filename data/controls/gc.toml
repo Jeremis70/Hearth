@@ -1,8 +1,75 @@
-# Nintendo GameCube: Hearth's default controls for player 1.
+# Nintendo GameCube: its controller's controls, and Hearth's default mapping for player 1.
 # Inputs are Hearth pad positions (south = Xbox A / PlayStation Cross). User overrides:
 #   <HEARTH_HOME>/config/controls/systems/gc.toml       every GameCube game
 #   <HEARTH_HOME>/config/controls/games/gc/<ID>.toml    one game (disc ID, e.g. GZ2E01)
-# They only need the settings they change.
+# They only need the settings they change. Every stick and D-pad also has "<name> up",
+# "<name> down", "<name> left" and "<name> right" for binding one direction to a button.
+
+[[console]]
+name = "A"
+kind = "button"
+label = "A"
+hint = "Big green button in the middle: the main action button"
+
+[[console]]
+name = "B"
+kind = "button"
+label = "B"
+hint = "Small red button at the lower left of A: usually cancel or a secondary action"
+
+[[console]]
+name = "X"
+kind = "button"
+label = "X"
+hint = "Bean-shaped button to the right of A"
+
+[[console]]
+name = "Y"
+kind = "button"
+label = "Y"
+hint = "Bean-shaped button above A"
+
+[[console]]
+name = "Z"
+kind = "button"
+label = "Z"
+hint = "Small purple button above R: often a map, an item or a special move"
+
+[[console]]
+name = "L"
+kind = "trigger"
+label = "L"
+hint = "Left trigger: analog, with a click at the end of its travel"
+
+[[console]]
+name = "R"
+kind = "trigger"
+label = "R"
+hint = "Right trigger: analog, with a click at the end of its travel"
+
+[[console]]
+name = "Start"
+kind = "button"
+label = "Start"
+hint = "Start/Pause button in the center: pauses or opens the menu"
+
+[[console]]
+name = "Main stick"
+kind = "stick"
+label = "Main stick"
+hint = "The big grey stick on the left: moves your character"
+
+[[console]]
+name = "C-stick"
+kind = "stick"
+label = "C-stick (camera)"
+hint = "The small yellow stick on the right: most games use it for the camera"
+
+[[console]]
+name = "D-pad"
+kind = "dpad"
+label = "D-pad"
+hint = "Small cross below the main stick: rarely used, sometimes for items or menus"
 
 [player1]
 vibration = true

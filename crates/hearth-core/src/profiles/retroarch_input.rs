@@ -91,6 +91,26 @@ pub const MUPEN64PLUS_NEXT: CoreTable = CoreTable {
     ],
 };
 
+impl CoreTable {
+    /// How the core reads `control`, including a stick's or D-pad's single direction
+    /// ("D-pad up" → the Up button, "C-buttons left" → the right stick's X- half-axis).
+    fn find(&self, control: &str) -> Option<CoreInput> {
+        if let Some((_, input)) = self.controls.iter().find(|(c, _)| *c == control) {
+            return Some(*input);
+        }
+        let (parent, dir) = control.rsplit_once(' ')?;
+        let dir = ["up", "down", "left", "right"]
+            .iter()
+            .position(|d| *d == dir)?;
+        match self.controls.iter().find(|(c, _)| *c == parent)?.1 {
+            CoreInput::Pad(ids) => Some(CoreInput::Button(ids[dir])),
+            // Up = Y-, down = Y+, left = X-, right = X+.
+            CoreInput::Stick(base) => Some(CoreInput::Button(base + [3, 2, 1, 0][dir])),
+            CoreInput::Button(_) => None,
+        }
+    }
+}
+
 /// The core table for a system, if Hearth knows its core.
 pub fn core_table(system: &str) -> Option<CoreTable> {
     (system == "n64").then_some(MUPEN64PLUS_NEXT)
@@ -225,6 +245,7 @@ pub fn translate(
 ) -> Translation {
     let mut out = Translation::default();
     out.warnings.extend(CAPABILITIES.check(mapping));
+    let mapping = &mapping.expanded();
     let mut buttons: HashMap<&str, i32> = BUTTON_SLOTS.iter().map(|s| (*s, UNBOUND)).collect();
     // Physical stick half-axes: [l_x+, l_x-, l_y+, l_y-, r_x+, r_x-, r_y+, r_y-].
     let mut axes = [UNBOUND; 8];
@@ -243,14 +264,14 @@ pub fn translate(
             }
             Target::Control(control) => control,
         };
-        let Some((_, core_input)) = core.controls.iter().find(|(c, _)| c == control) else {
+        let Some(core_input) = core.find(control) else {
             out.warnings.push(format!(
                 "RetroArch: {} has no {control}; {input} skipped",
                 core.library_name
             ));
             continue;
         };
-        match (input.kind(), *core_input) {
+        match (input.kind(), core_input) {
             (InputKind::Button | InputKind::Trigger, CoreInput::Button(id)) => {
                 if let Some(slot) = remap_key(*input) {
                     buttons.insert(slot, id);

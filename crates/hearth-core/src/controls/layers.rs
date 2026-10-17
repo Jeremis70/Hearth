@@ -12,12 +12,6 @@ use super::key::GameKey;
 use super::model::{Mapping, StickOptions, Target};
 use crate::systems::System;
 
-/// Shipped defaults, by system id.
-const BUILTIN: &[(&str, &str)] = &[
-    ("gc", include_str!("../../../../data/controls/gc.toml")),
-    ("n64", include_str!("../../../../data/controls/n64.toml")),
-];
-
 /// Where a value came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Source {
@@ -82,10 +76,10 @@ pub fn resolve(system: &System, key: &GameKey, user_dir: &Path) -> Option<Resolv
         return None;
     }
     let mut files: Vec<(Source, String)> = Vec::new();
-    if let Some((_, text)) = BUILTIN.iter().find(|(id, _)| *id == system.id.as_str()) {
+    if let Some(text) = super::defaults::shipped(system.id.as_str()) {
         files.push((
             Source::Default(format!("data/controls/{}.toml", system.id)),
-            (*text).to_owned(),
+            text.to_owned(),
         ));
     }
     let system_file = user_dir.join("systems").join(format!("{}.toml", system.id));
@@ -127,7 +121,8 @@ pub fn resolve(system: &System, key: &GameKey, user_dir: &Path) -> Option<Resolv
             Source::System(p) | Source::Game(p) => p.clone(),
             Source::Builtin => PathBuf::new(),
         };
-        match parse_layer(&path, &text, &system.controls) {
+        let shipped = matches!(source, Source::Default(_));
+        match parse_layer(&path, &text, &system.controls, shipped) {
             Ok((layer, warnings)) => {
                 resolved.problems.extend(warnings);
                 resolved.apply(&layer, &source, &path);

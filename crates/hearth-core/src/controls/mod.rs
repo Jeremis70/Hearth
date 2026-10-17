@@ -4,6 +4,7 @@
 //! Files describe the Hearth pad by button position, never by brand letters; see
 //! `data/controls/*.toml` for the shipped defaults.
 
+pub mod defaults;
 pub mod device;
 pub mod file;
 pub mod key;

@@ -50,7 +50,8 @@ pub struct Emulator {
 }
 
 /// What kind of control a console control is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ControlKind {
     /// On/off.
     Button,
@@ -62,48 +63,95 @@ pub enum ControlKind {
     Dpad,
 }
 
-/// The controls of a console's controller that a mapping can bind to.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+/// One control of a console's controller, as declared in `data/controls/<system>.toml`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ConsoleControl {
+    /// Name used in controls files ("Main stick").
+    pub name: String,
+    /// Kind.
+    pub kind: ControlKind,
+    /// What the UI shows ("C-stick (camera)").
+    pub label: String,
+    /// One line for players who never held this console's controller.
+    #[serde(default)]
+    pub hint: Option<String>,
+}
+
+/// Directions of a stick or D-pad, as suffixes of their derived button controls.
+pub const DIRECTIONS: [&str; 4] = ["up", "down", "left", "right"];
+
+/// The controls of a console's controller that a mapping can bind to. Every stick and D-pad
+/// control `X` also has four button controls `X up`, `X down`, `X left`, `X right`, so a
+/// single button can push one direction.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ConsoleControls {
-    /// Buttons.
-    #[serde(default)]
-    pub buttons: Vec<String>,
-    /// Analog triggers.
-    #[serde(default)]
-    pub triggers: Vec<String>,
-    /// Sticks.
-    #[serde(default)]
-    pub sticks: Vec<String>,
-    /// D-pads.
-    #[serde(default)]
-    pub dpads: Vec<String>,
+    controls: Vec<ConsoleControl>,
 }
 
 impl ConsoleControls {
-    /// Looks a control up, ignoring case; returns its canonical name and kind.
-    pub fn find(&self, name: &str) -> Option<(&str, ControlKind)> {
-        self.all()
-            .find(|(control, _)| control.eq_ignore_ascii_case(name))
+    /// From the declared controls, in display order.
+    pub fn new(controls: Vec<ConsoleControl>) -> Self {
+        Self { controls }
     }
 
-    /// Every control with its kind.
-    pub fn all(&self) -> impl Iterator<Item = (&str, ControlKind)> {
-        self.buttons
+    /// Looks a control up, ignoring case, including derived direction buttons.
+    pub fn find(&self, name: &str) -> Option<ConsoleControl> {
+        if let Some(c) = self
+            .controls
             .iter()
-            .map(|c| (c.as_str(), ControlKind::Button))
-            .chain(
-                self.triggers
-                    .iter()
-                    .map(|c| (c.as_str(), ControlKind::Trigger)),
-            )
-            .chain(self.sticks.iter().map(|c| (c.as_str(), ControlKind::Stick)))
-            .chain(self.dpads.iter().map(|c| (c.as_str(), ControlKind::Dpad)))
+            .find(|c| c.name.eq_ignore_ascii_case(name))
+        {
+            return Some(c.clone());
+        }
+        let (parent, dir) = name.rsplit_once(' ')?;
+        let dir = DIRECTIONS
+            .into_iter()
+            .find(|d| d.eq_ignore_ascii_case(dir))?;
+        let parent = self.controls.iter().find(|c| {
+            c.name.eq_ignore_ascii_case(parent)
+                && matches!(c.kind, ControlKind::Stick | ControlKind::Dpad)
+        })?;
+        Some(Self::direction(parent, dir))
+    }
+
+    fn direction(parent: &ConsoleControl, dir: &str) -> ConsoleControl {
+        ConsoleControl {
+            name: format!("{} {dir}", parent.name),
+            kind: ControlKind::Button,
+            label: format!("{} {dir}", parent.label),
+            hint: parent.hint.clone(),
+        }
+    }
+
+    /// If `name` is a derived direction button, its parent control and direction.
+    pub fn split_direction<'a>(&self, name: &'a str) -> Option<(&ConsoleControl, &'a str)> {
+        let (parent, dir) = name.rsplit_once(' ')?;
+        let parent = self.controls.iter().find(|c| {
+            c.name == parent && matches!(c.kind, ControlKind::Stick | ControlKind::Dpad)
+        })?;
+        DIRECTIONS.contains(&dir).then_some((parent, dir))
+    }
+
+    /// The declared controls (without derived directions), in display order.
+    pub fn declared(&self) -> &[ConsoleControl] {
+        &self.controls
+    }
+
+    /// Every bindable control: declared ones, then each stick's and D-pad's directions.
+    pub fn all(&self) -> Vec<ConsoleControl> {
+        let mut all = self.controls.clone();
+        for parent in &self.controls {
+            if matches!(parent.kind, ControlKind::Stick | ControlKind::Dpad) {
+                all.extend(DIRECTIONS.iter().map(|d| Self::direction(parent, d)));
+            }
+        }
+        all
     }
 
     /// Whether the system declares no controls (no mapping is generated).
     pub fn is_empty(&self) -> bool {
-        self.all().next().is_none()
+        self.controls.is_empty()
     }
 }
 
@@ -125,8 +173,8 @@ pub struct System {
     /// Suspend behaviour while Hearth is in front.
     #[serde(default)]
     pub suspend: SuspendPolicy,
-    /// Controls a mapping can bind to.
-    #[serde(default)]
+    /// Controls a mapping can bind to, from `data/controls/<system>.toml`.
+    #[serde(skip)]
     pub controls: ConsoleControls,
     /// Available emulators.
     #[serde(rename = "emulator", default)]
@@ -162,9 +210,15 @@ impl Systems {
         Self::parse(BUILTIN)
     }
 
-    /// Parses a systems file.
+    /// Parses a systems file; console controls come from the shipped controls files.
     pub fn parse(text: &str) -> Result<Self, SystemsError> {
-        Ok(toml::from_str(text)?)
+        let mut systems: Self = toml::from_str(text)?;
+        for system in &mut systems.systems {
+            if let Some(text) = crate::controls::defaults::shipped(system.id.as_str()) {
+                system.controls = crate::controls::defaults::console_controls(text)?;
+            }
+        }
+        Ok(systems)
     }
 
     /// Looks a system up by id.
@@ -209,11 +263,20 @@ mod tests {
         }
         let gc = systems.get(&SystemId::new("gc")).unwrap();
         assert_eq!(gc.short, "GameCube");
+        let c_stick = gc.controls.find("c-stick").unwrap();
         assert_eq!(
-            gc.controls.find("c-stick"),
-            Some(("C-stick", ControlKind::Stick))
+            (c_stick.name.as_str(), c_stick.kind),
+            ("C-stick", ControlKind::Stick)
         );
-        assert_eq!(gc.controls.find("L"), Some(("L", ControlKind::Trigger)));
+        assert_eq!(gc.controls.find("L").unwrap().kind, ControlKind::Trigger);
+        let up = gc.controls.find("d-pad UP").unwrap();
+        assert_eq!(
+            (up.name.as_str(), up.kind),
+            ("D-pad up", ControlKind::Button)
+        );
+        assert!(gc.controls.find("Z up").is_none());
+        assert!(gc.controls.declared().iter().all(|c| !c.label.is_empty()));
+        assert_eq!(gc.controls.all().len(), gc.controls.declared().len() + 12);
         assert!(
             systems
                 .get(&SystemId::new("wii"))

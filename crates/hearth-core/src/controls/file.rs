@@ -70,6 +70,8 @@ pub struct Layer {
 #[serde(deny_unknown_fields)]
 struct Doc {
     player1: Option<PlayerDoc>,
+    /// Console declarations: only in shipped files (`defaults`).
+    console: Option<Spanned<toml::Value>>,
 }
 
 #[derive(Deserialize)]
@@ -100,11 +102,13 @@ struct TriggerDoc {
 }
 
 /// Parses and validates `text` (the contents of `file`) for a system with `controls`.
+/// `shipped`: a `data/controls` file, which may also declare the console's controls.
 /// Returns the layer and its warnings, or every error found.
 pub fn parse_layer(
     file: &Path,
     text: &str,
     controls: &ConsoleControls,
+    shipped: bool,
 ) -> Result<(Layer, Vec<Problem>), Vec<Problem>> {
     let problem = |span: Option<Range<usize>>, message: String| Problem {
         file: file.to_path_buf(),
@@ -116,6 +120,12 @@ pub fn parse_layer(
     let mut layer = Layer::default();
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
+    if let Some(console) = doc.console.filter(|_| !shipped) {
+        return Err(vec![problem(
+            Some(console.span()),
+            "console controls are declared by Hearth (data/controls); remove [[console]]".into(),
+        )]);
+    }
     let Some(player) = doc.player1 else {
         return Ok((layer, warnings));
     };
@@ -257,13 +267,18 @@ fn parse_target(
             _ => Err(format!("{input} can't drive an action; bind a button")),
         };
     }
-    let Some((name, kind)) = controls.find(value) else {
-        let names: Vec<_> = controls.all().map(|(c, _)| format!("\"{c}\"")).collect();
+    let Some(control) = controls.find(value) else {
+        let names: Vec<_> = controls
+            .declared()
+            .iter()
+            .map(|c| format!("\"{}\"", c.name))
+            .collect();
         return Err(format!(
-            "unknown control '{value}' (expected one of: {}, \"none\" or an @action)",
+            "unknown control '{value}' (expected one of: {}, a stick or D-pad direction like \"D-pad up\", \"none\" or an @action)",
             names.join(", ")
         ));
     };
+    let (name, kind) = (control.name.as_str(), control.kind);
     let fits = match input.kind() {
         InputKind::Button | InputKind::Trigger => {
             matches!(kind, ControlKind::Button | ControlKind::Trigger)
@@ -303,7 +318,7 @@ mod tests {
     }
 
     fn parse(text: &str) -> Result<(Layer, Vec<Problem>), Vec<Problem>> {
-        parse_layer(Path::new("t.toml"), text, &gc())
+        parse_layer(Path::new("t.toml"), text, &gc(), false)
     }
 
     #[test]
@@ -371,6 +386,18 @@ mod tests {
         assert!(errors[0].message.contains("out of range"), "{}", errors[0]);
         let errors = parse("[player1.bind]\nleft_stick = \"@screenshot\"\n").unwrap_err();
         assert!(errors[0].message.contains("can't drive an action"));
+    }
+
+    #[test]
+    fn directions_bind_to_buttons_and_console_is_shipped_only() {
+        let (layer, _) = parse("[player1.bind]\ndpad_up = \"Z\"\nl3 = \"C-stick left\"\n").unwrap();
+        assert_eq!(
+            layer.binds[1],
+            (PadInput::L3, Target::Control("C-stick left".into()))
+        );
+        let errors =
+            parse("[[console]]\nname = \"Q\"\nkind = \"button\"\nlabel = \"Q\"\n").unwrap_err();
+        assert!(errors[0].message.contains("[[console]]"), "{}", errors[0]);
     }
 
     #[test]

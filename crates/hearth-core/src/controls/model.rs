@@ -99,6 +99,14 @@ impl PadInput {
         Self::Paddle4,
     ];
 
+    /// The four D-pad direction inputs with their direction names.
+    pub const DPAD_DIRECTIONS: [(PadInput, &'static str); 4] = [
+        (Self::DpadUp, "up"),
+        (Self::DpadDown, "down"),
+        (Self::DpadLeft, "left"),
+        (Self::DpadRight, "right"),
+    ];
+
     /// Name used in files.
     pub fn name(self) -> &'static str {
         match self {
@@ -202,6 +210,32 @@ impl EmulatorAction {
     /// Parses a file name (without the `@`).
     pub fn from_name(name: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|a| a.name() == name)
+    }
+
+    /// What the UI shows.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::FastForwardHold => "Fast-forward (hold)",
+            Self::FastForwardToggle => "Fast-forward (toggle)",
+            Self::SaveState => "Save state",
+            Self::LoadState => "Load state",
+            Self::Screenshot => "Screenshot",
+            Self::Rewind => "Rewind (hold)",
+        }
+    }
+
+    /// One line explaining it.
+    pub fn hint(self) -> &'static str {
+        match self {
+            Self::FastForwardHold => "Runs the game as fast as possible while held",
+            Self::FastForwardToggle => {
+                "Press once to run the game as fast as possible, again to stop"
+            }
+            Self::SaveState => "Saves the game exactly where you are (one slot per game)",
+            Self::LoadState => "Goes back to the saved state; unsaved progress is lost",
+            Self::Screenshot => "Saves a picture of the screen",
+            Self::Rewind => "Plays the game backwards while held",
+        }
     }
 }
 
@@ -314,6 +348,22 @@ impl Mapping {
         self.binds.get(&input).filter(|t| **t != Target::None)
     }
 
+    /// The mapping with a whole-D-pad binding (`dpad = "D-pad"`) split into its four
+    /// directions (`dpad_up = "D-pad up"`, …). A direction bound on its own keeps its binding.
+    pub fn expanded(&self) -> Mapping {
+        let mut out = self.clone();
+        let Some(whole) = out.binds.remove(&PadInput::Dpad) else {
+            return out;
+        };
+        for (input, dir) in PadInput::DPAD_DIRECTIONS {
+            out.binds.entry(input).or_insert_with(|| match &whole {
+                Target::Control(name) => Target::Control(format!("{name} {dir}")),
+                _ => Target::None,
+            });
+        }
+        out
+    }
+
     /// The physical stick whose movement drives the binding of `stick` (`LeftStick` or
     /// `RightStick`), and that stick's options.
     pub fn stick_source(&self, stick: PadInput) -> (PadInput, StickOptions) {
@@ -343,6 +393,22 @@ mod tests {
             assert_eq!(EmulatorAction::from_name(action.name()), Some(action));
         }
         assert_eq!(PadInput::from_name("guide"), None);
+    }
+
+    #[test]
+    fn expanding_the_dpad_keeps_explicit_directions() {
+        let mut m = Mapping::default();
+        m.binds
+            .insert(PadInput::Dpad, Target::Control("D-pad".into()));
+        m.binds
+            .insert(PadInput::DpadUp, Target::Control("Z".into()));
+        let e = m.expanded();
+        assert_eq!(e.binds.get(&PadInput::Dpad), None);
+        assert_eq!(e.binds[&PadInput::DpadUp], Target::Control("Z".into()));
+        assert_eq!(
+            e.binds[&PadInput::DpadLeft],
+            Target::Control("D-pad left".into())
+        );
     }
 
     #[test]

@@ -126,6 +126,7 @@ pub fn translate(mapping: Option<&Mapping>, device: &ControllerIdentity) -> Tran
 
     if let Some(mapping) = mapping {
         out.warnings.extend(CAPABILITIES.check(mapping));
+        let mapping = &mapping.expanded();
         let mut lines: Vec<(String, String)> = Vec::new();
         for (input, target) in &mapping.binds {
             match target {
@@ -167,7 +168,15 @@ pub fn translate(mapping: Option<&Mapping>, device: &ControllerIdentity) -> Tran
         if mapping.vibration {
             lines.push(("Rumble/Motor".into(), "`Motor`".into()));
         }
+        // Two inputs on one control (a stick and a button on its "up") are OR-ed.
+        let mut merged: Vec<(String, String)> = Vec::new();
         for (key, value) in lines {
+            match merged.iter_mut().find(|(k, _)| *k == key) {
+                Some((_, existing)) => *existing = format!("{existing} | {value}"),
+                None => merged.push((key, value)),
+            }
+        }
+        for (key, value) in merged {
             let _ = writeln!(gcpad, "{key} = {value}");
         }
     }
@@ -196,6 +205,16 @@ fn gc_lines(
         return;
     };
     let expr = format!("`{button}`");
+    if let Some((parent, dir)) = control.rsplit_once(' ')
+        && let Some(group) = gc_group(parent)
+        && let Some(dir) = ["up", "down", "left", "right"]
+            .into_iter()
+            .position(|d| d == dir)
+    {
+        let dir = ["Up", "Down", "Left", "Right"][dir];
+        lines.push((format!("{group}/{dir}"), expr));
+        return;
+    }
     match control {
         "L" | "R" => {
             let analog = if input.kind() == crate::controls::model::InputKind::Trigger
@@ -298,6 +317,19 @@ mod tests {
         assert!(!hotkeys.contains("Speed Limit"));
         assert_eq!(t.warnings.len(), 1, "{:?}", t.warnings);
         assert!(t.warnings[0].contains("@rewind"));
+    }
+
+    #[test]
+    fn single_directions_and_stick_clicks_drive_buttons() {
+        let mapping = gc_mapping(Some(
+            "[player1.bind]\nr1 = \"none\"\ndpad_up = \"Z\"\nl3 = \"C-stick up\"\n",
+        ));
+        let t = translate(Some(&mapping), &ControllerIdentity::fallback());
+        let gcpad = file(&t, "GCPadNew.ini");
+        assert!(gcpad.contains("Buttons/Z = `Pad N`\n"), "{gcpad}");
+        assert!(!gcpad.contains("D-Pad/Up"));
+        assert!(gcpad.contains("D-Pad/Left = `Pad W`\n"));
+        assert!(gcpad.contains("C-Stick/Up = `Thumb L` | `Right Y+`\n"));
     }
 
     #[test]

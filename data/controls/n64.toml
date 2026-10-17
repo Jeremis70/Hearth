@@ -1,8 +1,88 @@
-# Nintendo 64: Hearth's default controls for player 1 (mupen64plus-next's standard layout).
-# Inputs are Hearth pad positions (south = Xbox A / PlayStation Cross). User overrides:
+# Nintendo 64: its controller's controls, and Hearth's default mapping for player 1
+# (mupen64plus-next's standard layout). Inputs are Hearth pad positions (south = Xbox A /
+# PlayStation Cross). User overrides:
 #   <HEARTH_HOME>/config/controls/systems/n64.toml      every N64 game
 #   <HEARTH_HOME>/config/controls/games/n64/<ID>.toml   one game (game code, e.g. CZLE)
-# They only need the settings they change.
+# They only need the settings they change. Every stick and D-pad also has "<name> up",
+# "<name> down", "<name> left" and "<name> right" for binding one direction to a button.
+
+[[console]]
+name = "A"
+kind = "button"
+label = "A"
+hint = "Big blue button: the main action button (jump, talk, attack)"
+
+[[console]]
+name = "B"
+kind = "button"
+label = "B"
+hint = "Green button next to A: usually attack, use or cancel"
+
+[[console]]
+name = "Z"
+kind = "button"
+label = "Z"
+hint = "Trigger on the back of the middle grip: aim, target lock or crouch"
+
+[[console]]
+name = "L"
+kind = "button"
+label = "L"
+hint = "Left shoulder button: most games ignore it"
+
+[[console]]
+name = "R"
+kind = "button"
+label = "R"
+hint = "Right shoulder button: shield, crouch or a camera action"
+
+[[console]]
+name = "Start"
+kind = "button"
+label = "Start"
+hint = "Red button in the center: pauses or opens the menu"
+
+[[console]]
+name = "C-up"
+kind = "button"
+label = "C-up"
+hint = "Top yellow C button: often looks around in first person"
+
+[[console]]
+name = "C-down"
+kind = "button"
+label = "C-down"
+hint = "Bottom yellow C button: often an item or a camera move"
+
+[[console]]
+name = "C-left"
+kind = "button"
+label = "C-left"
+hint = "Left yellow C button: often an item or a camera move"
+
+[[console]]
+name = "C-right"
+kind = "button"
+label = "C-right"
+hint = "Right yellow C button: often an item or a camera move"
+
+[[console]]
+name = "Stick"
+kind = "stick"
+label = "Control stick"
+hint = "The analog stick on the middle grip: moves your character"
+
+[[console]]
+name = "C-buttons"
+kind = "stick"
+label = "C buttons"
+hint = "Four yellow item buttons on the N64 controller; C-up also looks around"
+
+[[console]]
+name = "D-pad"
+kind = "dpad"
+label = "D-pad"
+hint = "Cross on the left grip: rarely used in 3D games"
 
 [player1]
 vibration = true

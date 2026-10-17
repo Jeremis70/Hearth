@@ -78,7 +78,7 @@ hearth/
       power.rs                  #   logind-zbus
     hearth-shell/               # Slint app
       build.rs
-      ui/ app.slint theme.slint home.slint library.slint overlay.slint
+      ui/ app.slint theme.slint home.slint library.slint overlay/
           settings/*.slint components/{tile,chip,osk,folder_picker,menu}.slint
       src/ main.rs  app_state.rs  bridge/*.rs  images.rs
 ```

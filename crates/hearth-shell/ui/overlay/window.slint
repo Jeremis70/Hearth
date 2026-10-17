@@ -1,0 +1,104 @@
+import { Theme } from "../theme.slint";
+import { UiAction, InputMap } from "../input.slint";
+import { ControlsScreen } from "../controls/screen.slint";
+import { QuickMenu } from "quick_menu.slint";
+
+// What the overlay shows. The session sets it (src/bridge/session.rs, `OverlayView`); panels
+// move between each other (the quick menu's Controls shortcut opens `controls`). A new panel
+// (capture menu, volume, …) is a component with `handle(action) -> bool`, a value here and a
+// branch in `handle` and in the drawing below.
+export enum OverlayPanel {
+    // Hidden: fully transparent (gamescope may keep compositing the window).
+    none,
+    // Quick menu over the frozen game.
+    menu,
+    // The running game's controls page, over the quick menu.
+    controls,
+}
+
+// In-game overlay (README §4). A separate transparent window drawn on gamescope's overlay plane;
+// scrim only (no blur: the overlay can't read the game's pixels). Controller actions are
+// injected here while a panel that takes input is shown.
+export component OverlayWindow inherits Window {
+    in property <string> game-title;
+    in property <string> badge;
+    in property <string> played;
+    in property <string> clock;
+    // Set by the session controller together with STEAM_OVERLAY.
+    in-out property <OverlayPanel> panel: OverlayPanel.none;
+
+    callback resume();
+    callback go-home();
+    callback close-game();
+    callback dock(/* item */ string);
+    callback home-button(/* long */ bool);
+
+    title: "Hearth overlay";
+    no-frame: true;
+    background: transparent;
+    default-font-family: "Manrope";
+    preferred-width: 1280px;
+    preferred-height: 720px;
+
+    // Shows the controls page (ControlsData filled by Rust).
+    public function open-controls() {
+        controls.reset();
+        panel = OverlayPanel.controls;
+    }
+
+    // Globals are per window, so the overlay keeps its own Theme.scale.
+    function update-scale() {
+        Theme.scale = min(self.width / 1920px, self.height / 1080px);
+    }
+    init => {
+        update-scale();
+        scope.focus();
+    }
+    changed width => { update-scale(); }
+    changed height => { update-scale(); }
+
+    // Called each time the quick menu opens: Resume is focused.
+    public function reset() {
+        menu.reset();
+        scope.focus();
+    }
+
+    public function handle(action: UiAction) -> bool {
+        if action == UiAction.home-short || action == UiAction.home-long {
+            home-button(action == UiAction.home-long);
+            return true;
+        }
+        if panel == OverlayPanel.controls { return controls.handle(action); }
+        if panel == OverlayPanel.menu { return menu.handle(action); }
+        false
+    }
+
+    scope := FocusScope {
+        key-pressed(event) => {
+            root.handle(InputMap.from-key(event)) ? EventResult.accept : EventResult.reject
+        }
+
+        // Fades with the panel; the last panel stays drawn while it fades out.
+        Rectangle {
+            opacity: panel != OverlayPanel.none ? 1 : 0;
+            animate opacity { duration: panel != OverlayPanel.none ? Theme.overlay-in : Theme.overlay-out; easing: ease-out; }
+
+            menu := QuickMenu {
+                game-title: root.game-title;
+                badge: root.badge;
+                played: root.played;
+                clock: root.clock;
+                resume => { root.resume(); }
+                go-home => { root.go-home(); }
+                close-game => { root.close-game(); }
+                dock(item) => { root.dock(item); }
+            }
+
+            controls := ControlsScreen {
+                visible: panel == OverlayPanel.controls;
+                background: Theme.bg-base.with-alpha(0.94);
+                close => { panel = OverlayPanel.menu; }
+            }
+        }
+    }
+}

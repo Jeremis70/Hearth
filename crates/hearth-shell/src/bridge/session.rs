@@ -40,8 +40,8 @@ use super::controls_page::{self, ApplyOutcome, EmulatorConfigApplier, MappingApp
 use super::models;
 use crate::controls;
 use crate::{
-    AppWindow, ControllerType, ControlsData, OverlayWindow, Session, SettingsCategory,
-    SettingsData, Status,
+    AppWindow, ControllerType, ControlsData, OverlayPanel, OverlayWindow, Session,
+    SettingsCategory, SettingsData, Status,
 };
 
 /// How long to look for a game's window before giving up.
@@ -695,7 +695,7 @@ impl Controller {
         self.freeze();
         self.sync_session_ui();
         overlay.invoke_reset();
-        overlay.set_shown(true);
+        overlay.set_panel(OverlayPanel::Menu);
         if let Err(err) = self.compositor.set_overlay(window, true) {
             tracing::warn!("showing the overlay failed: {err}");
             self.go_home();
@@ -709,7 +709,7 @@ impl Controller {
 
     fn hide_overlay(&mut self) {
         if let Some(overlay) = &self.overlay {
-            overlay.set_shown(false);
+            overlay.set_panel(OverlayPanel::None);
         }
         if let Some(window) = self.overlay_window
             && let Err(err) = self.compositor.set_overlay(window, false)

@@ -1,0 +1,213 @@
+import { Theme } from "../theme.slint";
+import { Icons } from "../icons.slint";
+import { UiAction } from "../input.slint";
+import { HButton } from "../components/button.slint";
+import { ConfirmDialog } from "../components/dialog.slint";
+import { FocusRing } from "../components/focus.slint";
+
+component DockButton inherits VerticalLayout {
+    in property <image> icon;
+    in property <string> label;
+    in property <bool> focused;
+    spacing: Theme.sp-8;
+    alignment: start;
+    Rectangle {
+        width: Theme.dock-button;
+        height: Theme.dock-button;
+        border-radius: self.height / 2;
+        background: focused ? Theme.surface-raised : Theme.surface;
+        Image {
+            source: icon;
+            width: Theme.icon-size;
+            height: Theme.icon-size;
+            colorize: Theme.text-primary;
+        }
+        FocusRing {
+            shown: focused;
+            radius: parent.height / 2;
+        }
+    }
+    Text {
+        text: label;
+        horizontal-alignment: center;
+        font-size: Theme.caption;
+        font-weight: Theme.medium;
+        color: focused ? Theme.text-primary : Theme.text-secondary;
+    }
+}
+
+// Where focus is in the quick menu.
+enum MenuFocus { resume, go-home, close-game, dock }
+
+export struct DockItem {
+    id: string,         // passed to `dock()` ("Controls")
+    label: string,
+    icon: image,
+}
+
+// The overlay's main panel (README §4): now-playing card with Resume / Go to Home / Close game,
+// and the dock of shortcuts. Drawn over the dimmed, frozen game.
+export component QuickMenu inherits Rectangle {
+    in property <string> game-title;
+    in property <string> badge;
+    in property <string> played;
+    in property <string> clock;
+
+    callback resume();
+    callback go-home();
+    callback close-game();
+    // A dock shortcut other than Home was chosen.
+    callback dock(/* id */ string);
+
+    // TODO(M3+): Library, Media, Volume and Power do something.
+    property <[DockItem]> dock-items: [
+        { id: "Home", label: "Home", icon: Icons.house },
+        { id: "Library", label: "Library", icon: Icons.library },
+        { id: "Media", label: "Media", icon: Icons.clapperboard },
+        { id: "Volume", label: "Volume", icon: Icons.volume },
+        { id: "Controls", label: "Controls", icon: Icons.gamepad },
+        { id: "Power", label: "Power", icon: Icons.power },
+    ];
+    property <MenuFocus> at: MenuFocus.resume;
+    property <int> dock-index: 0;
+    property <bool> confirm-open: false;
+    property <int> confirm-index: 0;
+
+    // Each time the overlay opens: Resume is focused.
+    public function reset() {
+        at = MenuFocus.resume;
+        dock-index = 0;
+        confirm-open = false;
+    }
+
+    function activate() {
+        if at == MenuFocus.resume { resume(); }
+        if at == MenuFocus.go-home { go-home(); }
+        if at == MenuFocus.close-game { confirm-open = true; confirm-index = 0; }
+        if at == MenuFocus.dock {
+            if dock-items[dock-index].id == "Home" { go-home(); } else { dock(dock-items[dock-index].id); }
+        }
+    }
+
+    public function handle(action: UiAction) -> bool {
+        if confirm-open {
+            if action == UiAction.left { confirm-index = 0; }
+            if action == UiAction.right { confirm-index = 1; }
+            if action == UiAction.back { confirm-open = false; }
+            if action == UiAction.accept {
+                confirm-open = false;
+                if confirm-index == 0 { close-game(); }
+            }
+            return true;
+        }
+        if action == UiAction.back { resume(); return true; }
+        if action == UiAction.accept { activate(); return true; }
+        if at == MenuFocus.resume {
+            if action == UiAction.down { at = MenuFocus.go-home; }
+            return true;
+        }
+        if at == MenuFocus.go-home || at == MenuFocus.close-game {
+            if action == UiAction.up { at = MenuFocus.resume; }
+            if action == UiAction.left { at = MenuFocus.go-home; }
+            if action == UiAction.right { at = MenuFocus.close-game; }
+            if action == UiAction.down { at = MenuFocus.dock; dock-index = 0; }
+            return true;
+        }
+        if action == UiAction.left { dock-index = max(0, dock-index - 1); }
+        if action == UiAction.right { dock-index = min(dock-items.length - 1, dock-index + 1); }
+        if action == UiAction.up { at = MenuFocus.go-home; }
+        true
+    }
+
+    Rectangle {
+        background: Theme.scrim;
+    }
+
+    // Clock, top right.
+    Text {
+        x: parent.width - Theme.safe-x - self.width;
+        y: Theme.safe-y;
+        text: clock;
+        font-size: Theme.tab;
+        font-weight: Theme.semibold;
+        letter-spacing: Theme.tab-tracking;
+        color: Theme.text-primary;
+    }
+
+    // Now playing card.
+    Rectangle {
+        x: Theme.safe-x;
+        y: parent.height - Theme.safe-y - Theme.dock-height - Theme.sp-64 - self.height;
+        width: 640px * Theme.scale;
+        height: card.preferred-height;
+        border-radius: Theme.radius-lg;
+        background: Theme.surface-raised;
+
+        card := VerticalLayout {
+            padding: Theme.sp-32;
+            spacing: Theme.sp-12;
+            Text {
+                text: "NOW PLAYING";
+                font-size: Theme.caption;
+                font-weight: Theme.semibold;
+                letter-spacing: Theme.tab-tracking;
+                color: Theme.accent;
+            }
+            Text {
+                text: game-title;
+                font-size: Theme.title;
+                font-weight: Theme.semibold;
+                color: Theme.text-primary;
+                wrap: word-wrap;
+            }
+            Text {
+                text: badge + " · " + played;
+                font-size: Theme.body;
+                color: Theme.text-secondary;
+            }
+            VerticalLayout {
+                padding-top: Theme.sp-16;
+                spacing: Theme.sp-16;
+                HButton {
+                    primary: true;
+                    has-icon: true;
+                    icon: Icons.play;
+                    label: "Resume";
+                    focused: at == MenuFocus.resume;
+                }
+                HorizontalLayout {
+                    spacing: Theme.sp-16;
+                    alignment: start;
+                    HButton {
+                        label: "Go to Home";
+                        focused: at == MenuFocus.go-home;
+                    }
+                    HButton {
+                        label: "Close game";
+                        focused: at == MenuFocus.close-game;
+                    }
+                }
+            }
+        }
+    }
+
+    // Dock.
+    HorizontalLayout {
+        y: parent.height - Theme.safe-y - self.height;
+        height: Theme.dock-height + Theme.sp-32;
+        alignment: center;
+        spacing: Theme.sp-48;
+        for d[i] in dock-items: DockButton {
+            icon: d.icon;
+            label: d.label;
+            focused: at == MenuFocus.dock && i == dock-index;
+        }
+    }
+
+    if confirm-open: ConfirmDialog {
+        heading: "Close " + game-title + "?";
+        message: "Unsaved progress in the game will be lost. Playtime is saved.";
+        confirm-label: "Close game";
+        index: confirm-index;
+    }
+}

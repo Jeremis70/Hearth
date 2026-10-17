@@ -135,6 +135,10 @@ const SETTINGS: &[(&str, &str)] = &[
     ("history_list_enable", "false"),
     ("content_runtime_log", "false"),
     ("content_runtime_log_aggregate", "false"),
+    // retroarch.log under <root>/logs: shows video init and joypad autoconfiguration.
+    ("log_verbosity", "true"),
+    ("frontend_log_level", "1"),
+    ("libretro_log_level", "1"),
     ("log_to_file", "true"),
     ("log_to_file_timestamp", "false"),
     ("network_cmd_enable", "false"),

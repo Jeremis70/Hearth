@@ -87,7 +87,7 @@ impl System {
 }
 
 /// All known systems.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 pub struct Systems {
     #[serde(rename = "system", default)]
     systems: Vec<System>,

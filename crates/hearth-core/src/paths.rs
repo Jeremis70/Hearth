@@ -31,6 +31,11 @@ pub enum PathsError {
     },
 }
 
+/// `~/Games`, the default folder scanned for games.
+pub fn default_games_dir() -> Option<PathBuf> {
+    directories::BaseDirs::new().map(|dirs| dirs.home_dir().join("Games"))
+}
+
 /// Resolved app directories.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DataDirs {

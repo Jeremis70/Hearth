@@ -5,6 +5,7 @@
 //! TODO(M2): ES-DE import for all systems, `sources` (LibrarySource + steam/ports).
 
 pub mod demo;
+pub mod library;
 pub mod model;
 pub mod paths;
 pub mod scan;

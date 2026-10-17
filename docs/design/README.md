@@ -127,7 +127,10 @@ Respect a future "Reduce motion" setting: all durations multiply by a `Theme.mot
 ```
 
 - Background: focused game's art, pre-blurred variant behind widgets, `hero-vignette` on top, crossfade `slow`.
-- Tile row: recently played across all consoles (most recent first), then fixed tiles Game Library, Media, Settings. Console badge (caption) in the tile's bottom-left; running game gets a `success` dot.
+- Tile row: recently played across all consoles (most recent first), then fixed tiles Game Library, Media, Settings. Running game gets a `success` dot.
+- **Fixed focus anchor (sliding window):** the focused tile always sits at the same x position (the first slot, at `safe-x`). Pressing Right/Left slides the whole row by one tile (`base` timing) instead of moving focus across the screen. Exception: near the end of the row, the row stops sliding when its last tile is fully visible, and focus moves the rest of the way. Never leave empty space to the right of the last tile.
+- **Label tucked beside the focused tile:** because the focused tile (`tile-focused`, 192) is taller than the others (`tile`, 128), the 64 px band below the following tiles is free. The focused item's name (`body-lg`) and console icon (24 px) sit there: left edge at focused tile's right edge + `tile-gap`, vertically aligned with the focused tile's bottom. Tiles carry no console badge themselves.
+- **Console icons:** original, simple monochrome glyphs in Lucide's style (2 px stroke), one per console family, in `assets/icons/consoles/`. Never use console makers' logos or trademarks; when no icon exists, use a short text monogram ("N64", "GC") in a `radius-sm` outline.
 - The hero zone is missing from `home.md` because the screenshot focused a system tile; it is the core of the PS5 feel and must be included.
 - Navigation: Left/Right in the tile row; Down → Play/⋯ buttons → widget row; Up from row → top bar; L1/R1 switch Games/Media; Options on a tile opens the game menu (Close game, Favorite, Uninstall, Properties).
 - Focus starts on the most recent game, or on the running game if one exists.

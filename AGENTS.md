@@ -1,6 +1,7 @@
 # Hearth
 
 An open, controller-first living-room console for Linux: one library for Steam games, emulated classics and native ports, plus the user's own media. Rust + Slint. Full architecture and milestones: `docs/PLAN.md` (read it before starting any milestone).
+Read .github/instructions/rust.instructions.md and docs/STATUS.md at the start of every session.
 
 ## This is the developer's daily-driver laptop: safety rules (non-negotiable)
 

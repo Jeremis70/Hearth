@@ -1,6 +1,7 @@
 # Hearth status
 
-Last updated: 2026-10-17, end of milestone M2a ("first game + overlay").
+Last updated: 2026-10-17: M2a ("first game + overlay"), then Dolphin and the controls system
+(sections 1b and 1c).
 Read this first; then `AGENTS.md` (rules, commands) and `docs/plan.md` (architecture).
 
 ## 1. What M2a delivered
@@ -46,13 +47,51 @@ resume and close it. Verified end to end inside `scripts/run-gamescope.sh` with 
   - Examples: `gamescope_probe`, `overlay_probe`, `launch_timing`.
   - `data/dev/retroarch-fps.cfg`.
 
+## 1b. Dolphin (GameCube, Wii)
+
+- `gc` and `wii` systems (folders `gc`/`gamecube` and `wii`; the system comes from the folder,
+  since both use .iso). The `.nkit` inner extension is dropped from titles.
+- `profiles/dolphin.rs`: native `dolphin-emu` in PATH, else the Flatpak (only the native 2609
+  build was tested). Batch mode, user dir `<HEARTH_HOME>/dolphin` (`-u`), every setting as a
+  `-C` override (checked against the 2609 source and listed with reasons in the file).
+  `Dolphin.General.UseDiscordPresence=False` is required: otherwise Dolphin writes
+  `~/.local/share/applications/discord-455712169795780630.desktop` and edits
+  `~/.config/mimeapps.list`.
+- Window search counts **mapped** windows only: Dolphin's hidden Qt main window carries
+  `_NET_WM_PID` and appears before the render window.
+- Dolphin log: `.dev-data/dolphin/Logs/hearth-launch.log` (includes "Added device: SDL/0/...").
+
+## 1c. Input: resume, focus, controls files
+
+- Menu and overlay actions fire on button **release**. A press that began in a game is disarmed
+  when Hearth takes the pad back (`PadActivity::disarm`).
+- Resume keeps the overlay (or Home) up until the pad has been at rest for 100 ms; after 300 ms
+  it shows "Release buttons to resume". Back or Guide cancels. There is no timeout. "At rest" is
+  judged against each pad's resting values (logged at connect, learned when first seen).
+- A focus switch is retried for 3 s; on failure Hearth comes back and the game keeps running
+  (never left frozen).
+- **Controls files** (`crates/hearth-core/src/controls/`): Hearth pad by position → console
+  controls (declared per system in `systems.toml`) or `@actions`, plus stick, trigger and
+  vibration options. Layers: `data/controls/<system>.toml` → `<config>/controls/systems/<system>.toml`
+  → `<config>/controls/games/<system>/<serial>.toml` (or the region-free serial, e.g. `GZ2.toml`).
+  The serial is read from the ROM header (`gc/GZ2E01`, `n64/CZLE`).
+- **Translators** (`profiles/dolphin_input.rs`, `profiles/retroarch_input.rs`) regenerate the
+  emulator's input config at every launch: Dolphin GCPadNew.ini + Hotkeys.ini; RetroArch a core
+  remap file, hotkey binds (raw buttons from the joypad autoconfig) and core options. Golden
+  files in `crates/hearth-core/tests/golden/` (`HEARTH_UPDATE_GOLDEN=1` to accept changes).
+- The controller's names for each emulator come from `controls/device.rs` (override:
+  `<config>/controls/device.toml`, `sdl_name = "..."`).
+- `hearth-shell --print-controls <game id | key | part of title>` prints the resolved mapping,
+  the layer of every value and the generated files.
+
 ## 2. Known issues and untested areas
 
 **Untested or unverified**
-- **Buffered input after resume:** buttons pressed while the game is frozen (SIGSTOP) stay in
-  the evdev queue, and RetroArch may act on them after SIGCONT. The likely case is the A press
-  on "Resume", which may reach the game. Not tested. Possible fix later: delay SIGCONT until all
-  buttons are released, or drain the queue (InputPlumber in M3 makes this moot).
+- **Buttons pressed and released while a game is frozen:** whether the queued events reach the
+  game after SIGCONT is still untested by hand (InputPlumber in M3 makes this moot).
+- **Controls translation live:** checked by unit/golden tests and `--print-controls` only. Still
+  to try by hand: the TP camera override, L1 fast-forward in TP, and OoT unchanged with the
+  generated remap file.
 - **15 s "no window" timeout:** the path that toasts, closes the game and keeps Hearth in front
   was never triggered live; RetroArch always mapped its window in about 0.25 s.
 - **Keyboard inside the overlay window under gamescope:** untested. Controller actions are
@@ -69,9 +108,11 @@ resume and close it. Verified end to end inside `scripts/run-gamescope.sh` with 
   working directory, but should be made absolute in `DataDirs`.
 - **Launching thread:** pdeathsig fires when the launching *thread* exits. Games must be launched
   from the UI thread (they are); never from a short-lived worker.
-- **Controller layout:** the stock RetroArch udev autoconfig maps the DualSense to N64 a bit
-  oddly. A Hearth-owned mapping system is planned for later (per-console defaults, per-game
-  overrides, optional emulator extras such as fast-forward).
+- **N64 C-button mode dropped:** mupen64plus-next's "hold R2 to turn the face buttons into C
+  buttons" isn't a console control, so the generated remap unbinds R2, east and north. The right
+  stick still drives the C buttons.
+- **SDL names of non-DualSense pads** in `controls/device.rs` follow SDL3's HIDAPI drivers but
+  are unverified; use `device.toml` if Dolphin doesn't see the pad.
 - **Performance on the dev laptop:** fullscreen nested gamescope ran at about 40 fps on the
   Balanced power profile, and close to 60 on Performance (windowed: 60 on either). The cost is
   the nested chain (game → gamescope → KDE at 125% scaling) sharing the i5-1145G7/Iris Xe power
@@ -84,7 +125,7 @@ resume and close it. Verified end to end inside `scripts/run-gamescope.sh` with 
   - Favorite, Uninstall and Properties in the game menu;
   - overlay dock actions;
   - controller glyphs in hints;
-  - other consoles and the ES-DE import;
+  - the ES-DE import;
   - InputPlumber;
   - Steam.
 
@@ -137,7 +178,7 @@ read the controller.
   first.
 
 **Checks:** `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
-`cargo test --workspace` (core 25, platform 22, shell 4 tests).
+`cargo test --workspace` (core 59, platform 25, shell 4 tests).
 
 ## 4. Gotchas for a fresh session
 

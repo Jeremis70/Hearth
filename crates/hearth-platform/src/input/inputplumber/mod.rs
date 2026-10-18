@@ -66,6 +66,10 @@ const IDLE_WAIT: Duration = Duration::from_millis(250);
 const DEVICES_REFRESH: Duration = Duration::from_secs(10);
 /// Wait after a controller appears or goes before looking, so its parts have arrived.
 const DEVICES_SETTLE: Duration = Duration::from_millis(300);
+/// How long InputPlumber may be gone (a restart) before Hearth reads controllers with gilrs.
+const RESTART_WAIT: Duration = Duration::from_secs(8);
+/// Shown when InputPlumber doesn't come back.
+const FALLBACK_NOTICE: &str = "Controller service stopped: menus read the controller directly now. Restart the game for its controls";
 
 /// Controller input via InputPlumber, on its own thread.
 #[derive(Debug)]
@@ -73,7 +77,7 @@ pub struct InputPlumberBackend {
     client: Client,
     activity: PadActivity,
     menu_profile: PathBuf,
-    commands: Sender<InputCommand>,
+    control: InputControl,
     pending: Option<Receiver<InputCommand>>,
 }
 
@@ -93,7 +97,7 @@ impl InputPlumberBackend {
             client,
             activity: PadActivity::new(),
             menu_profile,
-            commands,
+            control: InputControl::new(commands),
             pending: Some(pending),
         })
     }
@@ -105,7 +109,7 @@ impl InputPlumberBackend {
 
     /// The session's handle: mode switches, game profiles, release on exit.
     pub fn control(&self) -> InputControl {
-        InputControl::new(self.commands.clone())
+        self.control.clone()
     }
 }
 
@@ -114,11 +118,17 @@ impl InputBackend for InputPlumberBackend {
         let commands = self.pending.take().ok_or(InputError::AlreadyStarted)?;
         let (msg_tx, msg_rx) = mpsc::channel();
         // Signals first, so no controller created from now on is missed.
-        let signals = subscribe(&self.client).map_err(|err| InputError::Start(err.to_string()))?;
+        let (signals, owners) =
+            subscribe(&self.client).map_err(|err| InputError::Start(err.to_string()))?;
         let signal_tx = msg_tx.clone();
         thread::Builder::new()
             .name("hearth-ip-signals".into())
             .spawn(move || forward_signals(signals, &signal_tx))
+            .map_err(|err| InputError::Start(err.to_string()))?;
+        let owner_tx = msg_tx.clone();
+        thread::Builder::new()
+            .name("hearth-ip-owner".into())
+            .spawn(move || forward_owner_changes(owners, &owner_tx))
             .map_err(|err| InputError::Start(err.to_string()))?;
         thread::Builder::new()
             .name("hearth-ip-commands".into())
@@ -134,6 +144,8 @@ impl InputBackend for InputPlumberBackend {
             client: self.client.clone(),
             activity: self.activity.clone(),
             menu_profile: self.menu_profile.clone(),
+            control: self.control.clone(),
+            daemon: Daemon::Up,
             game_profile: None,
             mode: InputMode::Shell,
             devices: BTreeSet::new(),
@@ -190,15 +202,40 @@ enum Msg {
     Input(String, f64),
     /// Composite devices were added or removed.
     Devices,
+    /// The daemon got (`true`) or lost (`false`) its bus name: it restarted or stopped.
+    Owner(bool),
 }
 
-/// Every signal the daemon sends (input events, devices coming and going).
-fn subscribe(client: &Client) -> Result<MessageIterator, zbus::Error> {
-    let rule = MatchRule::builder()
+/// Every signal under the daemon's objects (input events, devices coming and going), and its
+/// bus name changing owner. By path rather than by sender, so a restarted daemon (a new unique
+/// name) still matches.
+fn subscribe(client: &Client) -> Result<(MessageIterator, MessageIterator), zbus::Error> {
+    let objects = MatchRule::builder()
         .msg_type(MessageType::Signal)
-        .sender(SERVICE)?
+        .path_namespace("/org/shadowblip/InputPlumber")?
         .build();
-    MessageIterator::for_match_rule(rule, client.connection(), Some(64))
+    let owner = MatchRule::builder()
+        .msg_type(MessageType::Signal)
+        .sender("org.freedesktop.DBus")?
+        .interface("org.freedesktop.DBus")?
+        .member("NameOwnerChanged")?
+        .arg(0, SERVICE)?
+        .build();
+    Ok((
+        MessageIterator::for_match_rule(objects, client.connection(), Some(64))?,
+        MessageIterator::for_match_rule(owner, client.connection(), Some(8))?,
+    ))
+}
+
+fn forward_owner_changes(changes: MessageIterator, tx: &Sender<Msg>) {
+    for message in changes.flatten() {
+        let Ok((name, _old, new)) = message.body().deserialize::<(String, String, String)>() else {
+            continue;
+        };
+        if name == SERVICE && tx.send(Msg::Owner(!new.is_empty())).is_err() {
+            return;
+        }
+    }
 }
 
 fn forward_signals(signals: MessageIterator, tx: &Sender<Msg>) {
@@ -284,11 +321,23 @@ fn position_of(event: &str) -> Option<&'static str> {
     })
 }
 
+/// Whether the daemon is there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Daemon {
+    Up,
+    /// Gone since then (restarting?): no calls, which would only fail.
+    Down(Instant),
+    /// Didn't come back: gilrs reads the controllers, this thread only answers `Release`.
+    Replaced,
+}
+
 /// State owned by the worker thread.
 struct Worker {
     client: Client,
     activity: PadActivity,
     menu_profile: PathBuf,
+    control: InputControl,
+    daemon: Daemon,
     game_profile: Option<PathBuf>,
     mode: InputMode,
     /// Composite devices Hearth has set up.
@@ -317,13 +366,28 @@ impl Worker {
                 .map_or(refresh_at, |d| d.min(refresh_at));
             let wait = deadline.saturating_duration_since(now).min(IDLE_WAIT);
             match rx.recv_timeout(wait) {
-                Ok(Msg::Input(name, value)) => self.on_input(&name, value, &mut out),
                 Ok(Msg::Command(command)) => self.on_command(command),
+                Ok(_) if self.daemon == Daemon::Replaced => {}
+                Ok(Msg::Input(name, value)) => self.on_input(&name, value, &mut out),
                 Ok(Msg::Devices) => refresh_at = refresh_at.min(now + DEVICES_SETTLE),
+                Ok(Msg::Owner(false)) => self.daemon_gone(now),
+                Ok(Msg::Owner(true)) => {
+                    if self.daemon_back() {
+                        // Its controllers appear over the next second (signals follow too).
+                        refresh_at = now + DEVICES_SETTLE;
+                    } else {
+                        self.fall_back(tx);
+                    }
+                }
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => return,
             }
             let now = Instant::now();
+            if let Daemon::Down(since) = self.daemon
+                && now >= since + RESTART_WAIT
+            {
+                self.fall_back(tx);
+            }
             if now >= refresh_at {
                 self.refresh_devices();
                 refresh_at = now + DEVICES_REFRESH;
@@ -377,8 +441,73 @@ impl Worker {
         );
     }
 
+    /// InputPlumber lost its bus name. Its controllers and virtual pads went with it.
+    fn daemon_gone(&mut self, now: Instant) {
+        if self.daemon != Daemon::Up {
+            return;
+        }
+        tracing::warn!("InputPlumber went away; waiting for it to come back");
+        self.daemon = Daemon::Down(now);
+        self.devices.clear();
+        self.ignored.clear();
+        self.state = PadState::default();
+        self.pressed.clear();
+        self.activity.set_pressed(Vec::new());
+        self.activity.set_pads(Vec::new());
+    }
+
+    /// InputPlumber is back (restarted): take the controllers again. The device refresh that
+    /// follows sets the virtual pad, the current profile and mode, and strips duplicates.
+    fn daemon_back(&mut self) -> bool {
+        if !matches!(self.daemon, Daemon::Down(_)) {
+            return true;
+        }
+        let taken = self.client.version().and_then(|version| {
+            tracing::info!(%version, "InputPlumber is back; taking the controllers again");
+            self.client.set_manage_all(true)
+        });
+        match taken {
+            Ok(()) => {
+                self.daemon = Daemon::Up;
+                true
+            }
+            Err(err) => {
+                tracing::warn!("InputPlumber came back but refused the controllers: {err}");
+                false
+            }
+        }
+    }
+
+    /// InputPlumber didn't come back: gilrs reads the controllers from now on, into the same
+    /// activity and action channel, and the session learns it can't remap live anymore.
+    fn fall_back(&mut self, tx: &Sender<Action>) {
+        if self.daemon == Daemon::Replaced {
+            return;
+        }
+        tracing::warn!("InputPlumber didn't come back; reading controllers with gilrs");
+        self.daemon = Daemon::Replaced;
+        // Its thread keeps running on its own.
+        let mut gilrs = super::gilrs::GilrsBackend::with_activity(self.activity.clone());
+        if let Err(err) = gilrs.start(tx.clone()) {
+            tracing::error!("starting gilrs failed, keyboard only: {err}");
+        }
+        self.control.fall_back(FALLBACK_NOTICE);
+    }
+
     fn on_command(&mut self, command: InputCommand) {
         tracing::debug!(?command, "input command");
+        if self.daemon != Daemon::Up {
+            // Remember the mode and profile for when the daemon is back; nothing to call now.
+            match command {
+                InputCommand::Mode(mode) => self.mode = mode,
+                InputCommand::GameProfile(profile) => self.game_profile = profile,
+                InputCommand::Release(done) => {
+                    self.released = true;
+                    let _ = done.send(());
+                }
+            }
+            return;
+        }
         match command {
             InputCommand::Mode(mode) => {
                 self.mode = mode;
@@ -406,7 +535,7 @@ impl Worker {
 
     /// Sets up controllers that appeared, forgets those that went away, refreshes pad info.
     fn refresh_devices(&mut self) {
-        if self.released {
+        if self.released || self.daemon != Daemon::Up {
             return;
         }
         let current: BTreeSet<String> = match self.client.composite_devices() {

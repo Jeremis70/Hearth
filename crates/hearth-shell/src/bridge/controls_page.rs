@@ -66,11 +66,12 @@ pub struct InputPlumberApplier {
 
 impl MappingApplier for InputPlumberApplier {
     fn is_live(&self) -> bool {
-        true
+        // False once InputPlumber went away for good (gilrs took over).
+        self.input.is_live()
     }
 
     fn apply(&self, input: &GameInput) -> ApplyOutcome {
-        let Some(profile) = &input.profile else {
+        let (true, Some(profile)) = (self.is_live(), &input.profile) else {
             return ApplyOutcome::NextLaunch;
         };
         let written = self

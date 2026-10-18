@@ -57,6 +57,15 @@ impl GilrsBackend {
         Self::default()
     }
 
+    /// A backend writing to an existing [`PadActivity`] (InputPlumber falling back to gilrs
+    /// keeps the session's).
+    pub fn with_activity(activity: PadActivity) -> Self {
+        Self {
+            activity,
+            ..Self::default()
+        }
+    }
+
     /// A backend that only keeps its [`PadActivity`] current (held inputs, raw stick and
     /// trigger values) and sends no actions: the button test reads InputPlumber's virtual pad
     /// through it (see [`swap_north_west`]).

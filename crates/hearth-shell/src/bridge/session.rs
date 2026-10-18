@@ -387,6 +387,13 @@ impl Controller {
         self.sync_capture();
         self.refresh_settings();
         self.sync_session_ui();
+        if let Some(notice) = self.input.take_notice() {
+            if self.mode == Mode::Game && self.compositor.controls_focus() {
+                self.show_notice(&notice);
+            } else {
+                self.toast(&notice);
+            }
+        }
     }
 
     fn route(&mut self, action: Action) -> Route {
@@ -1364,10 +1371,10 @@ impl Controller {
         page.fill(&data, &line);
         // With InputPlumber, menus get presses only. Raw values come from the virtual pad,
         // which may only get the input while no game could see it.
-        let raw = match &self.raw_activity {
+        let raw = match self.raw_activity.clone().filter(|_| live) {
             Some(raw) if self.active.is_none() => {
                 self.input.set_mode(InputMode::Test);
-                Some(raw.clone())
+                Some(raw)
             }
             Some(_) => {
                 data.set_message("Stick and trigger values show when no game is running".into());

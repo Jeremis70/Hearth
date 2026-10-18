@@ -261,22 +261,58 @@ pub enum InputCommand {
 /// The session's handle on the input backend. Backends that can't hide input from games (gilrs)
 /// hand out a detached handle, on which every call does nothing.
 #[derive(Debug, Clone, Default)]
-pub struct InputControl(Option<Sender<InputCommand>>);
+pub struct InputControl {
+    tx: Option<Sender<InputCommand>>,
+    state: Arc<ControlState>,
+}
+
+/// What the backend tells the session through its handle.
+#[derive(Debug, Default)]
+struct ControlState {
+    /// The backend fell back to one that can't hide input from games (InputPlumber went away).
+    detached: std::sync::atomic::AtomicBool,
+    /// A message for the player, shown once.
+    notice: Mutex<Option<String>>,
+}
 
 impl InputControl {
     /// A handle that does nothing.
     pub fn detached() -> Self {
-        Self(None)
+        Self::default()
     }
 
     /// A handle sending to a backend's command channel.
     pub fn new(tx: Sender<InputCommand>) -> Self {
-        Self(Some(tx))
+        Self {
+            tx: Some(tx),
+            state: Arc::default(),
+        }
     }
 
     /// Whether a backend listens: games get remapped live and Hearth's input is hidden from them.
+    /// Turns false for good if the backend falls back (see [`InputControl::fall_back`]).
     pub fn is_live(&self) -> bool {
-        self.0.is_some()
+        self.tx.is_some() && !self.state.detached.load(Ordering::Acquire)
+    }
+
+    /// Backend side: it can no longer hide input or remap (InputPlumber went away and
+    /// gilrs took over); `notice` is shown to the player once.
+    pub fn fall_back(&self, notice: &str) {
+        self.state.detached.store(true, Ordering::Release);
+        *self
+            .state
+            .notice
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(notice.to_owned());
+    }
+
+    /// The backend's message for the player, if there is a new one.
+    pub fn take_notice(&self) -> Option<String> {
+        self.state
+            .notice
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
     }
 
     /// See [`InputCommand::Mode`]. Always sent, even when unchanged: the backend re-applies it
@@ -292,7 +328,7 @@ impl InputControl {
 
     /// Hands the controllers back, waiting at most `timeout`. Returns whether it finished.
     pub fn release(&self, timeout: Duration) -> bool {
-        let Some(tx) = &self.0 else {
+        let Some(tx) = &self.tx else {
             return true;
         };
         let (done_tx, done_rx) = mpsc::sync_channel(1);
@@ -303,7 +339,7 @@ impl InputControl {
     }
 
     fn send(&self, command: InputCommand) {
-        if let Some(tx) = &self.0
+        if let Some(tx) = &self.tx
             && tx.send(command).is_err()
         {
             tracing::warn!("input backend gone; command dropped");

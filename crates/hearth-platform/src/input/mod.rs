@@ -256,6 +256,9 @@ pub enum InputCommand {
     GameProfile(Option<PathBuf>),
     /// Hand the controllers back to the system (Hearth is exiting); answers when done.
     Release(mpsc::SyncSender<()>),
+    /// A game launched while the service was gone reads the physical controller: while `true`,
+    /// a returning service must not take the controller (the game would lose it).
+    KeepDirect(bool),
 }
 
 /// The session's handle on the input backend. Backends that can't hide input from games (gilrs)
@@ -266,13 +269,34 @@ pub struct InputControl {
     state: Arc<ControlState>,
 }
 
+/// What happened to the service behind the input backend (InputPlumber).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputStatus {
+    /// It went away: games lost their virtual pad; Hearth reads controllers with gilrs.
+    Lost,
+    /// Still gone after a few seconds (not just a restart).
+    StillLost,
+    /// It is back and has the controllers again.
+    Back,
+}
+
+/// Called on the backend's thread with each [`InputStatus`].
+type StatusListener = Box<dyn Fn(InputStatus) + Send>;
+
 /// What the backend tells the session through its handle.
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct ControlState {
-    /// The backend fell back to one that can't hide input from games (InputPlumber went away).
-    detached: std::sync::atomic::AtomicBool,
-    /// A message for the player, shown once.
-    notice: Mutex<Option<String>>,
+    /// The service is gone: no live remapping, input isn't hidden from games.
+    lost: std::sync::atomic::AtomicBool,
+    listener: Mutex<Option<StatusListener>>,
+}
+
+impl std::fmt::Debug for ControlState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ControlState")
+            .field("lost", &self.lost)
+            .finish_non_exhaustive()
+    }
 }
 
 impl InputControl {
@@ -290,29 +314,35 @@ impl InputControl {
     }
 
     /// Whether a backend listens: games get remapped live and Hearth's input is hidden from them.
-    /// Turns false for good if the backend falls back (see [`InputControl::fall_back`]).
+    /// False while the service behind it is gone ([`InputStatus::Lost`]).
     pub fn is_live(&self) -> bool {
-        self.tx.is_some() && !self.state.detached.load(Ordering::Acquire)
+        self.tx.is_some() && !self.state.lost.load(Ordering::Acquire)
     }
 
-    /// Backend side: it can no longer hide input or remap (InputPlumber went away and
-    /// gilrs took over); `notice` is shown to the player once.
-    pub fn fall_back(&self, notice: &str) {
-        self.state.detached.store(true, Ordering::Release);
+    /// Session side: `listener` hears every [`InputStatus`], on the backend's thread.
+    pub fn on_status(&self, listener: impl Fn(InputStatus) + Send + 'static) {
         *self
             .state
-            .notice
+            .listener
             .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(notice.to_owned());
+            .unwrap_or_else(PoisonError::into_inner) = Some(Box::new(listener));
     }
 
-    /// The backend's message for the player, if there is a new one.
-    pub fn take_notice(&self) -> Option<String> {
-        self.state
-            .notice
+    /// Backend side: reports what happened to its service.
+    pub fn report(&self, status: InputStatus) {
+        match status {
+            InputStatus::Lost => self.state.lost.store(true, Ordering::Release),
+            InputStatus::Back => self.state.lost.store(false, Ordering::Release),
+            InputStatus::StillLost => {}
+        }
+        if let Some(listener) = &*self
+            .state
+            .listener
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .take()
+        {
+            listener(status);
+        }
     }
 
     /// See [`InputCommand::Mode`]. Always sent, even when unchanged: the backend re-applies it
@@ -324,6 +354,11 @@ impl InputControl {
     /// See [`InputCommand::GameProfile`].
     pub fn set_game_profile(&self, profile: Option<PathBuf>) {
         self.send(InputCommand::GameProfile(profile));
+    }
+
+    /// See [`InputCommand::KeepDirect`].
+    pub fn keep_direct(&self, keep: bool) {
+        self.send(InputCommand::KeepDirect(keep));
     }
 
     /// Hands the controllers back, waiting at most `timeout`. Returns whether it finished.

@@ -32,7 +32,7 @@ use hearth_core::scan::scan_roms;
 use hearth_core::session::{ActiveSession, SessionState};
 use hearth_core::systems::{EmulatorKind, SuspendPolicy, Systems};
 use hearth_platform::gamescope::{AppId, Compositor, SHELL_APP_ID};
-use hearth_platform::input::{Action, InputControl, InputMode, PadActivity};
+use hearth_platform::input::{Action, InputControl, InputMode, InputStatus, PadActivity};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::rc::Rc;
 
@@ -58,6 +58,15 @@ const FOCUS_RETRY: Duration = Duration::from_secs(3);
 const TOAST_TIME: Duration = Duration::from_secs(5);
 /// How long a notice stays over a running game.
 const NOTICE_TIME: Duration = Duration::from_secs(3);
+/// InputPlumber went away (the game lost its virtual pad).
+const SERVICE_LOST: &str = "Controller service restarting…";
+/// It stayed away.
+const SERVICE_STILL_LOST: &str = "The controller service stopped: the game can't read the \
+controller until it's back. Hearth's menus still work";
+/// It came back after the game was left frozen.
+const SERVICE_BACK: &str = "Controller service is back. Resume when you're ready";
+/// Back this fast: a restart; the game resumes on its own.
+const QUICK_RESTART: Duration = Duration::from_secs(2);
 /// What the Capture button does for now.
 const CAPTURE_MESSAGE: &str = "Screenshots and clips are coming later";
 /// First app id given to games (Hearth is 769).
@@ -144,6 +153,8 @@ pub struct Controller {
     message_timer: slint::Timer,
     /// The button test is open (it takes all input; a long Guide press closes it).
     testing: bool,
+    /// When InputPlumber went away, and whether Hearth froze the game for it.
+    service_lost: Option<(Instant, bool)>,
     test_timer: slint::Timer,
 }
 
@@ -253,6 +264,9 @@ pub fn install(setup: Setup) {
     } else {
         Box::new(EmulatorConfigApplier)
     };
+    setup
+        .input
+        .on_status(|status| defer(move |c| c.on_input_status(status)));
     let controller = Controller {
         app: setup.app,
         overlay: setup.overlay,
@@ -282,6 +296,7 @@ pub fn install(setup: Setup) {
         message_timer: slint::Timer::default(),
         testing: false,
         test_timer: slint::Timer::default(),
+        service_lost: None,
     };
     CONTROLLER.with(|cell| *cell.borrow_mut() = Some(controller));
 }
@@ -387,13 +402,6 @@ impl Controller {
         self.sync_capture();
         self.refresh_settings();
         self.sync_session_ui();
-        if let Some(notice) = self.input.take_notice() {
-            if self.mode == Mode::Game && self.compositor.controls_focus() {
-                self.show_notice(&notice);
-            } else {
-                self.toast(&notice);
-            }
-        }
     }
 
     fn route(&mut self, action: Action) -> Route {
@@ -477,6 +485,59 @@ impl Controller {
                 }
             }
             _ => self.toast(CAPTURE_MESSAGE),
+        }
+    }
+
+    /// InputPlumber went away or came back. A game in front loses its virtual pad, so it is
+    /// frozen (following its suspend policy) under the overlay, which explains; a quick
+    /// restart resumes it on its own.
+    fn on_input_status(&mut self, status: InputStatus) {
+        tracing::info!(?status, mode = ?self.mode, "controller service");
+        match status {
+            InputStatus::Lost => {
+                let froze = self.mode == Mode::Game && self.compositor.controls_focus();
+                if froze {
+                    self.open_overlay();
+                }
+                self.service_lost = Some((Instant::now(), froze));
+                self.service_message(SERVICE_LOST);
+            }
+            InputStatus::StillLost => self.service_message(SERVICE_STILL_LOST),
+            InputStatus::Back => {
+                let Some((since, froze)) = self.service_lost.take() else {
+                    return;
+                };
+                if froze && self.mode == Mode::Overlay && since.elapsed() <= QUICK_RESTART {
+                    self.resume_game();
+                    return;
+                }
+                if self.mode == Mode::Overlay
+                    && let Some(overlay) = &self.overlay
+                    && overlay.get_panel() == OverlayPanel::Menu
+                {
+                    // Resume focused, ready to go.
+                    overlay.invoke_reset();
+                }
+                let message = if self.active.is_some() {
+                    SERVICE_BACK
+                } else {
+                    "Controller service is back"
+                };
+                self.service_message(message);
+            }
+        }
+    }
+
+    /// A controller service message: on the overlay while it is open (it stays until the
+    /// overlay closes), else a toast.
+    fn service_message(&mut self, message: &str) {
+        match (&self.overlay, self.mode) {
+            (Some(overlay), Mode::Overlay) => {
+                self.notice_timer.stop();
+                overlay.global::<Status>().set_toast(message.into());
+            }
+            (Some(_), Mode::Game) if self.compositor.controls_focus() => self.show_notice(message),
+            _ => self.toast(message),
         }
     }
 
@@ -578,6 +639,9 @@ impl Controller {
             // No remapping rather than the previous game's.
             self.input.set_game_profile(None);
         }
+        // Started without InputPlumber (it is gone): this game reads the physical controller,
+        // which InputPlumber coming back must not take from it.
+        self.input.keep_direct(!self.input.is_live());
         tracing::info!(key = %input.key.as_string(), "controls resolved");
         self.game_capture = input
             .resolved
@@ -873,6 +937,7 @@ impl Controller {
     fn hide_overlay(&mut self) {
         if let Some(overlay) = &self.overlay {
             overlay.set_panel(OverlayPanel::None);
+            overlay.global::<Status>().set_toast("".into());
         }
         if let Some(window) = self.overlay_window
             && let Err(err) = self.compositor.set_overlay(window, false)
@@ -993,6 +1058,7 @@ impl Controller {
         let title = active.game.title.clone();
         let closed_by_us = std::mem::take(&mut self.closing);
         tracing::info!(%game, played_secs = played.as_secs(), success, "session ended");
+        self.input.keep_direct(false);
 
         self.activity.disarm();
         self.hide_overlay();

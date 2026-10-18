@@ -13,6 +13,8 @@ pub mod client;
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -24,7 +26,10 @@ use zbus::zvariant::{OwnedObjectPath, OwnedValue};
 
 use self::client::{Client, ClientError, InterceptMode, SERVICE};
 use super::pad_state::{PadEvent, PadState};
-use super::{Action, InputBackend, InputCommand, InputControl, InputError, InputMode, PadActivity};
+use super::{
+    Action, InputBackend, InputCommand, InputControl, InputError, InputMode, InputStatus,
+    PadActivity,
+};
 
 /// The one virtual controller games see: an Xbox Elite 2 pad, whose four paddles and Share
 /// button carry emulator actions (SDL and RetroArch both see them).
@@ -66,10 +71,8 @@ const IDLE_WAIT: Duration = Duration::from_millis(250);
 const DEVICES_REFRESH: Duration = Duration::from_secs(10);
 /// Wait after a controller appears or goes before looking, so its parts have arrived.
 const DEVICES_SETTLE: Duration = Duration::from_millis(300);
-/// How long InputPlumber may be gone (a restart) before Hearth reads controllers with gilrs.
+/// How long InputPlumber may be gone before it counts as stopped rather than restarting.
 const RESTART_WAIT: Duration = Duration::from_secs(8);
-/// Shown when InputPlumber doesn't come back.
-const FALLBACK_NOTICE: &str = "Controller service stopped: menus read the controller directly now. Restart the game for its controls";
 
 /// Controller input via InputPlumber, on its own thread.
 #[derive(Debug)]
@@ -146,6 +149,9 @@ impl InputBackend for InputPlumberBackend {
             menu_profile: self.menu_profile.clone(),
             control: self.control.clone(),
             daemon: Daemon::Up,
+            gilrs: None,
+            keep_direct: false,
+            daemon_present: true,
             game_profile: None,
             mode: InputMode::Shell,
             devices: BTreeSet::new(),
@@ -325,10 +331,9 @@ fn position_of(event: &str) -> Option<&'static str> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Daemon {
     Up,
-    /// Gone since then (restarting?): no calls, which would only fail.
-    Down(Instant),
-    /// Didn't come back: gilrs reads the controllers, this thread only answers `Release`.
-    Replaced,
+    /// Gone since then: no calls (they would only fail), gilrs reads the controllers, and
+    /// whether [`InputStatus::StillLost`] was reported.
+    Down(Instant, bool),
 }
 
 /// State owned by the worker thread.
@@ -338,6 +343,12 @@ struct Worker {
     menu_profile: PathBuf,
     control: InputControl,
     daemon: Daemon,
+    /// Stops the gilrs thread reading controllers while the daemon is gone.
+    gilrs: Option<Arc<AtomicBool>>,
+    /// A running game reads the physical controller ([`InputCommand::KeepDirect`]).
+    keep_direct: bool,
+    /// The daemon has its bus name again (it may be waiting for `keep_direct` to end).
+    daemon_present: bool,
     game_profile: Option<PathBuf>,
     mode: InputMode,
     /// Composite devices Hearth has set up.
@@ -367,26 +378,29 @@ impl Worker {
             let wait = deadline.saturating_duration_since(now).min(IDLE_WAIT);
             match rx.recv_timeout(wait) {
                 Ok(Msg::Command(command)) => self.on_command(command),
-                Ok(_) if self.daemon == Daemon::Replaced => {}
                 Ok(Msg::Input(name, value)) => self.on_input(&name, value, &mut out),
                 Ok(Msg::Devices) => refresh_at = refresh_at.min(now + DEVICES_SETTLE),
-                Ok(Msg::Owner(false)) => self.daemon_gone(now),
+                Ok(Msg::Owner(false)) => {
+                    self.daemon_present = false;
+                    self.daemon_gone(now, tx);
+                }
                 Ok(Msg::Owner(true)) => {
+                    self.daemon_present = true;
                     if self.daemon_back() {
                         // Its controllers appear over the next second (signals follow too).
                         refresh_at = now + DEVICES_SETTLE;
-                    } else {
-                        self.fall_back(tx);
                     }
                 }
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => return,
             }
             let now = Instant::now();
-            if let Daemon::Down(since) = self.daemon
+            if let Daemon::Down(since, false) = self.daemon
                 && now >= since + RESTART_WAIT
             {
-                self.fall_back(tx);
+                tracing::warn!("InputPlumber is still gone");
+                self.daemon = Daemon::Down(since, true);
+                self.control.report(InputStatus::StillLost);
             }
             if now >= refresh_at {
                 self.refresh_devices();
@@ -441,61 +455,65 @@ impl Worker {
         );
     }
 
-    /// InputPlumber lost its bus name. Its controllers and virtual pads went with it.
-    fn daemon_gone(&mut self, now: Instant) {
+    /// InputPlumber lost its bus name. Its controllers and virtual pads went with it, and the
+    /// raw controllers are back: gilrs reads them until it returns, so Hearth stays usable.
+    fn daemon_gone(&mut self, now: Instant, tx: &Sender<Action>) {
         if self.daemon != Daemon::Up {
             return;
         }
-        tracing::warn!("InputPlumber went away; waiting for it to come back");
-        self.daemon = Daemon::Down(now);
+        tracing::warn!("InputPlumber went away; reading controllers with gilrs until it is back");
+        self.daemon = Daemon::Down(now, false);
         self.devices.clear();
         self.ignored.clear();
         self.state = PadState::default();
         self.pressed.clear();
         self.activity.set_pressed(Vec::new());
         self.activity.set_pads(Vec::new());
+        let mut gilrs = super::gilrs::GilrsBackend::with_activity(self.activity.clone());
+        match gilrs.start(tx.clone()) {
+            // Its thread keeps running until stopped.
+            Ok(()) => self.gilrs = Some(gilrs.stopper()),
+            Err(err) => tracing::error!("starting gilrs failed, keyboard only: {err}"),
+        }
+        self.control.report(InputStatus::Lost);
     }
 
-    /// InputPlumber is back (restarted): take the controllers again. The device refresh that
+    /// InputPlumber has its bus name again: take the controllers back. The device refresh that
     /// follows sets the virtual pad, the current profile and mode, and strips duplicates.
+    /// Returns whether it worked (if not, gilrs keeps going until the next time it starts).
     fn daemon_back(&mut self) -> bool {
-        if !matches!(self.daemon, Daemon::Down(_)) {
+        if self.daemon == Daemon::Up {
             return true;
+        }
+        if self.keep_direct {
+            tracing::info!("InputPlumber is back; waiting for the game started without it to end");
+            return false;
         }
         let taken = self.client.version().and_then(|version| {
             tracing::info!(%version, "InputPlumber is back; taking the controllers again");
             self.client.set_manage_all(true)
         });
-        match taken {
-            Ok(()) => {
-                self.daemon = Daemon::Up;
-                true
-            }
-            Err(err) => {
-                tracing::warn!("InputPlumber came back but refused the controllers: {err}");
-                false
-            }
+        if let Err(err) = taken {
+            tracing::warn!("InputPlumber came back but refused the controllers: {err}");
+            return false;
         }
-    }
-
-    /// InputPlumber didn't come back: gilrs reads the controllers from now on, into the same
-    /// activity and action channel, and the session learns it can't remap live anymore.
-    fn fall_back(&mut self, tx: &Sender<Action>) {
-        if self.daemon == Daemon::Replaced {
-            return;
+        if let Some(stop) = self.gilrs.take() {
+            stop.store(true, Ordering::Release);
         }
-        tracing::warn!("InputPlumber didn't come back; reading controllers with gilrs");
-        self.daemon = Daemon::Replaced;
-        // Its thread keeps running on its own.
-        let mut gilrs = super::gilrs::GilrsBackend::with_activity(self.activity.clone());
-        if let Err(err) = gilrs.start(tx.clone()) {
-            tracing::error!("starting gilrs failed, keyboard only: {err}");
-        }
-        self.control.fall_back(FALLBACK_NOTICE);
+        self.daemon = Daemon::Up;
+        self.control.report(InputStatus::Back);
+        true
     }
 
     fn on_command(&mut self, command: InputCommand) {
         tracing::debug!(?command, "input command");
+        if let InputCommand::KeepDirect(keep) = command {
+            self.keep_direct = keep;
+            if !keep && self.daemon_present {
+                self.daemon_back();
+            }
+            return;
+        }
         if self.daemon != Daemon::Up {
             // Remember the mode and profile for when the daemon is back; nothing to call now.
             match command {
@@ -505,6 +523,8 @@ impl Worker {
                     self.released = true;
                     let _ = done.send(());
                 }
+                // Handled above.
+                InputCommand::KeepDirect(_) => {}
             }
             return;
         }
@@ -521,6 +541,8 @@ impl Worker {
                 }
             }
             InputCommand::GameProfile(profile) => self.game_profile = profile,
+            // Handled above.
+            InputCommand::KeepDirect(_) => {}
             InputCommand::Release(done) => {
                 tracing::info!("handing the controllers back to InputPlumber");
                 self.released = true;

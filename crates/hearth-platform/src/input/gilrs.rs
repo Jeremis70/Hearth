@@ -4,6 +4,8 @@
 //! running game still sees the controller. That is fine on the laptop; the appliance uses
 //! InputPlumber instead (TODO(M3)).
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -27,6 +29,8 @@ pub struct GilrsBackend {
     activity: PadActivity,
     /// Sends actions (an observer only keeps `activity` current).
     emits: bool,
+    /// Set to end the thread (InputPlumber is back).
+    stop: Arc<AtomicBool>,
 }
 
 /// gilrs has no SDL mapping for InputPlumber's virtual Elite pad and names its buttons by
@@ -47,6 +51,7 @@ impl Default for GilrsBackend {
             started: false,
             activity: PadActivity::new(),
             emits: true,
+            stop: Arc::default(),
         }
     }
 }
@@ -64,6 +69,11 @@ impl GilrsBackend {
             activity,
             ..Self::default()
         }
+    }
+
+    /// Setting it ends the input thread (within [`IDLE_WAIT`]).
+    pub fn stopper(&self) -> Arc<AtomicBool> {
+        self.stop.clone()
     }
 
     /// A backend that only keeps its [`PadActivity`] current (held inputs, raw stick and
@@ -91,6 +101,7 @@ impl InputBackend for GilrsBackend {
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let activity = self.activity.clone();
         let emits = self.emits;
+        let stop = self.stop.clone();
         thread::Builder::new()
             .name("hearth-gilrs".into())
             .spawn(move || {
@@ -102,7 +113,7 @@ impl InputBackend for GilrsBackend {
                     }
                 };
                 let _ = ready_tx.send(Ok(()));
-                run(gilrs, &tx, &activity, emits);
+                run(gilrs, &tx, &activity, emits, &stop);
             })
             .map_err(|err| InputError::Start(err.to_string()))?;
         ready_rx
@@ -161,7 +172,13 @@ fn trigger(pad: gilrs::Gamepad<'_>, button: Button, axis: Axis) -> f32 {
     }
 }
 
-fn run(mut gilrs: Gilrs, tx: &Sender<Action>, activity: &PadActivity, emits: bool) {
+fn run(
+    mut gilrs: Gilrs,
+    tx: &Sender<Action>,
+    activity: &PadActivity,
+    emits: bool,
+    stop: &AtomicBool,
+) {
     for (_, pad) in gilrs.gamepads() {
         tracing::info!(name = pad.name(), "controller connected");
     }
@@ -171,7 +188,7 @@ fn run(mut gilrs: Gilrs, tx: &Sender<Action>, activity: &PadActivity, emits: boo
     // Extra buttons held (gilrs has no `Button` for them), by Hearth name.
     let mut extras: Vec<&'static str> = Vec::new();
     let mut pads_refreshed = Instant::now();
-    loop {
+    while !stop.load(Ordering::Acquire) {
         let now = Instant::now();
         let wait = state.deadline().map_or(IDLE_WAIT, |d| {
             d.saturating_duration_since(now).min(IDLE_WAIT)

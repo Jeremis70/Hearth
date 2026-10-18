@@ -104,10 +104,17 @@ pub fn game_input(
             dolphin_input::translate(mapping, &emulator_device)
         }
         EmulatorKind::Retroarch => {
-            match (mapping, retroarch_input::core_table(system.id.as_str())) {
+            // RetroArch reads only the joypad profile Hearth gives it (never a built-in one,
+            // whose Guide opens its menu): the virtual pad's, or the physical pad's copy.
+            let found = match pad {
+                PadTarget::Virtual => Some(Autoconfig::virtual_pad()),
+                PadTarget::Physical => {
+                    Autoconfig::find(retroarch.autoconfig_dir(), &emulator_device)
+                }
+            };
+            autoconfig = found.as_ref().map(|a| a.path.clone());
+            let mut translation = match (mapping, retroarch_input::core_table(system.id.as_str())) {
                 (Some(mapping), Some(core)) => {
-                    let found = Autoconfig::find(retroarch.autoconfig_dir(), &emulator_device);
-                    autoconfig = found.as_ref().map(|a| a.path.clone());
                     retroarch_input::translate(mapping, &core, found.as_ref())
                 }
                 _ => Translation {
@@ -117,9 +124,25 @@ pub fn game_input(
                     )],
                     ..Translation::default()
                 },
+            };
+            match &found {
+                Some(found) => {
+                    translation.files.push(found.hearth_copy());
+                    translation
+                        .settings
+                        .push(("input_joypad_driver".into(), found.driver().into()));
+                }
+                None => translation.warnings.push(format!(
+                    "RetroArch: no joypad profile for \"{}\"; the controller won't work in the game",
+                    emulator_device.os_name
+                )),
             }
+            translation
         }
     };
+    if pad == PadTarget::Virtual {
+        translation.env.extend(only_the_virtual_pad());
+    }
     if let Some(profile) = &profile {
         translation
             .warnings
@@ -142,6 +165,18 @@ pub fn game_input(
         profile,
         autoconfig,
     }
+}
+
+/// The emulator sees InputPlumber's virtual pad and nothing else: no raw controller (it shows
+/// up for a moment when a pad reconnects, before InputPlumber hides it) and no other virtual
+/// device. SDL's allowlist, honored by Dolphin (SDL3) and RetroArch's `sdl2` driver.
+fn only_the_virtual_pad() -> Vec<(String, String)> {
+    let pad = ControllerIdentity::virtual_pad();
+    let id = |v: Option<u16>| v.unwrap_or_default();
+    vec![(
+        "SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT".into(),
+        format!("0x{:04x}/0x{:04x}", id(pad.vendor_id), id(pad.product_id)),
+    )]
 }
 
 impl GameInput {
@@ -259,6 +294,9 @@ impl GameInput {
         if let Some(profile) = &self.profile {
             out.push_str("\n--- InputPlumber profile\n");
             out.push_str(&profile.yaml);
+        }
+        for (key, value) in &self.translation.env {
+            let _ = writeln!(out, "\nenvironment: {key}={value}");
         }
         if !self.translation.settings.is_empty() {
             out.push_str("\n--- retroarch.cfg (input settings)\n");

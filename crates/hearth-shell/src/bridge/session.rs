@@ -678,8 +678,15 @@ impl Controller {
                 command
             }
         };
+        command.env.extend(
+            input
+                .translation
+                .env
+                .iter()
+                .map(|(k, v)| (k.into(), v.into())),
+        );
         let retroarch = emulator.kind == EmulatorKind::Retroarch;
-        if retroarch && !self.profile.has_autoconfig() {
+        if retroarch && input.autoconfig.is_none() {
             self.toast("No controller profiles for RetroArch: the pad won't work in the game");
         } else if !self.compositor.controls_focus() {
             self.toast("No overlay outside gamescope: hold the Guide button to close the game");

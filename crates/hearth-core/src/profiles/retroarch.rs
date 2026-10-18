@@ -2,8 +2,10 @@
 //!
 //! Hearth generates its own `retroarch.cfg` under `root` and launches
 //! `retroarch --config <cfg> -L <core> <rom>`, so `~/.config/retroarch` is never read or
-//! written. Every writable directory lives under `root`; the only outside path is the joypad
-//! autoconfig folder, which is read-only.
+//! written. Every writable directory lives under `root`, joypad profiles included: RetroArch
+//! reads `<root>/autoconfig`, where each launch puts only the profile Hearth chose (InputPlumber's
+//! virtual pad, or a copy of the system profile of the physical pad), so no built-in profile
+//! ever loads.
 //!
 //! The Guide button must only ever reach Hearth. Autoconfig profiles bind it to the menu
 //! (`input_menu_toggle_btn`), and RetroArch falls back to the profile whenever our bind is
@@ -168,7 +170,7 @@ impl RetroArchProfile {
         }
     }
 
-    /// Uses another (read-only) joypad autoconfig folder.
+    /// Uses another (read-only) folder of system joypad profiles.
     pub fn with_autoconfig_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.autoconfig_dir = dir.into();
         self
@@ -179,9 +181,14 @@ impl RetroArchProfile {
         self.root.join("retroarch.cfg")
     }
 
-    /// The joypad autoconfig folder RetroArch will read.
+    /// The system's joypad profiles (read-only), which Hearth copies from.
     pub fn autoconfig_dir(&self) -> &Path {
         &self.autoconfig_dir
+    }
+
+    /// The joypad profile folder RetroArch reads: Hearth's, refilled on every launch.
+    pub fn hearth_autoconfig_dir(&self) -> PathBuf {
+        self.root.join("autoconfig")
     }
 
     /// Whether joypad profiles are installed (without them RetroArch maps no controller).
@@ -212,7 +219,7 @@ impl RetroArchProfile {
         }
         line(
             "joypad_autoconfig_dir",
-            &self.autoconfig_dir.to_string_lossy(),
+            &self.hearth_autoconfig_dir().to_string_lossy(),
         );
         for (key, sub) in DIRS.iter().chain(FILES) {
             line(key, &self.root.join(sub).to_string_lossy());
@@ -241,6 +248,11 @@ impl RetroArchProfile {
         }
         let path = self.config_path();
         fs::write(&path, self.config_text_with(&input.settings))?;
+        // Only this launch's profile: an old one could still match and win.
+        match fs::remove_dir_all(self.hearth_autoconfig_dir()) {
+            Err(err) if err.kind() != io::ErrorKind::NotFound => return Err(err),
+            _ => {}
+        }
         for (rel, text) in &input.files {
             let file = self.root.join(rel);
             if let Some(dir) = file.parent() {
@@ -314,7 +326,7 @@ mod tests {
     fn writable_paths_stay_under_root() {
         let profile = RetroArchProfile::new("/dev-data/retroarch");
         for (key, value) in values(&profile.config_text()) {
-            if value.starts_with('/') && key != "joypad_autoconfig_dir" {
+            if value.starts_with('/') {
                 assert!(value.starts_with("/dev-data/retroarch/"), "{key} = {value}");
             }
         }
@@ -335,7 +347,7 @@ mod tests {
         assert_eq!(get("input_quit_gamepad_combo"), Some("0"));
         assert_eq!(get("config_save_on_exit"), Some("false"));
         assert_eq!(get("video_fullscreen"), Some("true"));
-        assert_eq!(get("joypad_autoconfig_dir"), Some(SYSTEM_AUTOCONFIG_DIR));
+        assert_eq!(get("joypad_autoconfig_dir"), Some("/r/autoconfig"));
         // No gamepad hotkey is left unbound ("nul" would fall back to autoconfig).
         assert!(!v.iter().any(|(k, val)| k.ends_with("_btn") && val == "nul"));
     }
@@ -375,16 +387,30 @@ mod tests {
             "core-a = \"1\"\ncore-b = \"2\"\n",
         )
         .unwrap();
+        let stale = profile.hearth_autoconfig_dir().join("udev/Old Pad.cfg");
+        fs::create_dir_all(stale.parent().unwrap()).unwrap();
+        fs::write(&stale, "input_device = \"Old\"").unwrap();
         let input = Translation {
-            files: vec![("remaps/Core/Core.rmp".into(), "new".into())],
+            files: vec![
+                ("remaps/Core/Core.rmp".into(), "new".into()),
+                ("autoconfig/sdl2/Pad.cfg".into(), "pad".into()),
+            ],
             settings: vec![
                 ("input_hold_fast_forward_btn".into(), "11".into()),
                 ("rewind_enable".into(), "true".into()),
             ],
             core_options: vec![("core-b".into(), "5".into())],
-            warnings: vec![],
+            ..Translation::default()
         };
         let cfg = profile.prepare(&input).unwrap();
+        // Only this launch's joypad profile is left.
+        assert!(!stale.exists());
+        assert!(
+            profile
+                .hearth_autoconfig_dir()
+                .join("sdl2/Pad.cfg")
+                .is_file()
+        );
         let v = values(&fs::read_to_string(cfg).unwrap());
         let get = |k: &str| {
             v.iter()

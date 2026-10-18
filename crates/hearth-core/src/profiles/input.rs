@@ -13,6 +13,8 @@ pub struct Translation {
     pub core_options: Vec<(String, String)>,
     /// Options or bindings that couldn't be honored (each also logged at launch).
     pub warnings: Vec<String>,
+    /// Environment variables for the emulator (the device allowlist with InputPlumber).
+    pub env: Vec<(String, String)>,
 }
 
 /// What a translator can do; anything else in a mapping is reported and skipped.

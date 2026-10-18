@@ -131,10 +131,28 @@ resume and close it. Verified end to end inside `scripts/run-gamescope.sh` with 
   RetroArch can't read extras; Dolphin reads them through SDL (`Touchpad`, `Misc 1`, `Paddle n`).
 - **Overlay panels** (`ui/overlay/`): the window routes input to `OverlayPanel` (none, menu,
   controls, notice); the quick menu is its own component.
+- **Highlights:** `assets/controllers/generic/<id>.svg`, one per input shape (sticks: ring for
+  movement, cap for the click), generated from the drawing with fill, outline and glow baked in
+  (same command as the anchors). The focused input's is tinted with the accent over the drawing.
+  Callout rows prefer reading order (D-pad up, left, right, down) when some elbows and a small
+  column shift keep lines clear; otherwise rows are matched by length.
+- **Button test** is `ControlsScreen` with `test-mode`: callouts show the input's name and live
+  state (held inputs lit, several at once; trigger % with a bar; raw stick values and a dot in
+  the ring), Guide below the drawing, header with controller, connection and battery.
+- **Raw input:** gilrs runs without its deadzone/jitter filters (only the D-pad hat conversion),
+  so drift is visible; navigation keeps its own 0.5 threshold. `PadActivity::analog()` has the
+  first pad's raw sticks and triggers; `PadInfo` has `connection` (from SDL's GUID bus) and
+  `power`. `cargo run -p hearth-platform --example pad_probe -- 10` lists pads and raw events.
+  On the DualSense gilrs delivers every standard button and PS, not the touchpad click (separate
+  evdev device) nor the mic button (not reported by hid-playstation).
 
 ## 2. Known issues and untested areas
 
 **Untested or unverified**
+- **Navigation with raw gilrs events:** stick and D-pad navigation in menus with a real pad
+  after dropping gilrs's deadzone/jitter filters (only dev-socket input was tried).
+- **Button test with real presses:** held highlights, trigger bars and the stick dot were only
+  unit-tested; values show 0.00 until the stick first moves.
 - **Capture with a real button press:** only sent through the dev socket. Create on the DualSense
   should give the toast in menus and the notice in game (and do nothing in the game).
 - **Share / Elite paddle raw codes** (xpad `KEY_RECORD`, `BTN_TRIGGER_HAPPY5–8`, hid-nintendo

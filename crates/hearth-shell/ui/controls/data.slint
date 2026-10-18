@@ -22,6 +22,12 @@ export struct Callout {
     ey: float,
     ax: float,
     ay: float,
+    // Button test: `label` is the live state after the input's name (" · 43 %").
+    held: bool,         // pressed (lit like the focused callout)
+    bar: float,         // trigger travel 0..1, -1: no bar
+    has-dot: bool,      // stick position dot at (dot-x, dot-y), page pixels
+    dot-x: float,
+    dot-y: float,
 }
 
 // One entry of the "what can this button do" menu.
@@ -42,14 +48,6 @@ export struct OptionRow {
     kind: int,          // 0 toggle, 1 stepper (left/right), 2 action (reset)
 }
 
-// One input on the button test drawing.
-export struct TestInput {
-    input: string,
-    ax: float,
-    ay: float,
-    pressed: bool,
-}
-
 export global ControlsData {
     in property <string> title;             // "GameCube"
     in property <string> scope-line;        // "All GameCube games" / "Twilight Princess only"
@@ -57,8 +55,6 @@ export global ControlsData {
     in property <string> message;           // short feedback ("Z and R swapped"), empty: none
     in property <string> changed-label;     // what the dot means on this page
     in property <string> reset-message;     // what Reset goes back to
-    in property <float> drawing-width: 760;  // drawing units (button test)
-    in property <float> drawing-height: 460;
     in property <float> draw-x;              // the drawing on the controls page, page pixels
     in property <float> draw-y;
     in property <float> draw-w;
@@ -70,7 +66,6 @@ export global ControlsData {
     in property <int> down-right;
     in property <[Choice]> choices;
     in property <[OptionRow]> options;
-    in property <[TestInput]> test-inputs;
 
     // Fills `choices` for `input`; returns the index of its current target.
     callback request-choices(/* input */ string) -> int;

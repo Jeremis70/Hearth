@@ -9,11 +9,12 @@ use hearth_core::controls::{EmulatorAction, HearthAction, Mapping, PadInput, Tar
 use hearth_core::profiles::input::Capabilities;
 use hearth_core::profiles::{dolphin_input, retroarch_input};
 use hearth_core::systems::{ControlKind, EmulatorKind, System};
-use slint::{ModelRc, VecModel};
+use hearth_platform::input::{Analog, Connection, PadInfo, Power};
+use slint::{Model, ModelRc, VecModel};
 
 use crate::callouts::{self, Align, Placed, Point};
 use crate::controller_layout::{Layout, Side};
-use crate::{Callout, Choice, ControlsData, OptionRow, TestInput};
+use crate::{Callout, Choice, ControlsData, OptionRow};
 
 /// Pushes a changed mapping to a game that is already running.
 ///
@@ -147,7 +148,7 @@ impl Page {
     }
 
     fn callout(&self, placed: &Placed, current: &Mapping, base: &Mapping) -> Callout {
-        let input = placed.input;
+        let input = PadInput::from_name(placed.input).expect("the controls page lists pad inputs");
         let target = current.binds.get(&input).cloned().unwrap_or(Target::None);
         let below = base.binds.get(&input).cloned().unwrap_or(Target::None);
         let (label, hint, unassigned) = match self.target_label(&target) {
@@ -163,30 +164,12 @@ impl Page {
                 true,
             ),
         };
-        let [line_start, elbow, end] = placed.leader.unwrap_or([Point { x: 0.0, y: 0.0 }; 3]);
         Callout {
-            input: input.name().into(),
             label: label.into(),
             hint: hint.into(),
             unassigned,
             changed: target != below,
-            side: match placed.side {
-                Side::Left => 0,
-                Side::Right => 1,
-                Side::Bottom => 2,
-            },
-            glyph_last: placed.align == Align::GlyphLast,
-            bx: placed.label.x,
-            by: placed.label.y,
-            bw: placed.label.w,
-            bh: placed.label.h,
-            has_line: placed.leader.is_some(),
-            lx: line_start.x,
-            ly: line_start.y,
-            ex: elbow.x,
-            ey: elbow.y,
-            ax: end.x,
-            ay: end.y,
+            ..geometry(placed)
         }
     }
 
@@ -227,29 +210,9 @@ impl Page {
             }
             .into(),
         );
-        let draw = callouts::drawing(&self.layout);
-        data.set_draw_x(draw.x);
-        data.set_draw_y(draw.y);
-        data.set_draw_w(draw.w);
-        data.set_draw_h(draw.h);
-        let placed = callouts::place(&self.layout, &self.extras);
-        let count = |side| {
-            let n = placed.iter().filter(|p| p.side == side).count();
-            i32::try_from(n).unwrap_or(0)
-        };
-        data.set_left_count(count(Side::Left));
-        data.set_right_count(count(Side::Right));
-        // Going down from a column lands on the bottom callout nearest the middle on that side.
-        let first_bottom = count(Side::Left) + count(Side::Right);
-        let middle = callouts::PAGE_W / 2.0;
-        let bottom: Vec<_> = placed.iter().filter(|p| p.side == Side::Bottom).collect();
-        let left_of_middle = bottom
-            .iter()
-            .filter(|p| p.label.x + p.label.w / 2.0 < middle)
-            .count();
-        let at = |i: usize| first_bottom + i32::try_from(i).unwrap_or(0);
-        data.set_down_left(at(left_of_middle.saturating_sub(1)));
-        data.set_down_right(at(left_of_middle.min(bottom.len().saturating_sub(1))));
+        let extras: Vec<&'static str> = self.extras.iter().map(|i| i.name()).collect();
+        let placed = callouts::place(&self.layout, &extras);
+        set_geometry(data, &self.layout, &placed);
         data.set_callouts(model(
             placed
                 .iter()
@@ -561,37 +524,214 @@ impl Page {
     }
 }
 
-/// The button test's inputs, lit when held.
-pub fn test_inputs(pressed: &[&str]) -> ModelRc<TestInput> {
-    let layout = Layout::generic();
-    model(
-        layout
-            .anchors
-            .iter()
-            .filter(|a| a.input != PadInput::L3 && a.input != PadInput::R3)
-            .map(|a| {
-                let name = a.input.name();
-                let held = pressed.contains(&name)
-                    || (a.input == PadInput::LeftStick && pressed.contains(&"l3"))
-                    || (a.input == PadInput::RightStick && pressed.contains(&"r3"));
-                TestInput {
-                    input: name.into(),
-                    ax: a.x,
-                    ay: a.y,
-                    pressed: held,
-                }
-            })
-            .collect(),
-    )
+/// A callout's place on the page, with empty text and no live state.
+fn geometry(placed: &Placed) -> Callout {
+    let [line_start, elbow, end] = placed.leader.unwrap_or([Point { x: 0.0, y: 0.0 }; 3]);
+    Callout {
+        input: placed.input.into(),
+        label: "".into(),
+        hint: "".into(),
+        unassigned: false,
+        changed: false,
+        side: match placed.side {
+            Side::Left => 0,
+            Side::Right => 1,
+            Side::Bottom => 2,
+        },
+        glyph_last: placed.align == Align::GlyphLast,
+        bx: placed.label.x,
+        by: placed.label.y,
+        bw: placed.label.w,
+        bh: placed.label.h,
+        has_line: placed.leader.is_some(),
+        lx: line_start.x,
+        ly: line_start.y,
+        ex: elbow.x,
+        ey: elbow.y,
+        ax: end.x,
+        ay: end.y,
+        held: false,
+        bar: -1.0,
+        has_dot: false,
+        dot_x: 0.0,
+        dot_y: 0.0,
+    }
 }
 
-/// The drawing size, for the button test.
-pub fn set_drawing(data: &ControlsData<'_>) {
-    let layout = Layout::generic();
-    data.set_drawing_width(layout.width);
-    data.set_drawing_height(layout.height);
+/// The drawing's place, the column sizes and where going down from each column lands.
+fn set_geometry(data: &ControlsData<'_>, layout: &Layout, placed: &[Placed]) {
+    let draw = callouts::drawing(layout);
+    data.set_draw_x(draw.x);
+    data.set_draw_y(draw.y);
+    data.set_draw_w(draw.w);
+    data.set_draw_h(draw.h);
+    let count = |side| {
+        let n = placed.iter().filter(|p| p.side == side).count();
+        i32::try_from(n).unwrap_or(0)
+    };
+    data.set_left_count(count(Side::Left));
+    data.set_right_count(count(Side::Right));
+    // Going down from a column lands on the bottom callout nearest the middle on that side.
+    let first_bottom = count(Side::Left) + count(Side::Right);
+    let middle = callouts::PAGE_W / 2.0;
+    let bottom: Vec<_> = placed.iter().filter(|p| p.side == Side::Bottom).collect();
+    let left_of_middle = bottom
+        .iter()
+        .filter(|p| p.label.x + p.label.w / 2.0 < middle)
+        .count();
+    let at = |i: usize| first_bottom + i32::try_from(i).unwrap_or(0);
+    data.set_down_left(at(left_of_middle.saturating_sub(1)));
+    data.set_down_right(at(left_of_middle.min(bottom.len().saturating_sub(1))));
+}
+
+/// The button test: the controls page's drawing and callouts showing each input's live state.
+pub struct TestPage {
+    placed: Vec<Placed>,
+    callouts: Rc<VecModel<Callout>>,
+}
+
+impl TestPage {
+    /// A test page listing the drawing's inputs and `extras` ("guide", "share", …).
+    pub fn new(extras: &[&'static str]) -> Self {
+        let placed = callouts::place(&Layout::generic(), extras);
+        let callouts = Rc::new(VecModel::from(
+            placed.iter().map(geometry).collect::<Vec<_>>(),
+        ));
+        Self { placed, callouts }
+    }
+
+    /// Fills the page; `controller` is the header line (name, connection, battery).
+    pub fn fill(&self, data: &ControlsData<'_>, controller: &str) {
+        data.set_title("Button test".into());
+        data.set_scope_line(controller.into());
+        data.set_note("".into());
+        data.set_message("".into());
+        set_geometry(data, &Layout::generic(), &self.placed);
+        data.set_callouts(ModelRc::from(self.callouts.clone()));
+    }
+
+    /// Shows what is held (`pressed`, Hearth pad position names) and the raw analog values.
+    pub fn update(&self, pressed: &[&str], analog: &Analog) {
+        for (row, placed) in self.placed.iter().enumerate() {
+            let mut callout = geometry(placed);
+            callout.held = pressed.contains(&placed.input);
+            let trigger = match placed.input {
+                "l2" => Some(analog.l2),
+                "r2" => Some(analog.r2),
+                _ => None,
+            };
+            let stick = match placed.input {
+                "left_stick" => Some(analog.left),
+                "right_stick" => Some(analog.right),
+                _ => None,
+            };
+            if let Some(value) = trigger {
+                callout.label = format!(" · {:.0} %", value * 100.0).into();
+                callout.bar = value;
+            }
+            if let Some((x, y)) = stick {
+                callout.label = format!(" · {}, {}", number(x), number(y)).into();
+                if let Some((center, radius)) = placed.shape {
+                    // Up is positive on the stick, down on the screen.
+                    callout.has_dot = true;
+                    callout.dot_x = center.x + x.clamp(-1.0, 1.0) * radius * 0.8;
+                    callout.dot_y = center.y - y.clamp(-1.0, 1.0) * radius * 0.8;
+                }
+            }
+            if self.callouts.row_data(row).as_ref() != Some(&callout) {
+                self.callouts.set_row_data(row, callout);
+            }
+        }
+    }
+}
+
+/// A raw axis value for display: two decimals, a real minus sign, no "-0.00".
+fn number(v: f32) -> String {
+    let v = if v.abs() < 0.005 { 0.0 } else { v };
+    format!("{v:.2}").replace('-', "\u{2212}")
+}
+
+/// The button test's header line: "DualSense Wireless Controller · Bluetooth · Battery 25 %".
+pub fn controller_line(name: &str, pad: Option<&PadInfo>) -> String {
+    let Some(pad) = pad else {
+        return "No controller connected".to_owned();
+    };
+    let mut parts = vec![name.to_owned()];
+    match pad.connection {
+        Connection::Usb => parts.push("USB".to_owned()),
+        Connection::Bluetooth => parts.push("Bluetooth".to_owned()),
+        Connection::Other => {}
+    }
+    match pad.power {
+        Power::Discharging(p) => parts.push(format!("Battery {p} %")),
+        Power::Charging(p) => parts.push(format!("Charging {p} %")),
+        Power::Charged => parts.push("Fully charged".to_owned()),
+        Power::Wired | Power::Unknown => {}
+    }
+    parts.join(" · ")
 }
 
 fn model<T: Clone + 'static>(items: Vec<T>) -> ModelRc<T> {
     ModelRc::from(Rc::new(VecModel::from(items)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(page: &TestPage, input: &str) -> Callout {
+        let i = page.placed.iter().position(|p| p.input == input).unwrap();
+        page.callouts.row_data(i).unwrap()
+    }
+
+    #[test]
+    fn button_test_shows_held_inputs_and_raw_values() {
+        let page = TestPage::new(&["guide"]);
+        let analog = Analog {
+            left: (0.12, -0.03),
+            right: (0.0, 0.0),
+            l2: 0.43,
+            r2: 0.0,
+        };
+        page.update(&["south", "l3", "guide"], &analog);
+        assert!(row(&page, "south").held);
+        assert!(row(&page, "l3").held);
+        assert!(row(&page, "guide").held);
+        assert!(!row(&page, "east").held);
+        let l2 = row(&page, "l2");
+        assert_eq!(l2.label, " · 43 %");
+        assert!((l2.bar - 0.43).abs() < 1e-6);
+        assert!(row(&page, "south").bar < 0.0);
+        let left = row(&page, "left_stick");
+        assert_eq!(left.label, " · 0.12, \u{2212}0.03");
+        assert!(left.has_dot);
+        // Right of the ring's center and (stick slightly down) slightly below it.
+        let right = row(&page, "right_stick");
+        let center = page
+            .placed
+            .iter()
+            .find(|p| p.input == "left_stick")
+            .and_then(|p| p.shape)
+            .unwrap()
+            .0;
+        assert!(left.dot_x > center.x && left.dot_y > center.y);
+        assert_eq!(right.label, " · 0.00, 0.00");
+    }
+
+    #[test]
+    fn controller_line_names_connection_and_battery() {
+        let pad = PadInfo {
+            name: "PS5 Controller".into(),
+            os_name: String::new(),
+            vendor_id: None,
+            product_id: None,
+            connection: Connection::Bluetooth,
+            power: Power::Discharging(25),
+        };
+        assert_eq!(
+            controller_line("DualSense Wireless Controller", Some(&pad)),
+            "DualSense Wireless Controller · Bluetooth · Battery 25 %"
+        );
+        assert_eq!(controller_line("x", None), "No controller connected");
+    }
 }

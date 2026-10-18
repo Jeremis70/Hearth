@@ -6,8 +6,6 @@
 //! PS5's controller screen. A small search then swaps rows or moves elbows until no two lines
 //! cross and no line crosses a label (`no_leader_lines_cross` checks the result).
 
-use hearth_core::controls::PadInput;
-
 use crate::controller_layout::{Layout, Side};
 
 /// Page size the geometry is computed for.
@@ -64,12 +62,15 @@ pub enum Align {
 /// One placed callout.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Placed {
-    pub input: PadInput,
+    /// Hearth pad input name ("south", "l3"), or "guide" on the button test.
+    pub input: &'static str,
     pub side: Side,
     pub label: Rect,
     pub align: Align,
     /// Label edge, elbow, anchor; none for inputs that aren't on the drawing.
     pub leader: Option<[Point; 3]>,
+    /// Center and radius of the input's shape (inscribed circle), if it is on the drawing.
+    pub shape: Option<(Point, f32)>,
 }
 
 /// The drawing's rectangle on the page.
@@ -85,8 +86,9 @@ pub fn drawing(layout: &Layout) -> Rect {
 }
 
 /// Every callout: the left column top to bottom, then the right column, then the bottom row
-/// left to right. `extras` (touchpad, share, paddles) have no shape and go on the bottom row.
-pub fn place(layout: &Layout, extras: &[PadInput]) -> Vec<Placed> {
+/// left to right. `extras` (touchpad, share, paddles, guide) have no shape and go on the
+/// bottom row.
+pub fn place(layout: &Layout, extras: &[&'static str]) -> Vec<Placed> {
     let draw = drawing(layout);
     let k = draw.h / layout.height;
     let columns = [Side::Left, Side::Right].map(|side| {
@@ -104,7 +106,7 @@ pub fn place(layout: &Layout, extras: &[PadInput]) -> Vec<Placed> {
                     w: a.w * k,
                     h: a.h * k,
                 };
-                (a.input, p, shape)
+                (a.input.name(), p, shape)
             })
             .collect();
         Column::new(side, anchors)
@@ -158,7 +160,7 @@ struct Column {
     side: Side,
     /// Input, anchor and shape, top to bottom, then left to right (D-pad: up, left, right,
     /// down).
-    anchors: Vec<(PadInput, Point, Rect)>,
+    anchors: Vec<(&'static str, Point, Rect)>,
     /// Where lines leave the labels.
     edge: f32,
     label_x: f32,
@@ -169,7 +171,7 @@ struct Column {
 }
 
 impl Column {
-    fn new(side: Side, mut anchors: Vec<(PadInput, Point, Rect)>) -> Self {
+    fn new(side: Side, mut anchors: Vec<(&'static str, Point, Rect)>) -> Self {
         anchors.sort_by(|a, b| a.1.y.total_cmp(&b.1.y).then(a.1.x.total_cmp(&b.1.x)));
         let middle = match (anchors.first(), anchors.last()) {
             (Some(first), Some(last)) => (first.1.y + last.1.y) / 2.0,
@@ -277,6 +279,7 @@ impl Column {
                         elbow,
                         at_edge(anchor, shape, elbow),
                     ]),
+                    shape: Some((anchor, shape.w.min(shape.h) / 2.0)),
                 }
             })
             .collect()
@@ -291,7 +294,7 @@ fn reading_order_elbows(
     rows: &[f32],
     edge: f32,
     shared: f32,
-    anchors: &[(PadInput, Point, Rect)],
+    anchors: &[(&'static str, Point, Rect)],
     labels: &[Rect],
     avoid_shapes: Option<f32>,
 ) -> Option<Vec<f32>> {
@@ -392,7 +395,7 @@ fn shrunk(r: Rect, f: f32) -> Rect {
 fn shortest_matching(
     rows: &[f32],
     elbow_x: f32,
-    anchors: &[(PadInput, Point, Rect)],
+    anchors: &[(&'static str, Point, Rect)],
 ) -> Vec<usize> {
     let n = rows.len();
     let cost: Vec<Vec<f32>> = rows
@@ -457,7 +460,7 @@ fn search(
 
 /// Select and Start below the drawing, glyphs pulled toward the middle and lines rising
 /// between the sticks; extras alternate right, then left, outside them.
-fn bottom_row(layout: &Layout, draw: Rect, extras: &[PadInput]) -> Vec<Placed> {
+fn bottom_row(layout: &Layout, draw: Rect, extras: &[&'static str]) -> Vec<Placed> {
     let k = draw.h / layout.height;
     let middle = PAGE_W / 2.0;
     let mut placed = Vec::new();
@@ -486,7 +489,7 @@ fn bottom_row(layout: &Layout, draw: Rect, extras: &[PadInput]) -> Vec<Placed> {
             h: ROW_H,
         };
         placed.push(Placed {
-            input: a.input,
+            input: a.input.name(),
             side: Side::Bottom,
             label,
             align: if left {
@@ -512,6 +515,7 @@ fn bottom_row(layout: &Layout, draw: Rect, extras: &[PadInput]) -> Vec<Placed> {
                     },
                 ),
             ]),
+            shape: Some((anchor, shape.w.min(shape.h) / 2.0)),
         });
     }
     let w = if extras.len() > 4 {
@@ -532,7 +536,7 @@ fn bottom_row(layout: &Layout, draw: Rect, extras: &[PadInput]) -> Vec<Placed> {
             left - BOTTOM_GAP - w
         };
         if x < SAFE_X || x + w > PAGE_W - SAFE_X {
-            tracing::warn!(%input, "no room for this input's callout");
+            tracing::warn!(input, "no room for this input's callout");
             continue;
         }
         if on_right {
@@ -555,6 +559,7 @@ fn bottom_row(layout: &Layout, draw: Rect, extras: &[PadInput]) -> Vec<Placed> {
                 Align::GlyphLast
             },
             leader: None,
+            shape: None,
         });
     }
     placed.sort_by(|a, b| a.label.x.total_cmp(&b.label.x));
@@ -698,7 +703,7 @@ mod tests {
         (lines, labels)
     }
 
-    fn check(extras: &[PadInput]) {
+    fn check(extras: &[&'static str]) {
         let layout = Layout::generic();
         let placed = place(&layout, extras);
         for (size, s) in [("1920×1080", 1.0), ("1280×720", 1280.0 / 1920.0)] {
@@ -736,14 +741,11 @@ mod tests {
     #[test]
     fn no_leader_lines_cross() {
         check(&[]);
-        check(&[PadInput::Touchpad]);
-        check(&[
-            PadInput::Touchpad,
-            PadInput::Paddle1,
-            PadInput::Paddle2,
-            PadInput::Paddle3,
-            PadInput::Paddle4,
-        ]);
+        check(&["touchpad"]);
+        // The button test's extras.
+        check(&["guide"]);
+        check(&["guide", "share"]);
+        check(&["touchpad", "paddle1", "paddle2", "paddle3", "paddle4"]);
     }
 
     #[test]
@@ -777,27 +779,19 @@ mod tests {
         let placed = place(&Layout::generic(), &[]);
         let left: Vec<_> = placed.iter().filter(|c| c.side == Side::Left).collect();
         assert_eq!(left.len(), 8);
-        assert_eq!(left[0].input, PadInput::L2);
+        assert_eq!(left[0].input, "l2");
         let dpad: Vec<_> = left
             .iter()
             .map(|c| c.input)
-            .filter(|i| i.name().starts_with("dpad_"))
+            .filter(|i| i.starts_with("dpad_"))
             .collect();
-        assert_eq!(
-            dpad,
-            [
-                PadInput::DpadUp,
-                PadInput::DpadLeft,
-                PadInput::DpadRight,
-                PadInput::DpadDown
-            ]
-        );
+        assert_eq!(dpad, ["dpad_up", "dpad_left", "dpad_right", "dpad_down"]);
         let bottom: Vec<_> = placed
             .iter()
             .filter(|c| c.side == Side::Bottom)
             .map(|c| c.input)
             .collect();
-        assert_eq!(bottom, [PadInput::Select, PadInput::Start]);
+        assert_eq!(bottom, ["select", "start"]);
     }
 }
 
@@ -825,7 +819,7 @@ mod preview {
             draw.w,
             draw.h
         );
-        for c in place(&layout, &[PadInput::Touchpad]) {
+        for c in place(&layout, &["touchpad", "guide"]) {
             let r = c.label;
             svg += &format!(
                 "<rect x='{}' y='{}' width='{}' height='{}' fill='none' stroke='#555'/>\

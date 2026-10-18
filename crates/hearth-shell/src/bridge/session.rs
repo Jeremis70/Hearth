@@ -36,7 +36,9 @@ use hearth_platform::input::{Action, PadActivity};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::rc::Rc;
 
-use super::controls_page::{self, ApplyOutcome, EmulatorConfigApplier, MappingApplier, Page};
+use super::controls_page::{
+    self, ApplyOutcome, EmulatorConfigApplier, MappingApplier, Page, TestPage,
+};
 use super::models;
 use crate::controls;
 use crate::{
@@ -1265,13 +1267,32 @@ impl Controller {
             return;
         };
         self.testing = true;
-        controls_page::set_drawing(&app.global::<ControlsData>());
+        let device = controls::device(&self.activity.pads(), &self.controls_dir);
+        // Guide, and the extras gilrs can read (it can't see the touchpad, a separate device).
+        let extras: Vec<&'static str> = std::iter::once("guide")
+            .chain(
+                device
+                    .extra_inputs()
+                    .into_iter()
+                    .filter(|i| *i != PadInput::Touchpad)
+                    .map(PadInput::name),
+            )
+            .collect();
+        let page = TestPage::new(&extras);
+        let name = device.sdl_name.clone();
+        let line = controls_page::controller_line(&name, self.activity.pads().first());
+        page.fill(&app.global::<ControlsData>(), &line);
         let activity = self.activity.clone();
         let weak = self.app.clone();
         let update = move || {
-            if let Some(app) = weak.upgrade() {
-                app.global::<ControlsData>()
-                    .set_test_inputs(controls_page::test_inputs(&activity.pressed()));
+            let Some(app) = weak.upgrade() else {
+                return;
+            };
+            page.update(&activity.pressed(), &activity.analog());
+            let data = app.global::<ControlsData>();
+            let line = controls_page::controller_line(&name, activity.pads().first());
+            if data.get_scope_line() != line.as_str() {
+                data.set_scope_line(line.into());
             }
         };
         update();

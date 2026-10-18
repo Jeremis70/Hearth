@@ -1,6 +1,6 @@
 import { Theme } from "../theme.slint";
 import { UiAction } from "../input.slint";
-import { ButtonGlyph } from "../components/glyphs.slint";
+import { ButtonGlyph, Glyphs, ControllerType } from "../components/glyphs.slint";
 import { HintBar } from "../components/hint_bar.slint";
 import { FocusRing } from "../components/focus.slint";
 import { ConfirmDialog } from "../components/dialog.slint";
@@ -22,6 +22,12 @@ component CalloutBox inherits Rectangle {
     in property <Callout> callout;
     in property <bool> focused;
     in property <int> align;
+    // Button test: the input's name and its live state.
+    in property <bool> test-mode;
+    property <string> text: test-mode
+        ? Glyphs.name(ControllerType.family, callout.input) + callout.label
+        : callout.label;
+    property <color> text-color: !test-mode && callout.unassigned ? Theme.text-disabled : Theme.text-primary;
     border-radius: Theme.radius-md;
     background: focused ? Theme.surface-raised : transparent;
 
@@ -33,15 +39,15 @@ component CalloutBox inherits Rectangle {
         alignment: align == 0 ? end : start;
         if align == 0: ChangedDot {
             y: (parent.height - self.height) / 2;
-            shown: callout.changed;
+            shown: !test-mode && callout.changed;
         }
         if align == 0: Text {
-            text: callout.label;
+            text: root.text;
             vertical-alignment: center;
             horizontal-alignment: right;
             font-size: Theme.body-lg;
             font-weight: Theme.medium;
-            color: callout.unassigned ? Theme.text-disabled : Theme.text-primary;
+            color: text-color;
             overflow: elide;
         }
         ButtonGlyph {
@@ -51,17 +57,26 @@ component CalloutBox inherits Rectangle {
             size: 40px * Theme.scale;
         }
         if align == 1: Text {
-            text: callout.label;
+            text: root.text;
             vertical-alignment: center;
             font-size: Theme.body-lg;
             font-weight: Theme.medium;
-            color: callout.unassigned ? Theme.text-disabled : Theme.text-primary;
+            color: text-color;
             overflow: elide;
         }
         if align == 1: ChangedDot {
             y: (parent.height - self.height) / 2;
-            shown: callout.changed;
+            shown: !test-mode && callout.changed;
         }
+    }
+    // Trigger travel (button test).
+    if callout.bar >= 0: Rectangle {
+        x: Theme.sp-16;
+        y: parent.height - self.height - 6px * Theme.scale;
+        width: (parent.width - 2 * Theme.sp-16) * max(0, min(1, callout.bar));
+        height: 4px * Theme.scale;
+        border-radius: self.height / 2;
+        background: Theme.accent;
     }
     FocusRing {
         shown: focused;
@@ -71,8 +86,13 @@ component CalloutBox inherits Rectangle {
 // The controls page (Settings → Controllers → a console, or the running game's Controls from
 // the overlay or Home). Two tabs: Buttons (controller drawing with a callout per input) and
 // Sticks & options. Every change is saved at once by Rust.
+//
+// With `test-mode` it is the button test (Settings → Controllers → Test buttons): the same
+// drawing and callouts, showing each input's name and live state; held inputs light up. It
+// takes no input (Rust closes it on a long Guide press).
 export component ControlsScreen inherits Rectangle {
     callback close();
+    in property <bool> test-mode: false;
 
     property <int> tab: 0;              // 0 Buttons, 1 Sticks & options
     property <int> index: 0;            // focused callout
@@ -113,6 +133,11 @@ export component ControlsScreen inherits Rectangle {
     function row-of(i: int) -> int {
         i - first-of(side-of(i))
     }
+    // Whether callout `i` is lit: the focused one, or every held input on the button test.
+    function lit(i: int) -> bool {
+        test-mode ? ControlsData.callouts[i].held : i == index && !menu-open
+    }
+
     // Leader line from the callout to its input, in pixels.
     function leader(c: Callout) -> string {
         let k = Theme.scale;
@@ -155,6 +180,7 @@ export component ControlsScreen inherits Rectangle {
     }
 
     public function handle(action: UiAction) -> bool {
+        if test-mode { return true; }
         if confirm-open {
             if action == UiAction.left { confirm-index = 0; }
             if action == UiAction.right { confirm-index = 1; }
@@ -225,7 +251,7 @@ export component ControlsScreen inherits Rectangle {
     Text {
         x: Theme.safe-x;
         y: Theme.safe-y + Theme.sp-24;
-        text: "Controls · " + ControlsData.title;
+        text: test-mode ? "Button test" : "Controls · " + ControlsData.title;
         font-size: Theme.display;
         font-weight: Theme.semibold;
         color: Theme.text-primary;
@@ -238,6 +264,7 @@ export component ControlsScreen inherits Rectangle {
         color: Theme.text-secondary;
     }
     HorizontalLayout {
+        visible: !test-mode;
         x: root.width - Theme.safe-x - self.width;
         y: Theme.safe-y + Theme.sp-24;
         width: self.preferred-width;
@@ -295,7 +322,7 @@ export component ControlsScreen inherits Rectangle {
             source: Highlights.image(c.input);
             colorize: Theme.accent;
             image-fit: contain;
-            opacity: i == index && !menu-open ? 1 : 0;
+            opacity: lit(i) ? 1 : 0;
             animate opacity { duration: Theme.fast; easing: ease-out; }
         }
         for c[i] in ControlsData.callouts: Path {
@@ -309,8 +336,20 @@ export component ControlsScreen inherits Rectangle {
             viewbox-width: root.width / 1px;
             viewbox-height: root.height / 1px;
             commands: c.has-line ? leader(c) : "";
-            stroke: i == index ? Theme.accent : Theme.text-disabled;
-            stroke-width: (i == index ? 3 : 2) * s;
+            stroke: lit(i) ? Theme.accent : Theme.text-disabled;
+            stroke-width: (lit(i) ? 3 : 2) * s;
+        }
+        // Stick positions (button test).
+        for c in ControlsData.callouts: Rectangle {
+            visible: c.has-dot;
+            width: 14 * s;
+            height: self.width;
+            x: ox + c.dot-x * s - self.width / 2;
+            y: c.dot-y * s - self.height / 2;
+            border-radius: self.width / 2;
+            background: Theme.accent;
+            drop-shadow-blur: 8 * s;
+            drop-shadow-color: Theme.focus-glow;
         }
         for c[i] in ControlsData.callouts: CalloutBox {
             x: ox + c.bx * s;
@@ -318,7 +357,8 @@ export component ControlsScreen inherits Rectangle {
             width: c.bw * s;
             height: c.bh * s;
             callout: c;
-            focused: i == index && !menu-open;
+            focused: lit(i);
+            test-mode: root.test-mode;
             align: c.glyph-last ? 0 : 1;
         }
     }
@@ -376,7 +416,7 @@ export component ControlsScreen inherits Rectangle {
         : tab == 0 ? current.hint
         : ControlsData.options[option-index].hint;
     property <bool> panel-changed: !menu-open && (tab == 0 ? current.changed : ControlsData.options[option-index].changed);
-    Rectangle {
+    if !test-mode: Rectangle {
         x: Theme.safe-x;
         y: root.height - Theme.safe-y - Theme.sp-32 - Theme.sp-24 - self.height;
         width: root.width - 2 * Theme.safe-x;
@@ -429,7 +469,9 @@ export component ControlsScreen inherits Rectangle {
         width: root.width - 2 * Theme.safe-x;
         height: Theme.sp-32;
         y: root.height - Theme.safe-y - self.height;
-        hints: menu-open
+        hints: test-mode
+            ? [{ input: "guide", label: "Hold: Exit" }]
+            : menu-open
             ? [{ input: "south", label: "Choose" }, { input: "east", label: "Cancel" }]
             : tab == 0
             ? [{ input: "south", label: "Change" }, { input: "east", label: "Back" }, { input: "l1", input2: "r1", label: "Tabs" }]

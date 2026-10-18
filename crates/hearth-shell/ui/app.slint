@@ -12,10 +12,9 @@ import { OverlayWindow, OverlayPanel } from "overlay/window.slint";
 import { Toast } from "components/toast.slint";
 import { ControllerType } from "components/glyphs.slint";
 import { ControlsScreen } from "controls/screen.slint";
-import { ButtonTest } from "controls/test.slint";
-import { ControlsData, Callout, Choice, OptionRow, TestInput } from "controls/data.slint";
+import { ControlsData, Callout, Choice, OptionRow } from "controls/data.slint";
 
-export { Theme, ControllerType, OverlayWindow, OverlayPanel, HomeData, SettingsData, Status, Session, HomeTile, TileKind, SettingsCategory, WifiRow, ControlsData, Callout, Choice, OptionRow, TestInput }
+export { Theme, ControllerType, OverlayWindow, OverlayPanel, HomeData, SettingsData, Status, Session, HomeTile, TileKind, SettingsCategory, WifiRow, ControlsData, Callout, Choice, OptionRow }
 
 enum Screen { home, settings, placeholder, controls, button-test }
 
@@ -125,7 +124,9 @@ export component AppWindow inherits Window {
             close => { screen = controls-return; }
         }
 
-        ButtonTest {
+        // The button test: the controls page's layout with live input.
+        ControlsScreen {
+            test-mode: true;
             opacity: screen == Screen.button-test ? 1 : 0;
             visible: self.opacity > 0;
             animate opacity { duration: Theme.base; easing: ease-out; }

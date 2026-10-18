@@ -11,7 +11,7 @@ use hearth_core::profiles::{dolphin_input, retroarch_input};
 use hearth_core::systems::{ControlKind, EmulatorKind, System};
 use slint::{ModelRc, VecModel};
 
-use crate::callouts::{self, Align, Placed, Point, Rect};
+use crate::callouts::{self, Align, Placed, Point};
 use crate::controller_layout::{Layout, Side};
 use crate::{Callout, Choice, ControlsData, OptionRow, TestInput};
 
@@ -164,12 +164,6 @@ impl Page {
             ),
         };
         let [line_start, elbow, end] = placed.leader.unwrap_or([Point { x: 0.0, y: 0.0 }; 3]);
-        let shape = placed.shape.unwrap_or(Rect {
-            x: 0.0,
-            y: 0.0,
-            w: 0.0,
-            h: 0.0,
-        });
         Callout {
             input: input.name().into(),
             label: label.into(),
@@ -193,11 +187,6 @@ impl Page {
             ey: elbow.y,
             ax: end.x,
             ay: end.y,
-            has_shape: placed.shape.is_some(),
-            sx: shape.x,
-            sy: shape.y,
-            sw: shape.w,
-            sh: shape.h,
         }
     }
 

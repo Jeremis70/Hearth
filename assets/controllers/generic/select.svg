@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="188.7" height="141.55" viewBox="0 0 188.7 141.55">
+<!-- Generated from generic.svg (select) by the `every_input_has_a_highlight_matching_the_drawing` test; don't edit. -->
+<defs><filter id="glow" filterUnits="userSpaceOnUse" x="0" y="0" width="188.7" height="141.55"><feGaussianBlur stdDeviation="1.4"/></filter></defs>
+<g filter="url(#glow)" opacity="0.55">
+<path d="M86.06 60.12C86.06 62.33 84.27 64.13 82.06 64.13C79.85 64.13 78.06 62.33 78.06 60.12C78.06 57.91 79.85 56.12 82.06 56.12C84.27 56.12 86.06 57.91 86.06 60.12Z" fill="none" stroke="#fff" stroke-width="2.6" stroke-linejoin="round"/>
+</g>
+<path d="M86.06 60.12C86.06 62.33 84.27 64.13 82.06 64.13C79.85 64.13 78.06 62.33 78.06 60.12C78.06 57.91 79.85 56.12 82.06 56.12C84.27 56.12 86.06 57.91 86.06 60.12Z" fill="#fff" fill-opacity="0.38" stroke="#fff" stroke-width="1.3" stroke-linejoin="round"/>
+</svg>

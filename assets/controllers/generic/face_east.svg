@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="188.7" height="141.55" viewBox="0 0 188.7 141.55">
+<!-- Generated from generic.svg (face_east) by the `every_input_has_a_highlight_matching_the_drawing` test; don't edit. -->
+<defs><filter id="glow" filterUnits="userSpaceOnUse" x="0" y="0" width="188.7" height="141.55"><feGaussianBlur stdDeviation="1.4"/></filter></defs>
+<g filter="url(#glow)" opacity="0.55">
+<path d="M157.14 64.13C157.14 65.54 156.57 66.91 155.57 67.91C154.57 68.91 153.2 69.48 151.79 69.48C150.37 69.48 149.01 68.91 148 67.91C147 66.91 146.43 65.54 146.43 64.13C146.43 62.71 147 61.34 148 60.34C149.01 59.34 150.37 58.77 151.79 58.77C153.2 58.77 154.57 59.34 155.57 60.34C156.57 61.34 157.14 62.71 157.14 64.13Z" fill="none" stroke="#fff" stroke-width="2.6" stroke-linejoin="round"/>
+</g>
+<path d="M157.14 64.13C157.14 65.54 156.57 66.91 155.57 67.91C154.57 68.91 153.2 69.48 151.79 69.48C150.37 69.48 149.01 68.91 148 67.91C147 66.91 146.43 65.54 146.43 64.13C146.43 62.71 147 61.34 148 60.34C149.01 59.34 150.37 58.77 151.79 58.77C153.2 58.77 154.57 59.34 155.57 60.34C156.57 61.34 157.14 62.71 157.14 64.13Z" fill="#fff" fill-opacity="0.38" stroke="#fff" stroke-width="1.3" stroke-linejoin="round"/>
+</svg>

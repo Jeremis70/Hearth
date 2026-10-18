@@ -55,11 +55,15 @@
     <circle cx="1177.479" cy="673.00708" r="5.3513837" fill="#fff" fill-opacity="0.06" stroke="#fff"/>
   </g>
   <g id="ls">
-    <circle cx="1098.0667" cy="693.20819" r="10.302357" fill="#fff" fill-opacity="0.06" stroke="#fff"/>
+    <path d="M 1087.76 693.208 A 10.3024 10.3024 0 1 0 1108.37 693.208 A 10.3024 10.3024 0 1 0 1087.76 693.208 Z M 1091.39 693.208 A 6.67516 6.67516 0 1 0 1104.74 693.208 A 6.67516 6.67516 0 1 0 1091.39 693.208 Z" fill-rule="evenodd" fill="#fff" fill-opacity="0.06" stroke="#fff"/>
+  </g>
+  <g id="l3">
     <circle cx="1098.0667" cy="693.20819" r="6.6751595" fill="#fff" fill-opacity="0.06" stroke="#fff"/>
   </g>
   <g id="rs">
-    <circle cx="1142.0992" cy="693.20819" r="10.302357" fill="#fff" fill-opacity="0.06" stroke="#fff"/>
+    <path d="M 1131.8 693.208 A 10.3024 10.3024 0 1 0 1152.4 693.208 A 10.3024 10.3024 0 1 0 1131.8 693.208 Z M 1135.42 693.208 A 6.67516 6.67516 0 1 0 1148.77 693.208 A 6.67516 6.67516 0 1 0 1135.42 693.208 Z" fill-rule="evenodd" fill="#fff" fill-opacity="0.06" stroke="#fff"/>
+  </g>
+  <g id="r3">
     <circle cx="1142.0992" cy="693.20819" r="6.6751595" fill="#fff" fill-opacity="0.06" stroke="#fff"/>
   </g>
   <g id="select">

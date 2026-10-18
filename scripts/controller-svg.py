@@ -30,13 +30,18 @@ INPUTS = {
     "face_south": ["circle230"],
     "face_west": ["circle200"],
     "face_east": ["circle229"],
+    # Sticks: the ring (stick movement) and the cap (stick click) are separate inputs.
     "ls": ["circle188", "circle189"],
+    "l3": ["circle189"],
     "rs": ["circle198", "circle199"],
+    "r3": ["circle199"],
     "select": ["circle190"],
     "start": ["circle197"],
 }
 # Shapes drawn over the body's outline: the outline is masked out under them.
 OVER_BODY = ["l1", "r1"]
+# Rings: the outer circle with the next one cut out (even-odd), so the cap is its own shape.
+RINGS = {"ls", "rs"}
 # Small filled marks (the D-pad arrows) stay solid.
 MARKS = {"path35", "path54", "path188", "path58"}
 
@@ -52,6 +57,12 @@ def element(src, eid):
     attrs = dict(re.findall(r"([\w:-]+)=\"([^\"]*)\"", match.group(0)))
     keep = {"path": ["d", "transform"], "circle": ["cx", "cy", "r"], "rect": []}[tag]
     return tag, {k: attrs[k] for k in keep if k in attrs}
+
+
+def circle_path(attrs):
+    cx, cy, r = (float(attrs[k]) for k in ("cx", "cy", "r"))
+    return (f"M {cx - r:g} {cy:g} A {r:g} {r:g} 0 1 0 {cx + r:g} {cy:g} "
+            f"A {r:g} {r:g} 0 1 0 {cx - r:g} {cy:g} Z")
 
 
 def render(tag, attrs, style):
@@ -74,6 +85,11 @@ def main():
     groups = []
     for hid, ids in INPUTS.items():
         parts = []
+        if hid in RINGS:
+            outer, inner = (element(src, eid)[1] for eid in ids)
+            d = circle_path(outer) + " " + circle_path(inner)
+            groups.append(f'  <g id="{hid}">\n    <path d="{d}" fill-rule="evenodd" {line}/>\n  </g>')
+            continue
         for eid in ids:
             tag, attrs = element(src, eid)
             parts.append("    " + render(tag, attrs, mark if eid in MARKS else line))

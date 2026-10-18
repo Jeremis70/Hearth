@@ -70,8 +70,6 @@ pub struct Placed {
     pub align: Align,
     /// Label edge, elbow, anchor; none for inputs that aren't on the drawing.
     pub leader: Option<[Point; 3]>,
-    /// The input's shape on the page, for the focus highlight.
-    pub shape: Option<Rect>,
 }
 
 /// The drawing's rectangle on the page.
@@ -91,17 +89,15 @@ pub fn drawing(layout: &Layout) -> Rect {
 pub fn place(layout: &Layout, extras: &[PadInput]) -> Vec<Placed> {
     let draw = drawing(layout);
     let k = draw.h / layout.height;
-    let on_page = |x: f32, y: f32| Point {
-        x: draw.x + x * k,
-        y: draw.y + y * k,
-    };
-    let mut out = Vec::new();
-    for side in [Side::Left, Side::Right] {
-        let anchors: Vec<_> = layout
+    let columns = [Side::Left, Side::Right].map(|side| {
+        let anchors = layout
             .column(side)
             .into_iter()
             .map(|a| {
-                let p = on_page(a.x, a.y);
+                let p = Point {
+                    x: draw.x + a.x * k,
+                    y: draw.y + a.y * k,
+                };
                 let shape = Rect {
                     x: p.x - a.w * k / 2.0,
                     y: p.y - a.h * k / 2.0,
@@ -111,80 +107,282 @@ pub fn place(layout: &Layout, extras: &[PadInput]) -> Vec<Placed> {
                 (a.input, p, shape)
             })
             .collect();
-        out.extend(column(side, anchors));
-    }
+        Column::new(side, anchors)
+    });
+    // Both columns in reading order, preferably with no line over another input, each moved
+    // by a shift in eighths of a row (up to a row and a half): the pair of shifts closest to
+    // each other, then smallest. Otherwise each column's rows are matched to its anchors so
+    // that nothing crosses.
+    let shifts: Vec<f32> = (-12..=12).map(|i| i as f32 / 8.0 * ROW_STEP).collect();
+    // How much of each other input's shape lines must avoid: all of it, then less and less of
+    // its rim (shapes are round, their boxes aren't), then nothing.
+    let reading = [
+        Some(0.0),
+        Some(0.025),
+        Some(0.05),
+        Some(0.075),
+        Some(0.1),
+        None,
+    ]
+    .into_iter()
+    .find_map(|avoid_shapes| {
+        let feasible = |column: &Column| -> Vec<(f32, Vec<Placed>)> {
+            shifts
+                .iter()
+                .filter_map(|&shift| Some((shift, column.reading(shift, avoid_shapes)?)))
+                .collect()
+        };
+        let left = feasible(&columns[0]);
+        let right = feasible(&columns[1]);
+        let mut pairs: Vec<_> = left
+            .iter()
+            .flat_map(|l| right.iter().map(move |r| (l, r)))
+            .collect();
+        pairs.sort_by(|(l1, r1), (l2, r2)| {
+            let key = |l: f32, r: f32| ((l - r).abs(), l.abs() + r.abs());
+            let (a, b) = (key(l1.0, r1.0), key(l2.0, r2.0));
+            a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1))
+        });
+        pairs.first().map(|(l, r)| [l.1.clone(), r.1.clone()])
+    });
+    let mut out: Vec<Placed> = match reading {
+        Some(both) => both.into_iter().flatten().collect(),
+        None => columns.iter().flat_map(Column::matched).collect(),
+    };
     out.extend(bottom_row(layout, draw, extras));
     out
 }
 
-fn column(side: Side, mut anchors: Vec<(PadInput, Point, Rect)>) -> Vec<Placed> {
-    let n = anchors.len();
-    if n == 0 {
-        return Vec::new();
-    }
-    // Top to bottom; on a tie the outer anchor first.
-    let outward = if side == Side::Left { 1.0 } else { -1.0 };
-    anchors.sort_by(|a, b| {
-        a.1.y
-            .total_cmp(&b.1.y)
-            .then((a.1.x * outward).total_cmp(&(b.1.x * outward)))
-    });
-    let span = (n - 1) as f32 * ROW_STEP;
-    let middle = (anchors[0].1.y + anchors[n - 1].1.y) / 2.0;
-    let top = (middle - span / 2.0)
-        .min(ROWS_BOTTOM - ROW_H / 2.0 - span)
-        .max(ROWS_TOP + ROW_H / 2.0);
-    let rows: Vec<f32> = (0..n).map(|row| top + row as f32 * ROW_STEP).collect();
-    let (edge, label_x) = if side == Side::Left {
-        (SAFE_X + COL_W, SAFE_X)
-    } else {
-        (PAGE_W - SAFE_X - COL_W, PAGE_W - SAFE_X - COL_W)
-    };
-    // Every elbow sits on one vertical line just outside the outermost shape: the horizontal
-    // parts can't cross anything, and the straight parts all start on that line.
-    let outermost = anchors
-        .iter()
-        .map(|(_, _, shape)| {
-            if side == Side::Left {
-                shape.x
-            } else {
-                -(shape.x + shape.w)
-            }
-        })
-        .fold(f32::INFINITY, f32::min);
-    let elbow_x = if side == Side::Left {
-        (outermost - ELBOW_GAP).max(edge + MIN_RUN)
-    } else {
-        (-outermost + ELBOW_GAP).min(edge - MIN_RUN)
-    };
-    let order = shortest_matching(&rows, elbow_x, &anchors);
-    (0..n)
-        .map(|row| {
-            let (input, anchor, shape) = anchors[order[row]];
-            let y = rows[row];
-            Placed {
-                input,
-                side,
-                label: Rect {
-                    x: label_x,
-                    y: y - ROW_H / 2.0,
-                    w: COL_W,
-                    h: ROW_H,
-                },
-                align: if side == Side::Left {
-                    Align::GlyphLast
+/// One side column's inputs and the geometry shared by its layouts.
+struct Column {
+    side: Side,
+    /// Input, anchor and shape, top to bottom, then left to right (D-pad: up, left, right,
+    /// down).
+    anchors: Vec<(PadInput, Point, Rect)>,
+    /// Where lines leave the labels.
+    edge: f32,
+    label_x: f32,
+    /// The shared elbow line, just outside the outermost shape.
+    elbow_x: f32,
+    /// Rows are centered on the anchors' span by default.
+    middle: f32,
+}
+
+impl Column {
+    fn new(side: Side, mut anchors: Vec<(PadInput, Point, Rect)>) -> Self {
+        anchors.sort_by(|a, b| a.1.y.total_cmp(&b.1.y).then(a.1.x.total_cmp(&b.1.x)));
+        let middle = match (anchors.first(), anchors.last()) {
+            (Some(first), Some(last)) => (first.1.y + last.1.y) / 2.0,
+            _ => 0.0,
+        };
+        let (edge, label_x) = if side == Side::Left {
+            (SAFE_X + COL_W, SAFE_X)
+        } else {
+            (PAGE_W - SAFE_X - COL_W, PAGE_W - SAFE_X - COL_W)
+        };
+        let outermost = anchors
+            .iter()
+            .map(|(_, _, shape)| {
+                if side == Side::Left {
+                    shape.x
                 } else {
-                    Align::GlyphFirst
-                },
-                leader: Some([
-                    Point { x: edge, y },
-                    Point { x: elbow_x, y },
-                    at_edge(anchor, shape, Point { x: elbow_x, y }),
-                ]),
-                shape: Some(shape),
-            }
+                    -(shape.x + shape.w)
+                }
+            })
+            .fold(f32::INFINITY, f32::min);
+        let elbow_x = if side == Side::Left {
+            (outermost - ELBOW_GAP).max(edge + MIN_RUN)
+        } else {
+            (-outermost + ELBOW_GAP).min(edge - MIN_RUN)
+        };
+        Self {
+            side,
+            anchors,
+            edge,
+            label_x,
+            elbow_x,
+            middle,
+        }
+    }
+
+    /// Row centers, moved down by `shift` and kept between the header and the bottom row.
+    fn rows(&self, shift: f32) -> Vec<f32> {
+        let n = self.anchors.len();
+        let span = n.saturating_sub(1) as f32 * ROW_STEP;
+        let top = (self.middle - span / 2.0 + shift)
+            .min(ROWS_BOTTOM - ROW_H / 2.0 - span)
+            .max(ROWS_TOP + ROW_H / 2.0);
+        (0..n).map(|row| top + row as f32 * ROW_STEP).collect()
+    }
+
+    fn labels(&self, rows: &[f32]) -> Vec<Rect> {
+        rows.iter()
+            .map(|y| Rect {
+                x: self.label_x,
+                y: y - ROW_H / 2.0,
+                w: COL_W,
+                h: ROW_H,
+            })
+            .collect()
+    }
+
+    /// Reading order with elbows that keep every line clear, if there are any.
+    fn reading(&self, shift: f32, avoid_shapes: Option<f32>) -> Option<Vec<Placed>> {
+        let rows = self.rows(shift);
+        let labels = self.labels(&rows);
+        let elbows = reading_order_elbows(
+            self.side,
+            &rows,
+            self.edge,
+            self.elbow_x,
+            &self.anchors,
+            &labels,
+            avoid_shapes,
+        )?;
+        let order: Vec<usize> = (0..rows.len()).collect();
+        Some(self.placed(&order, &rows, &labels, &elbows))
+    }
+
+    /// Every elbow on the shared line, rows matched to anchors by shortest total length.
+    fn matched(&self) -> Vec<Placed> {
+        let rows = self.rows(0.0);
+        let labels = self.labels(&rows);
+        let order = shortest_matching(&rows, self.elbow_x, &self.anchors);
+        self.placed(&order, &rows, &labels, &vec![self.elbow_x; rows.len()])
+    }
+
+    fn placed(
+        &self,
+        order: &[usize],
+        rows: &[f32],
+        labels: &[Rect],
+        elbows: &[f32],
+    ) -> Vec<Placed> {
+        (0..rows.len())
+            .map(|row| {
+                let (input, anchor, shape) = self.anchors[order[row]];
+                let y = rows[row];
+                let elbow = Point { x: elbows[row], y };
+                Placed {
+                    input,
+                    side: self.side,
+                    label: labels[row],
+                    align: if self.side == Side::Left {
+                        Align::GlyphLast
+                    } else {
+                        Align::GlyphFirst
+                    },
+                    leader: Some([
+                        Point { x: self.edge, y },
+                        elbow,
+                        at_edge(anchor, shape, elbow),
+                    ]),
+                }
+            })
+            .collect()
+    }
+}
+
+/// Elbows for rows in reading order (row `i` → `anchors[i]`) such that no lines cross and no
+/// line crosses another row's label, if there are any. Each elbow is on the shared line, just
+/// outside its own shape, or straight above/below the anchor; the shared line is preferred.
+fn reading_order_elbows(
+    side: Side,
+    rows: &[f32],
+    edge: f32,
+    shared: f32,
+    anchors: &[(PadInput, Point, Rect)],
+    labels: &[Rect],
+    avoid_shapes: Option<f32>,
+) -> Option<Vec<f32>> {
+    // With `avoid_shapes`, lines may not pass over another input's shape, minus that fraction
+    // of its size on each side (shapes are round, their boxes aren't).
+    let over_other_shape = |row: usize, new: &[Point; 3]| {
+        avoid_shapes.is_some_and(|margin| {
+            anchors.iter().any(|(_, _, shape)| {
+                *shape != anchors[row].2 && check::line_hits_rect(new, &shrunk(*shape, margin))
+            })
         })
-        .collect()
+    };
+    let line = |row: usize, elbow_x: f32| {
+        let (_, anchor, shape) = anchors[row];
+        let y = rows[row];
+        [
+            Point { x: edge, y },
+            Point { x: elbow_x, y },
+            at_edge(anchor, shape, Point { x: elbow_x, y }),
+        ]
+    };
+    let candidates = |row: usize| {
+        let (_, anchor, shape) = anchors[row];
+        let (near, clamp) = if side == Side::Left {
+            (shape.x - ELBOW_GAP, edge + MIN_RUN)
+        } else {
+            (shape.x + shape.w + ELBOW_GAP, edge - MIN_RUN)
+        };
+        let fit = |x: f32| {
+            if side == Side::Left {
+                x.max(clamp)
+            } else {
+                x.min(clamp)
+            }
+        };
+        [shared, fit(near), fit(anchor.x)]
+    };
+    fn search(
+        row: usize,
+        chosen: &mut Vec<[Point; 3]>,
+        elbows: &mut Vec<f32>,
+        line: &dyn Fn(usize, f32) -> [Point; 3],
+        candidates: &dyn Fn(usize) -> [f32; 3],
+        blocked: &dyn Fn(usize, &[Point; 3]) -> bool,
+        labels: &[Rect],
+    ) -> bool {
+        if row == labels.len() {
+            return true;
+        }
+        for x in candidates(row) {
+            let new = line(row, x);
+            let clear = chosen.iter().all(|old| !check::lines_cross(old, &new))
+                && labels
+                    .iter()
+                    .enumerate()
+                    .all(|(i, label)| i == row || !check::line_hits_rect(&new, label))
+                && !blocked(row, &new);
+            if clear {
+                chosen.push(new);
+                elbows.push(x);
+                if search(row + 1, chosen, elbows, line, candidates, blocked, labels) {
+                    return true;
+                }
+                chosen.pop();
+                elbows.pop();
+            }
+        }
+        false
+    }
+    let mut chosen = Vec::new();
+    let mut elbows = Vec::new();
+    search(
+        0,
+        &mut chosen,
+        &mut elbows,
+        &line,
+        &candidates,
+        &over_other_shape,
+        labels,
+    )
+    .then_some(elbows)
+}
+
+/// `r` with `f` of its width and height taken off each side.
+fn shrunk(r: Rect, f: f32) -> Rect {
+    Rect {
+        x: r.x + r.w * f,
+        y: r.y + r.h * f,
+        w: r.w * (1.0 - 2.0 * f),
+        h: r.h * (1.0 - 2.0 * f),
+    }
 }
 
 /// Which anchor each row points at: the assignment with the shortest straight parts in total.
@@ -314,7 +512,6 @@ fn bottom_row(layout: &Layout, draw: Rect, extras: &[PadInput]) -> Vec<Placed> {
                     },
                 ),
             ]),
-            shape: Some(shape),
         });
     }
     let w = if extras.len() > 4 {
@@ -358,7 +555,6 @@ fn bottom_row(layout: &Layout, draw: Rect, extras: &[PadInput]) -> Vec<Placed> {
                 Align::GlyphLast
             },
             leader: None,
-            shape: None,
         });
     }
     placed.sort_by(|a, b| a.label.x.total_cmp(&b.label.x));
@@ -380,8 +576,7 @@ fn at_edge(center: Point, shape: Rect, from: Point) -> Point {
     }
 }
 
-/// Geometry checks for the tests.
-#[cfg(test)]
+/// Geometry checks: routing uses them, and the tests check the result with them.
 mod check {
     use super::{Point, Rect};
 
@@ -583,6 +778,20 @@ mod tests {
         let left: Vec<_> = placed.iter().filter(|c| c.side == Side::Left).collect();
         assert_eq!(left.len(), 8);
         assert_eq!(left[0].input, PadInput::L2);
+        let dpad: Vec<_> = left
+            .iter()
+            .map(|c| c.input)
+            .filter(|i| i.name().starts_with("dpad_"))
+            .collect();
+        assert_eq!(
+            dpad,
+            [
+                PadInput::DpadUp,
+                PadInput::DpadLeft,
+                PadInput::DpadRight,
+                PadInput::DpadDown
+            ]
+        );
         let bottom: Vec<_> = placed
             .iter()
             .filter(|c| c.side == Side::Bottom)

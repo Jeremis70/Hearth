@@ -5,6 +5,7 @@ import { HintBar } from "../components/hint_bar.slint";
 import { FocusRing } from "../components/focus.slint";
 import { ConfirmDialog } from "../components/dialog.slint";
 import { ControlsData, Callout } from "data.slint";
+import { Highlights } from "highlights.slint";
 
 // Small accent dot: this value differs from the layer below.
 component ChangedDot inherits Rectangle {
@@ -284,19 +285,18 @@ export component ControlsScreen inherits Rectangle {
             colorize: Theme.text-secondary;
             image-fit: contain;
         }
-        // The focused input lights up on the drawing.
-        if current.has-shape && !menu-open: Rectangle {
-            property <length> pad: 8 * s;
-            x: ox + current.sx * s - pad;
-            y: current.sy * s - pad;
-            width: current.sw * s + 2 * pad;
-            height: current.sh * s + 2 * pad;
-            border-radius: min(self.width, self.height) / 2;
-            border-width: 3 * s;
-            border-color: Theme.accent;
-            background: Theme.accent-soft;
-            drop-shadow-blur: Theme.focus-glow-radius;
-            drop-shadow-color: Theme.focus-glow;
+        // The focused input lights up on the drawing in its exact shape: each input's
+        // highlight image covers the whole drawing and fades in when it is focused.
+        for c[i] in ControlsData.callouts: Image {
+            x: ox + ControlsData.draw-x * s;
+            y: ControlsData.draw-y * s;
+            width: ControlsData.draw-w * s;
+            height: ControlsData.draw-h * s;
+            source: Highlights.image(c.input);
+            colorize: Theme.accent;
+            image-fit: contain;
+            opacity: i == index && !menu-open ? 1 : 0;
+            animate opacity { duration: Theme.fast; easing: ease-out; }
         }
         for c[i] in ControlsData.callouts: Path {
             visible: c.has-line;

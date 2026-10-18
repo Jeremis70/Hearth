@@ -127,9 +127,9 @@ mod tests {
 
     const SVG: &str = include_str!("../../../assets/controllers/generic.svg");
 
-    /// Drawing ids to Hearth inputs: face buttons by position, sticks for both the stick and
-    /// its click.
-    const IDS: [(&str, &[&str]); 16] = [
+    /// Drawing ids to Hearth inputs: face buttons by position; each stick is a ring (stick
+    /// movement) and a cap (stick click).
+    const IDS: [(&str, &[&str]); 18] = [
         ("l2", &["l2"]),
         ("r2", &["r2"]),
         ("l1", &["l1"]),
@@ -142,8 +142,10 @@ mod tests {
         ("face_south", &["south"]),
         ("face_west", &["west"]),
         ("face_east", &["east"]),
-        ("ls", &["left_stick", "l3"]),
-        ("rs", &["right_stick", "r3"]),
+        ("ls", &["left_stick"]),
+        ("l3", &["l3"]),
+        ("rs", &["right_stick"]),
+        ("r3", &["r3"]),
         ("select", &["select"]),
         ("start", &["start"]),
     ];
@@ -184,6 +186,143 @@ mod tests {
 
     fn round(v: f32) -> f32 {
         (v * 100.0).round() / 100.0
+    }
+
+    /// Folder of the per-input highlight images.
+    const HIGHLIGHTS: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../assets/controllers/generic"
+    );
+
+    /// Highlight style, baked into the files so `colorize` keeps it: a see-through fill (the
+    /// drawing stays visible under it), a full outline a bit thicker than the drawing's
+    /// (0.85), and a soft glow (a blurred, wider outline underneath).
+    const HIGHLIGHT_FILL: f32 = 0.38;
+    const HIGHLIGHT_STROKE: f32 = 1.3;
+    const GLOW_STROKE: f32 = 2.6;
+    const GLOW_BLUR: f32 = 1.4;
+    const GLOW_OPACITY: f32 = 0.55;
+
+    /// One image per drawing id, the size of the whole drawing, with only that input's shapes
+    /// (transforms flattened by usvg): the controls page tints it with the accent and stacks
+    /// it over the drawing to highlight the focused input.
+    fn derived_highlights() -> Vec<(&'static str, String)> {
+        let tree =
+            usvg::Tree::from_str(SVG, &usvg::Options::default()).expect("generic.svg parses");
+        let size = tree.size();
+        let (w, h) = (round(size.width()), round(size.height()));
+        IDS.iter()
+            .map(|(id, _)| {
+                let node = tree
+                    .node_by_id(id)
+                    .unwrap_or_else(|| panic!("generic.svg has no shape with id {id}"));
+                let mut shapes = Vec::new();
+                collect_paths(node, &mut shapes);
+                let glow: String = shapes
+                    .iter()
+                    .map(|(d, rule)| {
+                        format!(
+                            "<path d=\"{d}\"{rule} fill=\"none\" stroke=\"#fff\" \
+                             stroke-width=\"{GLOW_STROKE}\" stroke-linejoin=\"round\"/>\n"
+                        )
+                    })
+                    .collect();
+                let shape: String = shapes
+                    .iter()
+                    .map(|(d, rule)| {
+                        format!(
+                            "<path d=\"{d}\"{rule} fill=\"#fff\" fill-opacity=\"{HIGHLIGHT_FILL}\" \
+                             stroke=\"#fff\" stroke-width=\"{HIGHLIGHT_STROKE}\" \
+                             stroke-linejoin=\"round\"/>\n"
+                        )
+                    })
+                    .collect();
+                let svg = format!(
+                    "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w}\" height=\"{h}\" \
+                     viewBox=\"0 0 {w} {h}\">\n<!-- Generated from generic.svg ({id}) by the \
+                     `every_input_has_a_highlight_matching_the_drawing` test; don't edit. -->\n\
+                     <defs><filter id=\"glow\" filterUnits=\"userSpaceOnUse\" x=\"0\" y=\"0\" \
+                     width=\"{w}\" height=\"{h}\"><feGaussianBlur stdDeviation=\"{GLOW_BLUR}\"/>\
+                     </filter></defs>\n<g filter=\"url(#glow)\" opacity=\"{GLOW_OPACITY}\">\n{glow}</g>\n\
+                     {shape}</svg>\n"
+                );
+                (*id, svg)
+            })
+            .collect()
+    }
+
+    /// Every path under `node`, flattened: its data and ` fill-rule="evenodd"` if it has that
+    /// rule (the sticks' rings).
+    fn collect_paths(node: &usvg::Node, out: &mut Vec<(String, &'static str)>) {
+        use std::fmt::Write as _;
+        use usvg::tiny_skia_path::PathSegment;
+        match node {
+            usvg::Node::Group(group) => {
+                for child in group.children() {
+                    collect_paths(child, out);
+                }
+            }
+            usvg::Node::Path(path) => {
+                let Some(data) = path.data().clone().transform(path.abs_transform()) else {
+                    return;
+                };
+                let mut d = String::new();
+                let p = |p: usvg::tiny_skia_path::Point| format!("{} {}", round(p.x), round(p.y));
+                for segment in data.segments() {
+                    let _ = match segment {
+                        PathSegment::MoveTo(a) => write!(d, "M{}", p(a)),
+                        PathSegment::LineTo(a) => write!(d, "L{}", p(a)),
+                        PathSegment::QuadTo(a, b) => write!(d, "Q{} {}", p(a), p(b)),
+                        PathSegment::CubicTo(a, b, c) => write!(d, "C{} {} {}", p(a), p(b), p(c)),
+                        PathSegment::Close => write!(d, "Z"),
+                    };
+                }
+                let even_odd = path
+                    .fill()
+                    .is_some_and(|f| f.rule() == usvg::FillRule::EvenOdd);
+                out.push((
+                    d,
+                    if even_odd {
+                        " fill-rule=\"evenodd\""
+                    } else {
+                        ""
+                    },
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn every_input_has_a_highlight_matching_the_drawing() {
+        let slint = include_str!("../ui/controls/highlights.slint");
+        for (id, svg) in derived_highlights() {
+            let path = format!("{HIGHLIGHTS}/{id}.svg");
+            if std::env::var_os("HEARTH_WRITE_ANCHORS").is_some() {
+                std::fs::create_dir_all(HIGHLIGHTS).expect("create highlights folder");
+                std::fs::write(&path, &svg).expect("write highlight");
+                continue;
+            }
+            let on_disk = std::fs::read_to_string(&path)
+                .unwrap_or_else(|_| panic!("no highlight for {id}: HEARTH_WRITE_ANCHORS=1 cargo test -p hearth-shell anchors"));
+            assert_eq!(
+                on_disk, svg,
+                "{id}.svg is out of date: HEARTH_WRITE_ANCHORS=1 cargo test -p hearth-shell highlight"
+            );
+            assert!(
+                slint.contains(&format!("generic/{id}.svg")),
+                "highlights.slint doesn't use {id}.svg"
+            );
+        }
+        // Every Hearth input on the drawing has one.
+        for (_, inputs) in IDS {
+            for input in inputs {
+                assert!(
+                    slint.contains(&format!("\"{input}\"")),
+                    "highlights.slint misses {input}"
+                );
+            }
+        }
     }
 
     #[test]

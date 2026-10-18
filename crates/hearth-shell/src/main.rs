@@ -53,10 +53,6 @@ struct Args {
     /// of a title.
     #[arg(long, value_name = "GAME")]
     print_controls: Option<String>,
-    /// Internal: the guard process that hands the controllers back to InputPlumber if Hearth
-    /// dies without doing it (see `guard`).
-    #[arg(long, hide = true)]
-    input_guard: bool,
     /// Where controller input comes from: InputPlumber (hides Hearth's menu input from games,
     /// remaps live), gilrs (reads controllers directly), or auto (InputPlumber when it runs
     /// and allows Hearth to use it, else gilrs).
@@ -124,10 +120,6 @@ fn main() -> anyhow::Result<()> {
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
     let args = Args::parse();
-    if args.input_guard {
-        guard::run();
-        return Ok(());
-    }
 
     let dirs = DataDirs::from_env().context("resolving data directories")?;
     dirs.create_all()?;

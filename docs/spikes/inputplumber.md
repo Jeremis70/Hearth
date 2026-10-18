@@ -131,5 +131,4 @@ on/off, axis→trigger. These stay in the emulator configs.
 - **Per-axis inversion** is impossible: stick values are `Vector2 { x: Option, y: Option }`,
   `invert` negates both, and a source can't select x or y events.
 - **Exit.** SIGTERM, SIGKILL during a game (guard), and InputPlumber stopped (auto falls back to
-  gilrs) all verified. The guard's log lines go through gamescope's output and are lost when
-  gamescope exits with Hearth; the release itself is checked with `ip_probe`.
+  gilrs) all verified. The guard (`hearth-guard`) logs to stdout like Hearth.

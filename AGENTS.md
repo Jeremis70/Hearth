@@ -5,14 +5,14 @@ Read .github/instructions/rust.instructions.md and docs/STATUS.md at the start o
 
 ## This is the developer's daily-driver laptop: safety rules (non-negotiable)
 
-- Never run `sudo`, `pkexec`, `su`, or any package manager (`pacman`, `paru`, `yay`, `flatpak install`). If something needs installing, stop and tell me the exact command; I'll run it.
+- Never run `sudo`, `pkexec`, `su`, `pkill`, `killall`, or any package manager (`pacman`, `paru`, `yay`, `flatpak install`). If something needs installing, stop and tell me the exact command; I'll run it.
 - Never run `systemctl`, `nmcli`, `rfkill`, `bluetoothctl`, or anything that changes system, network, Bluetooth or session state.
 - Never write outside this repository. App data in development goes under `./.dev-data/` (gitignored), selected via the `HEARTH_HOME` env var; production paths (XDG dirs via `directories`) are only used when `HEARTH_HOME` is unset.
 - Real system integrations are opt-in and default to mocks:
   - Network: `MockNetworkBackend` unless `--real-network` is passed.
   - Power: `MockPower` unless `--real-power` is passed. Never call suspend/reboot/poweroff in tests.
   - Input: gilrs (read-only, non-exclusive) in development. Never grab devices exclusively or create uinput devices unless a milestone explicitly says so.
-- Before starting Hearth (cargo run, `scripts/run-gamescope.sh`), check whether one is already running (`pgrep -a hearth-shell`). If one is, don't start another: ask me. Hearth also refuses to start twice (lock in `<HEARTH_HOME>/data/hearth.lock`); `--print-controls` is read-only and may run next to it.
+- Before starting Hearth (cargo run, `scripts/run-gamescope.sh`), check whether one is already running (`pgrep -x -a hearth-shell`; its input guard is a separate `hearth-guard` process and doesn't count). If one is, don't start another: ask me. Hearth also refuses to start twice (lock in `<HEARTH_HOME>/data/hearth.lock`); `--print-controls` is read-only and may run next to it.
 - Only kill processes the app itself spawned (tracked by process group). Never `pkill`/`killall`.
 - Don't use `rm -rf` on anything but `target/` or `./.dev-data/`.
 

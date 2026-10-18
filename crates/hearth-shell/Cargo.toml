@@ -5,10 +5,16 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+default-run = "hearth-shell"
 
 [[bin]]
 name = "hearth-shell"
 path = "src/main.rs"
+
+# Hands the controllers back to InputPlumber if Hearth dies (see src/guard.rs).
+[[bin]]
+name = "hearth-guard"
+path = "src/bin/hearth-guard.rs"
 
 [dependencies]
 serde.workspace = true

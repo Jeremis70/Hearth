@@ -51,7 +51,7 @@ The working tree is clean.
   - Assignable sticks (swap-on-conflict) instead of special options.
 
 **Live testing safely** (this is the user's daily laptop, often with their own Hearth running):
-1. `pgrep -a hearth-shell`. If anything runs, don't start another and don't send actions or take
+1. `pgrep -x -a hearth-shell` (the `hearth-guard` next to it is Hearth's input guard). If anything runs, don't start another and don't send actions or take
    screenshots: `gamescopectl screenshot` would capture *their* session. Ask, or test offline.
 2. Start a test instance in the background:
    `RUST_LOG=info HEARTH_GS_SIZE=1920x1080 setsid scripts/run-gamescope.sh --dev-socket ./.dev-data/actions.sock > .dev-data/test-run.log 2>&1 &`.
@@ -197,7 +197,8 @@ The working tree is clean.
 - InputPlumber (`input/inputplumber/`): `client.rs` (zbus proxies, source pad identity),
   `mod.rs` (worker thread, modes, menu profile). The session drives it through `InputControl`
   (`Controller::set_mode` → Shell/Game; the button test → Test). `guard.rs` in the shell is the
-  `--input-guard` child: `pgrep -x hearth-shell` now shows two processes.
+  spawner of the `hearth-guard` child (`src/bin/hearth-guard.rs`, its own binary so
+  `pgrep -x hearth-shell` only finds Hearth).
 - Game profiles: `hearth-core/src/profiles/inputplumber_profile.rs` (`VirtualLayout`,
   goldens in `tests/golden/inputplumber/`), written to `<HEARTH_HOME>/runtime/inputplumber/`.
   `--print-controls` shows the profile when InputPlumber runs.

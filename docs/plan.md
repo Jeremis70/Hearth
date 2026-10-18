@@ -157,7 +157,7 @@ Flow:
 4. Back to Hearth (overlay, Home) → `Always` + menu profile, so a game's remap never affects
    Hearth's menus. Outside gamescope a short press re-asserts `Pass`.
 5. Exit, panic of the input thread, SIGTERM/SIGINT/SIGHUP → every controller `None` + default
-   profile, `ManageAllDevices` off. SIGKILL or a crash: the `--input-guard` child (it reads a
+   profile, `ManageAllDevices` off. SIGKILL or a crash: the `hearth-guard` child (it reads a
    close-on-exec pipe from Hearth) does the same.
 
 **Remapping and emulators.** Emulators always read the virtual pad (Dolphin

@@ -1,6 +1,6 @@
 # Hearth status
 
-Last updated: 2026-10-17. Read this first, then `AGENTS.md` (rules, commands),
+Last updated: 2026-10-18. Read this first, then `AGENTS.md` (rules, commands),
 `.github/instructions/rust.instructions.md` and `docs/plan.md` (architecture).
 
 ## 0. Where we are, and how we work
@@ -11,8 +11,18 @@ Last updated: 2026-10-17. Read this first, then `AGENTS.md` (rules, commands),
 - The controls system: layered files and translators.
 - The controls UI: a PS5-style controls page and the button test.
 - The Capture button (a notice only for now).
+- InputPlumber input (`docs/spikes/inputplumber.md`): menus hidden from games, Guide over D-Bus,
+  live remapping through profiles, the virtual Elite pad for every emulator.
 
-Latest commits, newest first:
+Latest commits, newest first (InputPlumber, 2026-10-18):
+- `abcc994`: Mute and raw values in the button test; gilrs trigger axes, paddle order.
+- `0bf5a95`: live apply through the game's profile, per-option "next launch" notes.
+- `3b36323`: emulators on the virtual pad with a fixed layout.
+- `822b70b`: profile translator, `VirtualLayout`, `same_as` on console controls.
+- `170c1e1`: input guard, release on exit/panic/signals.
+- `b3ffe8f`: InputPlumber backend, `--input`.
+
+Before that:
 - `b1afcb3`: stick options belong to the console stick, swap_sticks and the L1 fast-forward
   default are gone.
 - `d5ed37c`: button test rebuilt on the controls page.
@@ -70,8 +80,13 @@ The working tree is clean.
 - Open question: the user's "Create can't be assigned" was read as "defaults to Capture, never
   reaches a game, still rebindable". The user hasn't contradicted it; lock it like Guide only if
   asked.
+- InputPlumber follow-ups:
+  - rumble doesn't reach the DualSense over Bluetooth (not even InputPlumber's own `Rumble`);
+    try USB;
+  - stick options (inversion, deadzone, sensitivity), triggers and vibration still apply at the
+    next launch (a profile can't express them);
+  - user idea: the button test's trigger highlight could follow the pull (visual change).
 - Later milestones (`docs/plan.md`):
-  - InputPlumber: live remap via `MappingApplier`; also sees the touchpad and mic buttons.
   - Capture: panel and hold-to-screenshot, see `docs/design/overlay.md` §10.
   - ES-DE import, Steam, overlay dock actions, Home row redesign.
 
@@ -146,8 +161,10 @@ The working tree is clean.
   `extra_inputs()`. Override in `<config>/controls/device.toml`.
 - `hearth-shell --print-controls <id | key | title part>` shows bindings, options and sticks
   with the layer of each value, plus the generated files.
-- **Live apply** is impossible today (Dolphin reads pads at boot, RetroArch has no command for
-  it). `MappingApplier` → `NextLaunch`; the page says "Applies next time you start the game".
+- **Live apply**: with InputPlumber, `InputPlumberApplier` rewrites the game's profile on every
+  save and it loads on resume (`Applied`); the stick, trigger and vibration options say "Applies
+  next time you start the game" on their own row. With gilrs: `EmulatorConfigApplier`
+  (`NextLaunch`), page-wide note as before.
 
 **Controls UI** (`ui/controls/`, `bridge/controls_page.rs`, `src/callouts.rs`,
 `src/controller_layout.rs`)
@@ -175,6 +192,18 @@ The working tree is clean.
   - The header shows the controller, connection and battery.
 
 **Input** (`hearth-platform/src/input/`)
+- `--input=auto|inputplumber|gilrs` (`main.rs`, `select_input`). Auto uses InputPlumber when it
+  runs and accepts writes; the log says which one and why.
+- InputPlumber (`input/inputplumber/`): `client.rs` (zbus proxies, source pad identity),
+  `mod.rs` (worker thread, modes, menu profile). The session drives it through `InputControl`
+  (`Controller::set_mode` → Shell/Game; the button test → Test). `guard.rs` in the shell is the
+  `--input-guard` child: `pgrep -x hearth-shell` now shows two processes.
+- Game profiles: `hearth-core/src/profiles/inputplumber_profile.rs` (`VirtualLayout`,
+  goldens in `tests/golden/inputplumber/`), written to `<HEARTH_HOME>/runtime/inputplumber/`.
+  `--print-controls` shows the profile when InputPlumber runs.
+- `cargo run -p hearth-platform --example ip_probe` shows InputPlumber's state (read-only); use
+  it to check the pad was handed back.
+- Menu actions and Guide timing are shared in `input/pad_state.rs`.
 - gilrs runs **without its deadzone and jitter filters**. Only the D-pad hat conversion is
   applied, by hand in `next_event`, so drift is visible. Navigation has its own 0.5 threshold.
 - `PadActivity` carries:
@@ -208,7 +237,10 @@ The working tree is clean.
   Performance (the nested chain on an i5-1145G7, not Hearth).
 - Cosmetic: at startup the tile row animates from 1280×720 to fullscreen.
 - Not done: Home row redesign, Favorite/Uninstall/Properties, overlay dock actions other than
-  Controls, ES-DE import, InputPlumber, Steam.
+  Controls, ES-DE import, Steam.
+- InputPlumber: physical Elite/Series paddle and Share names in profiles are unverified (no such
+  pad here). Other controllers than the DualSense untested. On a box whose user isn't in
+  `wheel`/`inputplumber`, polkit refuses the writes and auto falls back to gilrs.
 
 ## 3. How to run and test
 

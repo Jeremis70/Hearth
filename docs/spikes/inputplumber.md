@@ -97,8 +97,39 @@ on/off, axis→trigger. These stay in the emulator configs.
 - Hearth sets `ManageAllDevices = true` while it runs, and false again on exit, panic, signals
   and through a guard process (SIGKILL). Startup also resets any composite device it finds.
 - Always while Hearth is visible, Pass while a game has focus.
-- Two profiles: a fixed menu profile (identity plus custom D-Bus names for the touchpad and
-  Capture) and a per-game profile generated from the controls layers.
+- Two profiles: a fixed menu profile (identity plus the touchpad and Mute to D-Bus) and a
+  per-game profile generated from the controls layers (Capture to D-Bus `hearth_capture`).
 - Virtual pad: `xbox-elite` alone (no touchpad-as-mouse, no keyboard needed); emulator actions
   on the five spare buttons.
 - Never call `SendEvent`.
+
+## Found while building the backend
+
+- **Split DualSense.** Turning `ManageAllDevices` on sometimes gives one DualSense two to four
+  composite devices: the hidraw one with all 33 capabilities, and others holding only the blocked
+  evdev nodes (no capabilities, same `PersistentId`), each with its own virtual pad. Not seen in
+  the first spike run, then on every later one. Hearth removes their targets
+  (`SetTargetDevices([])` works) and ignores them. The hidraw-only composite has no evdev name,
+  so the controller's name falls back to the composite `Name`
+  ("Sony Interactive Entertainment DualSense Wireless Controller").
+- **Signal flood.** InputPlumber adds and removes source and target objects constantly
+  (`InterfacesAdded`/`Removed` under `devices/`), and its device manager retries virtual nodes
+  for 4 s each ("Unable to create initialized UdevDevice … after 80 attempts"). Listing devices
+  on every signal kept Hearth's input thread busy for seconds; only `CompositeDevice*` paths are
+  watched now, debounced.
+- **Face button codes.** The Xbox target writes West (Square) as code 307 and North (Triangle)
+  as 308, like real xpad (`BTN_X` = `BTN_NORTH`). SDL (`x:b2`) and RetroArch (`input_y_btn = 2`)
+  number buttons by code order and get it right; gilrs has no SDL mapping for the virtual pad
+  and names them by code, so its observer swaps them back.
+- **Triggers in gilrs.** Without an SDL mapping gilrs reports the virtual pad's `ABS_Z`/`ABS_RZ`
+  as axes `LeftZ`/`RightZ` from -1 (released) to 1.
+- **Profiles.** `Mute` is accepted as a button name although the JSON schema doesn't list it.
+  A mapping with `target_events: []` drops the input. All generated profiles load without
+  warnings.
+- **Live remap.** `LoadProfilePath` while the game is frozen, then `Pass` on resume: the new
+  mapping is active at once in Dolphin and RetroArch (verified by hand with an A/B swap).
+- **Per-axis inversion** is impossible: stick values are `Vector2 { x: Option, y: Option }`,
+  `invert` negates both, and a source can't select x or y events.
+- **Exit.** SIGTERM, SIGKILL during a game (guard), and InputPlumber stopped (auto falls back to
+  gilrs) all verified. The guard's log lines go through gamescope's output and are lost when
+  gamescope exits with Hearth; the release itself is checked with `ip_probe`.

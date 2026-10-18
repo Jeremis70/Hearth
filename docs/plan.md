@@ -89,7 +89,7 @@ hearth/
 |---|---|---|
 | `slint`, `slint-build` | 1.18 | UI, `.slint` compiled at build time |
 | `gilrs` | 0.11 | Controller input on the dev laptop / non-InputPlumber systems |
-| `zbus` | 6.0 | D-Bus client for InputPlumber |
+| `zbus` | 5.19 | D-Bus client for InputPlumber (6.0 needs rustc 1.89) |
 | `nmrs` | 3.5 | NetworkManager: list/connect Wi-Fi, device state, change monitoring (async, tokio) |
 | `logind-zbus` | 5.3 | Suspend / reboot / power off |
 | `x11rb` | 0.14 | Setting gamescope X11 properties |
@@ -127,34 +127,51 @@ hearth/
 ### 6.2 Input
 
 ```rust
-pub enum Action { Up, Down, Left, Right, Accept, Back, PrevTab, NextTab, Options, HomeShort, HomeLong }
+pub enum Action { Up, Down, Left, Right, Accept, Back, PrevTab, NextTab, Options, HomeShort, HomeLong, Capture }
 
 pub trait InputBackend: Send {
-    fn start(&mut self, tx: Sender<Action>) -> Result<()>;
-    fn set_mode(&mut self, mode: InputMode); // Shell (we get everything) | Game (game gets everything except Home)
+    fn start(&mut self, tx: Sender<Action>) -> Result<(), InputError>;
 }
+// The session keeps an `InputControl` handle: set_mode(Shell | Game | Test),
+// set_game_profile(path), release(timeout). Detached (no-op) for gilrs.
 ```
 
-Two implementations:
+`--input=auto|inputplumber|gilrs` (default auto: InputPlumber if it runs, is ≥ 0.69 and accepts
+Hearth's first write, else gilrs, with the reason logged). Verified API, quirks and polkit
+behaviour: `docs/spikes/inputplumber.md`.
 
-**InputPlumber backend (appliance).** InputPlumber exposes one composite device per physical controller on D-Bus with an `InterceptMode` property:
-- `0 None`: everything goes to the virtual pad (game).
-- `1 Pass`: everything goes to the game, but a Guide press switches the device to `Always` and is delivered over D-Bus.
-- `2 Always`: nothing goes to the game; all input is delivered over D-Bus.
-- `3 GamepadOnly`: gamepad input over D-Bus, other devices pass through.
+**InputPlumber backend (appliance)** (`hearth-platform::input::inputplumber`, zbus 5 blocking,
+own threads). InputPlumber exposes one composite device per physical controller
+(`org.shadowblip.Input.CompositeDevice`) with an `InterceptMode` property (0 None, 1 Pass,
+2 Always). Intercepted input arrives as `InputEvent(name, value)` signals (`ui_accept`,
+`ui_guide`, …) from `org.shadowblip.Input.DBusDevice`.
 
 Flow:
-1. Hearth home/library visible → set `Always` (we receive all input; no game sees it).
-2. Game focused → set `Pass`.
-3. Player presses Guide → InputPlumber switches to `Always` by itself and sends us the Guide event. We start a timer:
-   - Release before ~500 ms → **HomeShort**: show overlay.
-   - Still held at ~500 ms → **HomeLong**: focus the shell.
-4. Overlay closed / "Resume" chosen → set `Pass` again and refocus the game.
-5. Virtual pad type: Xbox 360-style target for broadest emulator and Steam compatibility.
+1. Start: set `ManageAllDevices` (external pads are only taken with it), give each controller one
+   virtual `xbox-elite` pad, `Always` + Hearth's menu profile (identity, touchpad and Mute to
+   D-Bus). Composite devices without capabilities (a 0.82 race splits a DualSense's evdev nodes
+   off) get no virtual pad.
+2. Game focused → load the game's profile, then `Pass`.
+3. Guide → InputPlumber switches to `Always` by itself and sends `ui_guide`; Hearth times it
+   (~500 ms short/long, menu buttons fire on release, presses from the game are disarmed).
+4. Back to Hearth (overlay, Home) → `Always` + menu profile, so a game's remap never affects
+   Hearth's menus. Outside gamescope a short press re-asserts `Pass`.
+5. Exit, panic of the input thread, SIGTERM/SIGINT/SIGHUP → every controller `None` + default
+   profile, `ManageAllDevices` off. SIGKILL or a crash: the `--input-guard` child (it reads a
+   close-on-exec pipe from Hearth) does the same.
 
-The exact D-Bus signal carrying intercepted events comes from the DBusDevice target interface; confirm names in a spike (see §8) and in OpenGamepadUI's client code. Require InputPlumber ≥ 0.69 (fixes for CVE-2025-66005 / CVE-2025-14338, Polkit enabled by default).
+**Remapping and emulators.** Emulators always read the virtual pad (Dolphin
+`SDL/0/Xbox One Elite 2 Controller`, RetroArch's Elite 2 autoconfig) laid out like the console's
+shipped default, with emulator actions on its four paddles, Share and free buttons
+(`profiles::inputplumber_profile::VirtualLayout`). The user's layers become a
+`device_profile_v1` profile (`runtime/inputplumber/game.yaml`) routing each physical input to
+the virtual input the emulator reads; every save on a controls page rewrites it and it is loaded
+when the game is resumed, so remaps apply live. Stick inversion, deadzone, sensitivity, trigger
+mode and vibration can't be expressed in a profile and stay in the emulator configs (next
+launch, said on each option). Glyphs and the controller name come from the composite device's
+source devices, not the virtual pad.
 
-**gilrs backend (laptop / fallback).** Reads controllers directly, maps D-pad + left stick (deadzone 0.5) to actions with key repeat (400 ms delay, 80 ms rate), and times Guide for short/long press. It can't hide input from a running game, which is fine for development.
+**gilrs backend (laptop / fallback).** Reads controllers directly, maps D-pad + left stick (deadzone 0.5) to actions with key repeat (400 ms delay, 80 ms rate), and times Guide for short/long press. It can't hide input from a running game, which is fine for development. Emulator configs then target the physical pad and do the remapping themselves. With InputPlumber, a gilrs observer reads the virtual pad for the button test's raw stick and trigger values.
 
 Both backends feed the same channel; the bridge converts `Action` into Slint key events (`window.dispatch_event(WindowEvent::KeyPressed…)`), so the keyboard works too during development. Setting: Nintendo/Xbox A-B swap.
 

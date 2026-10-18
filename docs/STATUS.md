@@ -266,7 +266,7 @@ The working tree is clean.
   - library: `.dev-data/data/library.sqlite3`.
 - **FPS counter:** `HEARTH_RETROARCH_ARGS="--appendconfig=data/dev/retroarch-fps.cfg"`.
 - **Checks:** `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
-  `cargo test --workspace` (core 75, platform 25, shell 13 tests).
+  `cargo test --workspace` (core 83, platform 35, shell 13 tests).
 
 ## 4. Gotchas
 

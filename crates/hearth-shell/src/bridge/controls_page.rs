@@ -2,6 +2,7 @@
 //! changes (saved at once). The same page serves a console (Settings, system layer) and the
 //! running game (overlay or Home, game layer).
 
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use hearth_core::controls::edit::{Editor, Scope, Setting};
@@ -9,34 +10,33 @@ use hearth_core::controls::{EmulatorAction, HearthAction, Mapping, PadInput, Tar
 use hearth_core::profiles::input::Capabilities;
 use hearth_core::profiles::{dolphin_input, retroarch_input};
 use hearth_core::systems::{ControlKind, EmulatorKind, System};
-use hearth_platform::input::{Analog, Connection, PadInfo, Power};
+use hearth_platform::input::{Analog, Connection, InputControl, PadInfo, Power};
 use slint::{Model, ModelRc, VecModel};
 
 use crate::callouts::{self, Align, Placed, Point};
 use crate::controller_layout::{Layout, Side};
+use crate::controls::GameInput;
 use crate::{Callout, Choice, ControlsData, OptionRow};
 
 /// Pushes a changed mapping to a game that is already running.
 ///
-/// Today's implementation regenerates the emulator config at the next launch only: Dolphin
+/// Without InputPlumber the emulator config is regenerated at the next launch only: Dolphin
 /// reads its controller config when a game boots (`Core.cpp`, `Pad::LoadConfig`) and has no
 /// way to reload it from outside; RetroArch 1.22 loads remap files with the content and its
-/// network commands can't load one. InputPlumber can remap live (next round).
+/// network commands can't load one. With InputPlumber the remapping is a profile that is
+/// loaded again as the game comes back to the front ([`InputPlumberApplier`]); options it
+/// can't express stay in the emulator config.
 pub trait MappingApplier {
-    /// Whether a running game picks up changes right away.
+    /// Whether a running game picks up remapped buttons right away.
     fn is_live(&self) -> bool;
-    /// Applies `mapping` to the running game of `system`.
-    fn apply(&self, system: &System, mapping: &Mapping) -> ApplyOutcome;
+    /// Applies the running game's controls, resolved again from every layer.
+    fn apply(&self, input: &GameInput) -> ApplyOutcome;
 }
 
 /// What [`MappingApplier::apply`] did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApplyOutcome {
     /// The running game uses the new mapping now.
-    #[expect(
-        dead_code,
-        reason = "produced by live appliers (InputPlumber, next round)"
-    )]
     Applied,
     /// The game uses it from its next launch.
     NextLaunch,
@@ -50,8 +50,44 @@ impl MappingApplier for EmulatorConfigApplier {
         false
     }
 
-    fn apply(&self, _system: &System, _mapping: &Mapping) -> ApplyOutcome {
+    fn apply(&self, _input: &GameInput) -> ApplyOutcome {
         ApplyOutcome::NextLaunch
+    }
+}
+
+/// The running game's InputPlumber profile, rewritten in place: the input backend loads it
+/// every time the game comes back to the front.
+pub struct InputPlumberApplier {
+    /// Where the running game's profile lives (the path given to the input backend).
+    pub path: PathBuf,
+    /// The input backend.
+    pub input: InputControl,
+}
+
+impl MappingApplier for InputPlumberApplier {
+    fn is_live(&self) -> bool {
+        true
+    }
+
+    fn apply(&self, input: &GameInput) -> ApplyOutcome {
+        let Some(profile) = &input.profile else {
+            return ApplyOutcome::NextLaunch;
+        };
+        let written = self
+            .path
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| std::fs::write(&self.path, &profile.yaml));
+        match written {
+            Ok(()) => {
+                self.input.set_game_profile(Some(self.path.clone()));
+                ApplyOutcome::Applied
+            }
+            Err(err) => {
+                tracing::warn!(path = %self.path.display(), "writing the controller profile failed: {err}");
+                ApplyOutcome::NextLaunch
+            }
+        }
     }
 }
 
@@ -61,8 +97,9 @@ pub struct Page {
     /// The running game's title when the page is scoped to it.
     game_title: Option<String>,
     /// Whether the running game uses this page's mapping.
-    affects_running: bool,
-    /// Whether changes reach a running game at once.
+    pub affects_running: bool,
+    /// Whether remapped buttons reach a running game at once (InputPlumber). Options only
+    /// the emulator can do still wait for the next launch.
     live: bool,
     caps: Capabilities,
     emulator: EmulatorKind,
@@ -71,7 +108,13 @@ pub struct Page {
     extras: Vec<PadInput>,
     /// Something was saved since the page opened.
     pub changed: bool,
+    /// An option only the emulator config holds was changed since the page opened.
+    pub changed_next_launch: bool,
 }
+
+/// What every option that only the emulator config can hold adds to its hint while it would
+/// only reach the running game at its next launch.
+const NEXT_LAUNCH: &str = "Applies next time you start the game.";
 
 /// Deadzone steps the emulator can do: (maximum, step).
 fn deadzone_range(kind: EmulatorKind) -> (f32, f32) {
@@ -116,12 +159,14 @@ impl Page {
             layout: Layout::generic(),
             extras,
             changed: false,
+            changed_next_launch: false,
         }
     }
 
     /// Why `input` can't do anything on this page's console, if it can't.
     fn unreadable(&self, input: PadInput) -> Option<&'static str> {
-        (input.is_extra() && self.emulator == EmulatorKind::Retroarch)
+        // InputPlumber routes every physical input onto the virtual pad the emulator reads.
+        (input.is_extra() && self.emulator == EmulatorKind::Retroarch && !self.live)
             .then_some("RetroArch can't read this button, so it does nothing in these games.")
     }
 
@@ -226,8 +271,16 @@ impl Page {
         let mut rows = Vec::new();
         let on_off = |b: bool| if b { "On" } else { "Off" };
         let pct = |v: f32| format!("{:.0} %", v * 100.0);
+        // Every option below lives in the emulator config: with live remapping it is the only
+        // thing still waiting for the next launch, so each option says so.
+        let next_launch = self.affects_running && self.live;
         let mut push =
             |id: &str, label: String, value: String, hint: &str, changed: bool, kind: i32| {
+                let hint = match (next_launch && id != "reset", hint.ends_with('.')) {
+                    (false, _) => hint.to_owned(),
+                    (true, true) => format!("{hint} {NEXT_LAUNCH}"),
+                    (true, false) => format!("{hint}. {NEXT_LAUNCH}"),
+                };
                 rows.push(OptionRow {
                     id: id.into(),
                     label: label.into(),
@@ -364,8 +417,8 @@ impl Page {
             for c in controls.all().into_iter().skip(controls.declared().len()) {
                 targets.push(Target::Control(c.name));
             }
-            // Hearth reads buttons through gilrs, which can't see the touchpad.
-            if input != PadInput::Touchpad {
+            // gilrs can't see the touchpad (a separate device); InputPlumber can.
+            if input != PadInput::Touchpad || self.live {
                 targets.extend(HearthAction::ALL.map(Target::Hearth));
             }
             for action in EmulatorAction::ALL {
@@ -428,6 +481,7 @@ impl Page {
         if id == "reset" {
             self.editor.reset().map_err(|e| e.to_string())?;
             self.changed = true;
+            self.changed_next_launch = true;
             return Ok("Back to defaults".into());
         }
         let m = self.editor.current().mapping;
@@ -450,6 +504,7 @@ impl Page {
             };
             self.editor.set(setting).map_err(|e| e.to_string())?;
             self.changed = true;
+            self.changed_next_launch = true;
             return Ok(String::new());
         }
         let setting = match id.split_once('.') {
@@ -468,13 +523,8 @@ impl Page {
         };
         self.editor.set(setting).map_err(|e| e.to_string())?;
         self.changed = true;
+        self.changed_next_launch = true;
         Ok(String::new())
-    }
-
-    /// Applies the page's mapping to the running game, if it uses it.
-    pub fn apply(&self, applier: &dyn MappingApplier) -> Option<ApplyOutcome> {
-        self.affects_running
-            .then(|| applier.apply(self.system(), &self.editor.current().mapping))
     }
 }
 

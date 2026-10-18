@@ -24,7 +24,6 @@ use hearth_core::controls::edit::{Editor, Scope};
 use hearth_core::controls::{ControllerKind, GameKey, HearthAction, PadInput, Target, defaults};
 use hearth_core::library::{Library, LibraryEntry};
 use hearth_core::model::{GameId, SystemId};
-use hearth_core::profiles::inputplumber_profile::Profile;
 use hearth_core::profiles::{DolphinProfile, RetroArchProfile};
 use hearth_core::runtime::{
     LaunchCtx, ProcessRuntime, Runtime, RuntimeEvent, Session as RuntimeSession, SessionId,
@@ -38,7 +37,7 @@ use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::rc::Rc;
 
 use super::controls_page::{
-    self, ApplyOutcome, EmulatorConfigApplier, MappingApplier, Page, TestPage,
+    self, ApplyOutcome, EmulatorConfigApplier, InputPlumberApplier, MappingApplier, Page, TestPage,
 };
 use super::models;
 use crate::controls;
@@ -124,7 +123,6 @@ pub struct Controller {
     profile: RetroArchProfile,
     dolphin: DolphinProfile,
     controls_dir: PathBuf,
-    runtime_dir: PathBuf,
     activity: PadActivity,
     input: InputControl,
     library_db: PathBuf,
@@ -243,6 +241,14 @@ pub fn install(setup: Setup) {
         setup.systems.clone(),
     );
 
+    let applier: Box<dyn MappingApplier> = if setup.input.is_live() {
+        Box::new(InputPlumberApplier {
+            path: setup.runtime_dir.join("inputplumber").join("game.yaml"),
+            input: setup.input.clone(),
+        })
+    } else {
+        Box::new(EmulatorConfigApplier)
+    };
     let controller = Controller {
         app: setup.app,
         overlay: setup.overlay,
@@ -253,7 +259,6 @@ pub fn install(setup: Setup) {
         profile: setup.profile,
         dolphin: setup.dolphin,
         controls_dir: setup.controls_dir,
-        runtime_dir: setup.runtime_dir,
         activity: setup.activity,
         input: setup.input,
         library_db: setup.library_db,
@@ -268,7 +273,7 @@ pub fn install(setup: Setup) {
         game_capture: Vec::new(),
         focus_timer: slint::Timer::default(),
         pages: [None, None],
-        applier: Box::new(EmulatorConfigApplier),
+        applier,
         message_timer: slint::Timer::default(),
         testing: false,
         test_timer: slint::Timer::default(),
@@ -556,24 +561,10 @@ impl Controller {
             self.toast(&format!("No emulator set up for {}", system.name));
             return;
         };
-        let device = controls::device(&self.activity.pads(), &self.controls_dir);
-        let pad = if self.input.is_live() {
-            controls::PadTarget::Virtual
-        } else {
-            controls::PadTarget::Physical
-        };
-        let input = controls::game_input(
-            system,
-            &game,
-            emulator.kind,
-            &self.controls_dir,
-            device,
-            &self.profile,
-            pad,
-        );
-        if self.input.is_live() {
-            self.input
-                .set_game_profile(self.write_game_profile(input.profile.as_ref()));
+        let input = self.game_input(system, &game, emulator.kind);
+        if self.input.is_live() && self.applier.apply(&input) != ApplyOutcome::Applied {
+            // No remapping rather than the previous game's.
+            self.input.set_game_profile(None);
         }
         tracing::info!(key = %input.key.as_string(), "controls resolved");
         self.game_capture = input
@@ -669,22 +660,39 @@ impl Controller {
         self.refresh();
     }
 
-    /// Writes the running game's InputPlumber profile where the daemon reads it. `None` (no
-    /// remapping) if there is none or it can't be written.
-    fn write_game_profile(&self, profile: Option<&Profile>) -> Option<PathBuf> {
-        let profile = profile?;
-        let path = self.runtime_dir.join("inputplumber").join("game.yaml");
-        let written = path
-            .parent()
-            .map_or(Ok(()), std::fs::create_dir_all)
-            .and_then(|()| std::fs::write(&path, &profile.yaml));
-        match written {
-            Ok(()) => Some(path),
-            Err(err) => {
-                tracing::warn!(path = %path.display(), "writing the controller profile failed: {err}");
-                None
-            }
-        }
+    /// Resolves and translates `game`'s controls for the controller as it is now.
+    fn game_input(
+        &self,
+        system: &hearth_core::systems::System,
+        game: &hearth_core::model::Game,
+        kind: EmulatorKind,
+    ) -> controls::GameInput {
+        let device = controls::device(&self.activity.pads(), &self.controls_dir);
+        let pad = if self.input.is_live() {
+            controls::PadTarget::Virtual
+        } else {
+            controls::PadTarget::Physical
+        };
+        controls::game_input(
+            system,
+            game,
+            kind,
+            &self.controls_dir,
+            device,
+            &self.profile,
+            pad,
+        )
+    }
+
+    /// Applies the running game's controls again (after an edit on a controls page).
+    fn apply_running_controls(&self) -> Option<ApplyOutcome> {
+        let game = &self.active.as_ref()?.game;
+        let system = self.systems.get(&game.system)?;
+        let kind = system.emulator()?.kind;
+        let input = self.game_input(system, game, kind);
+        let outcome = self.applier.apply(&input);
+        tracing::info!(?outcome, game = %game.id, "controls applied to the running game");
+        Some(outcome)
     }
 
     /// Looks for the game's windows on a worker thread and tags them with `app_id`.
@@ -1228,6 +1236,13 @@ impl Controller {
     }
 
     fn after_edit(&mut self, which: usize, result: Result<String, String>) {
+        // Saved at once, so a live remapping is ready the moment the game is resumed.
+        let affects = self.pages[which]
+            .as_ref()
+            .is_some_and(|p| p.affects_running);
+        if result.is_ok() && affects && self.applier.is_live() {
+            self.apply_running_controls();
+        }
         let message = match result {
             Ok(message) => message,
             Err(err) => {
@@ -1262,7 +1277,14 @@ impl Controller {
             return;
         }
         let title = self.title();
-        match page.apply(self.applier.as_ref()) {
+        let outcome = page
+            .affects_running
+            .then(|| self.apply_running_controls())
+            .flatten();
+        match outcome {
+            Some(ApplyOutcome::Applied) if page.changed_next_launch => self.toast(&format!(
+                "New buttons active in {title}; stick, trigger and vibration options apply next time you start it"
+            )),
             Some(ApplyOutcome::Applied) => self.toast(&format!("New controls active in {title}")),
             Some(ApplyOutcome::NextLaunch) if which == MAIN => {
                 self.toast(&format!("New controls apply next time you start {title}"));

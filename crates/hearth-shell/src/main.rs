@@ -15,9 +15,10 @@ use hearth_core::paths::{self, DataDirs};
 use hearth_core::profiles::{DolphinInstall, DolphinProfile, RetroArchProfile};
 use hearth_core::systems::Systems;
 use hearth_platform::gamescope::{self, Compositor};
-use hearth_platform::input::InputBackend;
 use hearth_platform::input::dev_socket::DevSocketBackend;
 use hearth_platform::input::gilrs::GilrsBackend;
+use hearth_platform::input::inputplumber::InputPlumberBackend;
+use hearth_platform::input::{InputBackend, InputControl, PadActivity};
 use hearth_platform::network::MockNetworkBackend;
 use hearth_platform::process;
 use nix::sys::signal::{SigSet, Signal};
@@ -25,6 +26,9 @@ use slint::ComponentHandle;
 use tracing_subscriber::EnvFilter;
 
 slint::include_modules!();
+
+/// Longest wait for InputPlumber to take the controllers back on exit.
+const RELEASE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Hearth, a controller-first living-room console.
 #[derive(Debug, Parser)]
@@ -48,6 +52,59 @@ struct Args {
     /// of a title.
     #[arg(long, value_name = "GAME")]
     print_controls: Option<String>,
+    /// Where controller input comes from: InputPlumber (hides Hearth's menu input from games,
+    /// remaps live), gilrs (reads controllers directly), or auto (InputPlumber when it runs
+    /// and allows Hearth to use it, else gilrs).
+    #[arg(long, value_enum, default_value_t = InputChoice::Auto)]
+    input: InputChoice,
+}
+
+/// `--input`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum InputChoice {
+    Auto,
+    Inputplumber,
+    Gilrs,
+}
+
+/// The controller backend, its live state and the session's handle on it.
+struct Input {
+    backend: Box<dyn InputBackend>,
+    activity: PadActivity,
+    control: InputControl,
+}
+
+/// Picks the controller backend. `auto` falls back to gilrs and says why.
+fn select_input(choice: InputChoice, runtime_dir: &std::path::Path) -> anyhow::Result<Input> {
+    let gilrs = || {
+        let backend = GilrsBackend::new();
+        Input {
+            activity: backend.activity(),
+            control: InputControl::detached(),
+            backend: Box::new(backend),
+        }
+    };
+    let inputplumber = || {
+        InputPlumberBackend::connect(&runtime_dir.join("inputplumber")).map(|backend| Input {
+            activity: backend.activity(),
+            control: backend.control(),
+            backend: Box::new(backend),
+        })
+    };
+    Ok(match choice {
+        InputChoice::Gilrs => gilrs(),
+        InputChoice::Inputplumber => inputplumber().context("using InputPlumber")?,
+        InputChoice::Auto => match inputplumber() {
+            Ok(input) => {
+                tracing::info!("controller input through InputPlumber");
+                input
+            }
+            Err(err) => {
+                tracing::info!("not using InputPlumber ({err}); reading controllers with gilrs");
+                gilrs()
+            }
+        },
+    })
 }
 
 fn main() -> anyhow::Result<()> {
@@ -130,7 +187,7 @@ fn main() -> anyhow::Result<()> {
         None => tracing::info!("Dolphin not found: GameCube and Wii games won't launch"),
     }
 
-    let gilrs = GilrsBackend::new();
+    let input = select_input(args.input, dirs.runtime())?;
     bridge::session::install(bridge::session::Setup {
         app: app.as_weak(),
         overlay,
@@ -139,7 +196,8 @@ fn main() -> anyhow::Result<()> {
         profile: RetroArchProfile::new(dirs.retroarch()),
         dolphin: DolphinProfile::new(dirs.dolphin(), dolphin),
         controls_dir,
-        activity: gilrs.activity(),
+        activity: input.activity.clone(),
+        input: input.control.clone(),
         library_db: dirs.library_db(),
         games_dir,
     });
@@ -157,7 +215,7 @@ fn main() -> anyhow::Result<()> {
         },
     );
 
-    let mut backends: Vec<Box<dyn InputBackend>> = vec![Box::new(gilrs)];
+    let mut backends: Vec<Box<dyn InputBackend>> = vec![input.backend];
     if let Some(path) = args.dev_socket {
         backends.push(Box::new(DevSocketBackend::new(path)));
     }
@@ -170,6 +228,12 @@ fn main() -> anyhow::Result<()> {
     slint::run_event_loop_until_quit()?;
     tracing::info!("shutting down");
     bridge::session::shutdown();
+    if input.control.is_live() && !input.control.release(RELEASE_TIMEOUT) {
+        tracing::warn!("the input thread didn't hand the controllers back; doing it directly");
+        if let Err(err) = hearth_platform::input::inputplumber::release_all() {
+            tracing::warn!("handing the controllers back failed: {err}");
+        }
+    }
     Ok(())
 }
 

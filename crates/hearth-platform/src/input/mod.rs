@@ -2,13 +2,16 @@
 //!
 //! Every backend feeds [`Action`]s into one channel; the shell turns them into key events.
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 pub mod dev_socket;
 pub mod gilrs;
 pub mod inputplumber;
+mod pad_state;
 pub mod repeat;
 
 /// Everything the UI can be asked to do by a controller.
@@ -240,6 +243,71 @@ pub enum InputMode {
     Game,
 }
 
+/// What the session can ask of the backend that owns the controllers.
+#[derive(Debug)]
+pub enum InputCommand {
+    /// Switch who receives input.
+    Mode(InputMode),
+    /// The remapping profile to use while a game has the controller (`None`: no remapping).
+    /// Takes effect the next time the mode becomes [`InputMode::Game`].
+    GameProfile(Option<PathBuf>),
+    /// Hand the controllers back to the system (Hearth is exiting); answers when done.
+    Release(mpsc::SyncSender<()>),
+}
+
+/// The session's handle on the input backend. Backends that can't hide input from games (gilrs)
+/// hand out a detached handle, on which every call does nothing.
+#[derive(Debug, Clone, Default)]
+pub struct InputControl(Option<Sender<InputCommand>>);
+
+impl InputControl {
+    /// A handle that does nothing.
+    pub fn detached() -> Self {
+        Self(None)
+    }
+
+    /// A handle sending to a backend's command channel.
+    pub fn new(tx: Sender<InputCommand>) -> Self {
+        Self(Some(tx))
+    }
+
+    /// Whether a backend listens: games get remapped live and Hearth's input is hidden from them.
+    pub fn is_live(&self) -> bool {
+        self.0.is_some()
+    }
+
+    /// See [`InputCommand::Mode`]. Always sent, even when unchanged: the backend re-applies it
+    /// (InputPlumber switches a controller to Hearth by itself when Guide is pressed).
+    pub fn set_mode(&self, mode: InputMode) {
+        self.send(InputCommand::Mode(mode));
+    }
+
+    /// See [`InputCommand::GameProfile`].
+    pub fn set_game_profile(&self, profile: Option<PathBuf>) {
+        self.send(InputCommand::GameProfile(profile));
+    }
+
+    /// Hands the controllers back, waiting at most `timeout`. Returns whether it finished.
+    pub fn release(&self, timeout: Duration) -> bool {
+        let Some(tx) = &self.0 else {
+            return true;
+        };
+        let (done_tx, done_rx) = mpsc::sync_channel(1);
+        if tx.send(InputCommand::Release(done_tx)).is_err() {
+            return false;
+        }
+        done_rx.recv_timeout(timeout).is_ok()
+    }
+
+    fn send(&self, command: InputCommand) {
+        if let Some(tx) = &self.0
+            && tx.send(command).is_err()
+        {
+            tracing::warn!("input backend gone; command dropped");
+        }
+    }
+}
+
 /// Errors from an input backend.
 #[derive(Debug, thiserror::Error)]
 pub enum InputError {
@@ -255,9 +323,6 @@ pub enum InputError {
 pub trait InputBackend: Send {
     /// Starts delivering actions to `tx` from a background thread.
     fn start(&mut self, tx: Sender<Action>) -> Result<(), InputError>;
-
-    /// Switches who receives input. Backends that can't hide input from games ignore it.
-    fn set_mode(&mut self, mode: InputMode);
 }
 
 #[cfg(test)]

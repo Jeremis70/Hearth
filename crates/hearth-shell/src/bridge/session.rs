@@ -32,7 +32,7 @@ use hearth_core::scan::scan_roms;
 use hearth_core::session::{ActiveSession, SessionState};
 use hearth_core::systems::{EmulatorKind, SuspendPolicy, Systems};
 use hearth_platform::gamescope::{AppId, Compositor, SHELL_APP_ID};
-use hearth_platform::input::{Action, PadActivity};
+use hearth_platform::input::{Action, InputControl, InputMode, PadActivity};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::rc::Rc;
 
@@ -124,6 +124,7 @@ pub struct Controller {
     dolphin: DolphinProfile,
     controls_dir: PathBuf,
     activity: PadActivity,
+    input: InputControl,
     library_db: PathBuf,
     entries: Vec<LibraryEntry>,
     active: Option<ActiveSession>,
@@ -171,6 +172,8 @@ pub struct Setup {
     pub controls_dir: PathBuf,
     /// Live controller state: connected pads, disarming held buttons.
     pub activity: PadActivity,
+    /// Who gets the controller (InputPlumber), and the game's remapping.
+    pub input: InputControl,
     /// Library database file.
     pub library_db: PathBuf,
     /// Root scanned for ROMs (read-only).
@@ -247,6 +250,7 @@ pub fn install(setup: Setup) {
         dolphin: setup.dolphin,
         controls_dir: setup.controls_dir,
         activity: setup.activity,
+        input: setup.input,
         library_db: setup.library_db,
         entries: Vec::new(),
         active: None,
@@ -396,7 +400,7 @@ impl Controller {
                     .overlay
                     .as_ref()
                     .map_or(Route::None, |o| Route::Overlay(o.clone_strong())),
-                // The game owns the controller; gilrs can't hide input from it, so drop ours.
+                // The game owns the controller (with gilrs, the game sees these presses too).
                 Mode::Game | Mode::Launching => Route::None,
             },
         }
@@ -404,8 +408,14 @@ impl Controller {
 
     /// Switches what has the controller, and with it which buttons are Capture: the game's
     /// mapping while a game is in front, the controller type's default in Hearth's menus.
+    ///
+    /// With InputPlumber the controller follows: the game only gets input while it is in front.
     fn set_mode(&mut self, mode: Mode) {
         self.mode = mode;
+        self.input.set_mode(match mode {
+            Mode::Game => InputMode::Game,
+            Mode::Shell | Mode::Launching | Mode::Overlay => InputMode::Shell,
+        });
         self.sync_capture();
     }
 
@@ -493,6 +503,9 @@ impl Controller {
                     tracing::info!(
                         "the overlay needs gamescope in Steam mode; long press closes the game"
                     );
+                    // InputPlumber gave Hearth the controller when Guide went down: give it
+                    // back to the game.
+                    self.set_mode(Mode::Game);
                 }
             }
             Mode::Game => {

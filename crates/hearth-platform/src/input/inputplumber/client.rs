@@ -68,6 +68,9 @@ trait CompositeDevice {
 
     #[zbus(property)]
     fn dbus_devices(&self) -> zbus::Result<Vec<String>>;
+
+    #[zbus(property)]
+    fn capabilities(&self) -> zbus::Result<Vec<String>>;
 }
 
 #[zbus::proxy(
@@ -217,8 +220,11 @@ impl Client {
         Ok(self.device(device)?.set_intercept_mode(mode as u32)?)
     }
 
-    /// Loads a profile file (the root daemon reads it; it must be readable by root).
+    /// Loads a profile file. The daemon (root, its own working directory) opens it, so the path
+    /// is made absolute first.
     pub fn load_profile(&self, device: &str, profile: &Path) -> Result<(), ClientError> {
+        let profile = std::path::absolute(profile)
+            .map_err(|err| ClientError::DBus(format!("{}: {err}", profile.display())))?;
         Ok(self
             .device(device)?
             .load_profile_path(&profile.to_string_lossy())?)
@@ -232,6 +238,14 @@ impl Client {
     /// Replaces a composite device's virtual devices (`"xbox-elite"`, `"keyboard"`, …).
     pub fn set_targets(&self, device: &str, targets: &[&str]) -> Result<(), ClientError> {
         Ok(self.device(device)?.set_target_devices(targets)?)
+    }
+
+    /// The inputs a composite device produces ("Gamepad:Button:South", …). Empty for a device
+    /// that only holds blocked sources: InputPlumber 0.82 sometimes puts a DualSense's evdev
+    /// nodes in a composite device of their own next to the real one (a race when it takes
+    /// the controller).
+    pub fn capabilities(&self, device: &str) -> Result<Vec<String>, ClientError> {
+        Ok(self.device(device)?.capabilities()?)
     }
 
     /// The D-Bus target objects that emit a composite device's intercepted input.
@@ -291,12 +305,15 @@ fn source_object(dev_path: &str) -> Option<String> {
     valid.then(|| format!("{ROOT}/devices/source/{base}"))
 }
 
-/// Builds a [`PadInfo`] from a controller's source devices. The shortest name is the base
-/// device ("DualSense Wireless Controller", next to "… Touchpad" and "… Motion Sensors").
+/// Builds a [`PadInfo`] from a controller's source devices. The name is the shortest evdev
+/// name, the base device ("DualSense Wireless Controller", next to "… Touchpad" and "… Motion
+/// Sensors"); hidraw names can be any of those, so without evdev sources the composite
+/// device's name is used.
 fn pad_info(sources: &[SourceInfo], fallback_name: &str) -> PadInfo {
     let hex = |s: &str| u16::from_str_radix(s, 16).ok().filter(|v| *v != 0);
     let name = sources
         .iter()
+        .filter(|s| s.dev_path.contains("/input/event"))
         .map(|s| s.name.as_str())
         .filter(|n| !n.is_empty())
         .min_by_key(|n| n.len())
@@ -430,6 +447,24 @@ mod tests {
         assert_eq!(pad.vendor_id, Some(0x054c));
         assert_eq!(pad.product_id, Some(0x0ce6));
         assert_eq!(pad.connection, PadConnection::Bluetooth);
+    }
+
+    #[test]
+    fn hidraw_only_controller_uses_the_composite_name() {
+        let sources = [source(
+            "/dev/hidraw6",
+            "DualSense Wireless Controller Touchpad",
+            "5",
+        )];
+        let pad = pad_info(
+            &sources,
+            "Sony Interactive Entertainment DualSense Wireless Controller",
+        );
+        assert_eq!(
+            pad.os_name,
+            "Sony Interactive Entertainment DualSense Wireless Controller"
+        );
+        assert_eq!(pad.vendor_id, Some(0x054c));
     }
 
     #[test]

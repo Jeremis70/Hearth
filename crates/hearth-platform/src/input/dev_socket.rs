@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::thread;
 
-use super::{Action, InputBackend, InputError, InputMode};
+use super::{Action, InputBackend, InputError};
 
 /// Parses an action name (`home_short`, `prev_tab`, …; case-insensitive).
 pub fn parse_action(name: &str) -> Option<Action> {
@@ -79,8 +79,6 @@ impl InputBackend for DevSocketBackend {
         self.started = true;
         Ok(())
     }
-
-    fn set_mode(&mut self, _mode: InputMode) {}
 }
 
 #[cfg(test)]

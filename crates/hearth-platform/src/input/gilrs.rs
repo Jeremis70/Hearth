@@ -11,12 +11,9 @@ use std::time::{Duration, Instant};
 use gilrs::ev::filter::{Filter, axis_dpad_to_button};
 use gilrs::{Axis, Button, Event, EventType, Gilrs, GilrsBuilder, PowerInfo};
 
-use super::repeat::stick_direction;
-use super::repeat::{DirectionSource, GuidePress, HeldDirections, KeyRepeat, STICK_DEADZONE};
-use super::{
-    Action, Analog, Connection, Direction, InputBackend, InputError, InputMode, PadActivity,
-    PadInfo, Power,
-};
+use super::pad_state::{PadEvent, PadState};
+use super::repeat::STICK_DEADZONE;
+use super::{Action, Analog, Connection, InputBackend, InputError, PadActivity, PadInfo, Power};
 
 /// Longest time the input thread sleeps without an event or a pending deadline.
 const IDLE_WAIT: Duration = Duration::from_millis(250);
@@ -71,10 +68,6 @@ impl InputBackend for GilrsBackend {
         self.started = true;
         Ok(())
     }
-
-    fn set_mode(&mut self, _mode: InputMode) {
-        // gilrs can't hide input from a game.
-    }
 }
 
 /// gilrs without its deadzone and jitter filters, so the button test sees raw values (drift);
@@ -123,8 +116,6 @@ fn run(mut gilrs: Gilrs, tx: &Sender<Action>, activity: &PadActivity) {
     let mut out = Vec::new();
     // Extra buttons held (gilrs has no `Button` for them), by Hearth name.
     let mut extras: Vec<&'static str> = Vec::new();
-    // Capture buttons pressed and not yet released.
-    let mut capture_held: Vec<&'static str> = Vec::new();
     let mut pads_refreshed = Instant::now();
     loop {
         let now = Instant::now();
@@ -138,40 +129,24 @@ fn run(mut gilrs: Gilrs, tx: &Sender<Action>, activity: &PadActivity) {
             pads_refreshed = now;
         }
         if let Some(event) = event {
-            match event.event {
-                EventType::ButtonPressed(button, code) => {
-                    if let Some(name) = input_name(button, code.into_u32())
-                        && activity.capture_inputs().contains(&name)
-                        && !capture_held.contains(&name)
-                    {
-                        capture_held.push(name);
-                    }
-                }
-                EventType::ButtonReleased(button, code) => {
-                    if let Some(name) = input_name(button, code.into_u32())
-                        && let Some(i) = capture_held.iter().position(|n| *n == name)
-                    {
-                        capture_held.remove(i);
-                        out.push(Action::Capture);
-                    }
-                }
-                _ => {}
-            }
             let input = match event.event {
-                EventType::ButtonPressed(Button::Unknown, code) => {
-                    if let Some(name) = extra_name(code.into_u32())
+                EventType::ButtonPressed(button, code) => {
+                    let name = input_name(button, code.into_u32());
+                    if button == Button::Unknown
+                        && let Some(name) = name
                         && !extras.contains(&name)
                     {
                         extras.push(name);
                     }
-                    None
+                    name.map(PadEvent::Pressed)
                 }
-                EventType::ButtonReleased(Button::Unknown, code) => {
-                    extras.retain(|n| Some(*n) != extra_name(code.into_u32()));
-                    None
+                EventType::ButtonReleased(button, code) => {
+                    let name = input_name(button, code.into_u32());
+                    if button == Button::Unknown {
+                        extras.retain(|n| Some(*n) != name);
+                    }
+                    name.map(PadEvent::Released)
                 }
-                EventType::ButtonPressed(button, _) => Some(PadEvent::Pressed(button)),
-                EventType::ButtonReleased(button, _) => Some(PadEvent::Released(button)),
                 EventType::AxisChanged(Axis::LeftStickX | Axis::LeftStickY, _, _) => {
                     let pad = gilrs.gamepad(event.id);
                     Some(PadEvent::Stick(
@@ -192,7 +167,8 @@ fn run(mut gilrs: Gilrs, tx: &Sender<Action>, activity: &PadActivity) {
                 _ => None,
             };
             if let Some(input) = input {
-                state.handle(input, now, activity.disarm_count(), &mut out);
+                let capture = activity.capture_inputs();
+                state.handle(input, now, activity.disarm_count(), &capture, &mut out);
             }
             let mut pressed = pressed_inputs(&gilrs);
             for name in &extras {
@@ -344,107 +320,6 @@ pub fn connected_pads() -> Result<Vec<PadInfo>, InputError> {
     Ok(pad_infos(&gilrs))
 }
 
-/// The subset of gilrs events the state machine cares about.
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum PadEvent {
-    Pressed(Button),
-    Released(Button),
-    Stick(f32, f32),
-    Disconnected,
-}
-
-/// What a button means to Hearth.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ButtonRole {
-    Direction(Direction),
-    Action(Action),
-    Guide,
-}
-
-fn button_role(button: Button) -> Option<ButtonRole> {
-    use ButtonRole as R;
-    Some(match button {
-        Button::DPadUp => R::Direction(Direction::Up),
-        Button::DPadDown => R::Direction(Direction::Down),
-        Button::DPadLeft => R::Direction(Direction::Left),
-        Button::DPadRight => R::Direction(Direction::Right),
-        // TODO(M1): Nintendo/Xbox A-B swap setting.
-        Button::South => R::Action(Action::Accept),
-        Button::East => R::Action(Action::Back),
-        Button::LeftTrigger => R::Action(Action::PrevTab),
-        Button::RightTrigger => R::Action(Action::NextTab),
-        Button::Start => R::Action(Action::Options),
-        Button::Mode => R::Guide,
-        _ => return None,
-    })
-}
-
-/// Merged state of every connected controller.
-#[derive(Debug, Default)]
-struct PadState {
-    held: HeldDirections,
-    repeat: KeyRepeat,
-    guide: GuidePress,
-    /// Action buttons held down, with the disarm count at the time they were pressed.
-    armed: Vec<(Button, u64)>,
-}
-
-impl PadState {
-    /// Action buttons fire when released, and only if nothing disarmed them in between: the
-    /// press that resumes a game is over before the game sees anything, and a button pressed
-    /// in a game can't act in Hearth when it is released there.
-    fn handle(&mut self, event: PadEvent, now: Instant, disarms: u64, out: &mut Vec<Action>) {
-        match event {
-            PadEvent::Pressed(button) => match button_role(button) {
-                Some(ButtonRole::Direction(dir)) => {
-                    self.held.press(DirectionSource::DPadButton, dir);
-                    out.extend(self.repeat.set(self.held.current(), now));
-                }
-                Some(ButtonRole::Action(_)) => {
-                    self.armed.retain(|(b, _)| *b != button);
-                    self.armed.push((button, disarms));
-                }
-                Some(ButtonRole::Guide) => self.guide.press(now),
-                None => {}
-            },
-            PadEvent::Released(button) => match button_role(button) {
-                Some(ButtonRole::Direction(dir)) => {
-                    self.held.release(DirectionSource::DPadButton, dir);
-                    out.extend(self.repeat.set(self.held.current(), now));
-                }
-                Some(ButtonRole::Action(action)) => {
-                    let pressed_at = self.armed.iter().position(|(b, _)| *b == button);
-                    if let Some(i) = pressed_at
-                        && self.armed.swap_remove(i).1 == disarms
-                    {
-                        out.push(action);
-                    }
-                }
-                Some(ButtonRole::Guide) => out.extend(self.guide.release(now)),
-                None => {}
-            },
-            PadEvent::Stick(x, y) => {
-                let dir = stick_direction(x, y, STICK_DEADZONE);
-                self.held.set_axis(DirectionSource::Stick, dir);
-                out.extend(self.repeat.set(self.held.current(), now));
-            }
-            PadEvent::Disconnected => *self = Self::default(),
-        }
-    }
-
-    fn tick(&mut self, now: Instant, out: &mut Vec<Action>) {
-        out.extend(self.repeat.tick(now));
-        out.extend(self.guide.tick(now));
-    }
-
-    fn deadline(&self) -> Option<Instant> {
-        match (self.repeat.deadline(), self.guide.deadline()) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -459,87 +334,5 @@ mod tests {
         assert_eq!(extra_name(key(0x130)), None);
         // An absolute axis with the same number isn't a key.
         assert_eq!(extra_name((3 << 16) | 167), None);
-    }
-
-    fn feed(state: &mut PadState, event: PadEvent, now: Instant) -> Vec<Action> {
-        feed_with(state, event, now, 0)
-    }
-
-    fn feed_with(state: &mut PadState, event: PadEvent, now: Instant, disarms: u64) -> Vec<Action> {
-        let mut out = Vec::new();
-        state.handle(event, now, disarms, &mut out);
-        state.tick(now, &mut out);
-        out
-    }
-
-    #[test]
-    fn face_buttons_fire_on_release() {
-        let mut state = PadState::default();
-        let now = Instant::now();
-        assert!(feed(&mut state, PadEvent::Pressed(Button::South), now).is_empty());
-        assert_eq!(
-            feed(&mut state, PadEvent::Released(Button::South), now),
-            [Action::Accept]
-        );
-        assert!(feed(&mut state, PadEvent::Pressed(Button::RightTrigger), now).is_empty());
-        assert_eq!(
-            feed(&mut state, PadEvent::Released(Button::RightTrigger), now),
-            [Action::NextTab]
-        );
-        // A release without a press seen (held since before Hearth started) does nothing.
-        assert!(feed(&mut state, PadEvent::Released(Button::East), now).is_empty());
-    }
-
-    #[test]
-    fn disarmed_press_does_not_fire() {
-        let mut state = PadState::default();
-        let now = Instant::now();
-        assert!(feed_with(&mut state, PadEvent::Pressed(Button::South), now, 3).is_empty());
-        // Hearth took the controller back from the game while A was held.
-        assert!(feed_with(&mut state, PadEvent::Released(Button::South), now, 4).is_empty());
-        assert!(feed_with(&mut state, PadEvent::Pressed(Button::South), now, 4).is_empty());
-        assert_eq!(
-            feed_with(&mut state, PadEvent::Released(Button::South), now, 4),
-            [Action::Accept]
-        );
-    }
-
-    #[test]
-    fn stick_and_dpad_share_one_repeat() {
-        let mut state = PadState::default();
-        let t0 = Instant::now();
-        assert_eq!(
-            feed(&mut state, PadEvent::Stick(0.9, 0.0), t0),
-            [Action::Right]
-        );
-        // Small wobble in the same direction doesn't retrigger.
-        assert!(feed(&mut state, PadEvent::Stick(0.8, 0.1), t0).is_empty());
-        let t1 = t0 + Duration::from_millis(100);
-        assert_eq!(
-            feed(&mut state, PadEvent::Pressed(Button::DPadDown), t1),
-            [Action::Down]
-        );
-        // Releasing the D-pad falls back to the still-held stick.
-        assert_eq!(
-            feed(&mut state, PadEvent::Released(Button::DPadDown), t1),
-            [Action::Right]
-        );
-        assert!(feed(&mut state, PadEvent::Stick(0.1, 0.0), t1).is_empty());
-        assert_eq!(state.deadline(), None);
-    }
-
-    #[test]
-    fn guide_short_press() {
-        let mut state = PadState::default();
-        let t0 = Instant::now();
-        assert!(feed(&mut state, PadEvent::Pressed(Button::Mode), t0).is_empty());
-        assert_eq!(
-            feed(
-                &mut state,
-                PadEvent::Released(Button::Mode),
-                t0 + Duration::from_millis(200)
-            ),
-            [Action::HomeShort]
-        );
     }
 }

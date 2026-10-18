@@ -119,6 +119,7 @@ pub struct DataDirs {
     cache: PathBuf,
     retroarch: PathBuf,
     dolphin: PathBuf,
+    runtime: PathBuf,
 }
 
 impl DataDirs {
@@ -140,6 +141,7 @@ impl DataDirs {
                     cache: dirs.cache_dir().to_path_buf(),
                     retroarch: dirs.data_dir().join("retroarch"),
                     dolphin: dirs.data_dir().join("dolphin"),
+                    runtime: dirs.data_dir().join("runtime"),
                 })
             }
         }
@@ -152,6 +154,7 @@ impl DataDirs {
             cache: root.join("cache"),
             retroarch: root.join("retroarch"),
             dolphin: root.join("dolphin"),
+            runtime: root.join("runtime"),
         }
     }
 
@@ -163,6 +166,7 @@ impl DataDirs {
             &self.cache,
             &self.retroarch,
             &self.dolphin,
+            &self.runtime,
         ] {
             std::fs::create_dir_all(dir).map_err(|source| PathsError::Create {
                 path: dir.clone(),
@@ -195,6 +199,11 @@ impl DataDirs {
     /// Hearth's isolated Dolphin user directory (config, saves, NAND, logs).
     pub fn dolphin(&self) -> &Path {
         &self.dolphin
+    }
+
+    /// Files generated for one run and read by other processes (InputPlumber profiles).
+    pub fn runtime(&self) -> &Path {
+        &self.runtime
     }
 
     /// The library database file.

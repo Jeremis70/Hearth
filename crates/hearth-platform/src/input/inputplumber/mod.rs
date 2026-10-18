@@ -11,7 +11,7 @@
 
 pub mod client;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;
@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 use zbus::MatchRule;
 use zbus::blocking::MessageIterator;
 use zbus::message::Type as MessageType;
+use zbus::zvariant::{OwnedObjectPath, OwnedValue};
 
 use self::client::{Client, ClientError, InterceptMode, SERVICE};
 use super::pad_state::{PadEvent, PadState};
@@ -56,6 +57,8 @@ mapping:
 const IDLE_WAIT: Duration = Duration::from_millis(250);
 /// How often controllers are listed again (battery, missed signals).
 const DEVICES_REFRESH: Duration = Duration::from_secs(10);
+/// Wait after a controller appears or goes before looking, so its parts have arrived.
+const DEVICES_SETTLE: Duration = Duration::from_millis(300);
 
 /// Controller input via InputPlumber, on its own thread.
 #[derive(Debug)]
@@ -158,6 +161,20 @@ fn release_devices<'a>(client: &Client, devices: impl IntoIterator<Item = &'a St
     }
 }
 
+/// Hands the controllers back if the thread holding it unwinds.
+struct ReleaseOnPanic;
+
+impl Drop for ReleaseOnPanic {
+    fn drop(&mut self) {
+        if thread::panicking() {
+            tracing::error!("InputPlumber thread panicked; handing the controllers back");
+            if let Err(err) = release_all() {
+                tracing::warn!("handing the controllers back failed: {err}");
+            }
+        }
+    }
+}
+
 /// Everything the worker thread reacts to.
 #[derive(Debug)]
 enum Msg {
@@ -196,8 +213,24 @@ fn forward_signals(signals: MessageIterator, tx: &Sender<Msg>) {
                     }
                 }
             }
-            ("org.freedesktop.DBus.ObjectManager", "InterfacesAdded" | "InterfacesRemoved") => {
-                Msg::Devices
+            // Source and target objects come and go all the time; only controllers matter.
+            ("org.freedesktop.DBus.ObjectManager", "InterfacesAdded") => {
+                match message
+                    .body()
+                    .deserialize::<(OwnedObjectPath, AddedInterfaces)>()
+                {
+                    Ok((path, _)) if is_composite_path(path.as_str()) => Msg::Devices,
+                    _ => continue,
+                }
+            }
+            ("org.freedesktop.DBus.ObjectManager", "InterfacesRemoved") => {
+                match message
+                    .body()
+                    .deserialize::<(OwnedObjectPath, Vec<String>)>()
+                {
+                    Ok((path, _)) if is_composite_path(path.as_str()) => Msg::Devices,
+                    _ => continue,
+                }
             }
             _ => continue,
         };
@@ -206,6 +239,15 @@ fn forward_signals(signals: MessageIterator, tx: &Sender<Msg>) {
         }
     }
     tracing::warn!("InputPlumber signal stream ended");
+}
+
+/// The interfaces (with their properties) in an `InterfacesAdded` signal.
+type AddedInterfaces = HashMap<String, HashMap<String, OwnedValue>>;
+
+/// Whether an object path is a composite device (`…/CompositeDevice3`).
+fn is_composite_path(path: &str) -> bool {
+    path.strip_prefix("/org/shadowblip/InputPlumber/CompositeDevice")
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// Hearth pad position name of an InputPlumber D-Bus event. D-pad and left stick both send
@@ -254,24 +296,30 @@ struct Worker {
 
 impl Worker {
     fn run(mut self, rx: &Receiver<Msg>, tx: &Sender<Action>) {
+        // Without this thread nothing reads the controllers: if it panics, hand them back.
+        let _release_on_panic = ReleaseOnPanic;
         let mut out = Vec::new();
-        let mut refreshed = Instant::now();
+        // When to list the controllers again: soon after a change (InputPlumber adds a
+        // controller's parts one by one), and every DEVICES_REFRESH anyway.
+        let mut refresh_at = Instant::now() + DEVICES_REFRESH;
         loop {
             let now = Instant::now();
-            let wait = self.state.deadline().map_or(IDLE_WAIT, |d| {
-                d.saturating_duration_since(now).min(IDLE_WAIT)
-            });
+            let deadline = self
+                .state
+                .deadline()
+                .map_or(refresh_at, |d| d.min(refresh_at));
+            let wait = deadline.saturating_duration_since(now).min(IDLE_WAIT);
             match rx.recv_timeout(wait) {
                 Ok(Msg::Input(name, value)) => self.on_input(&name, value, &mut out),
                 Ok(Msg::Command(command)) => self.on_command(command),
-                Ok(Msg::Devices) => self.refresh_devices(),
+                Ok(Msg::Devices) => refresh_at = refresh_at.min(now + DEVICES_SETTLE),
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => return,
             }
             let now = Instant::now();
-            if now >= refreshed + DEVICES_REFRESH {
+            if now >= refresh_at {
                 self.refresh_devices();
-                refreshed = now;
+                refresh_at = now + DEVICES_REFRESH;
             }
             self.state.tick(now, &mut out);
             for action in out.drain(..) {
@@ -317,6 +365,7 @@ impl Worker {
     }
 
     fn on_command(&mut self, command: InputCommand) {
+        tracing::debug!(?command, "input command");
         match command {
             InputCommand::Mode(mode) => {
                 self.mode = mode;
@@ -467,6 +516,25 @@ mod tests {
         }
         assert_eq!(position_of("ui_quick"), None);
         assert_eq!(position_of(CAPTURE_EVENT), None);
+    }
+
+    #[test]
+    fn composite_paths() {
+        assert!(is_composite_path(
+            "/org/shadowblip/InputPlumber/CompositeDevice0"
+        ));
+        assert!(is_composite_path(
+            "/org/shadowblip/InputPlumber/CompositeDevice12"
+        ));
+        assert!(!is_composite_path(
+            "/org/shadowblip/InputPlumber/CompositeDevice"
+        ));
+        assert!(!is_composite_path(
+            "/org/shadowblip/InputPlumber/devices/source/hidraw6"
+        ));
+        assert!(!is_composite_path(
+            "/org/shadowblip/InputPlumber/devices/target/dbus0"
+        ));
     }
 
     #[test]

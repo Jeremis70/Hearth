@@ -4,6 +4,7 @@ mod bridge;
 mod callouts;
 mod controller_layout;
 mod controls;
+mod guard;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -52,6 +53,10 @@ struct Args {
     /// of a title.
     #[arg(long, value_name = "GAME")]
     print_controls: Option<String>,
+    /// Internal: the guard process that hands the controllers back to InputPlumber if Hearth
+    /// dies without doing it (see `guard`).
+    #[arg(long, hide = true)]
+    input_guard: bool,
     /// Where controller input comes from: InputPlumber (hides Hearth's menu input from games,
     /// remaps live), gilrs (reads controllers directly), or auto (InputPlumber when it runs
     /// and allows Hearth to use it, else gilrs).
@@ -115,6 +120,10 @@ fn main() -> anyhow::Result<()> {
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
     let args = Args::parse();
+    if args.input_guard {
+        guard::run();
+        return Ok(());
+    }
 
     let dirs = DataDirs::from_env().context("resolving data directories")?;
     dirs.create_all()?;
@@ -188,6 +197,8 @@ fn main() -> anyhow::Result<()> {
     }
 
     let input = select_input(args.input, dirs.runtime())?;
+    // Hands the controllers back even if Hearth is killed (SIGKILL included).
+    let guard = input.control.is_live().then(guard::Guard::spawn).flatten();
     bridge::session::install(bridge::session::Setup {
         app: app.as_weak(),
         overlay,
@@ -233,6 +244,9 @@ fn main() -> anyhow::Result<()> {
         if let Err(err) = hearth_platform::input::inputplumber::release_all() {
             tracing::warn!("handing the controllers back failed: {err}");
         }
+    }
+    if let Some(guard) = guard {
+        guard.stand_down();
     }
     Ok(())
 }

@@ -132,3 +132,28 @@ on/off, axis→trigger. These stay in the emulator configs.
   `invert` negates both, and a source can't select x or y events.
 - **Exit.** SIGTERM, SIGKILL during a game (guard), and InputPlumber stopped (auto falls back to
   gilrs) all verified. The guard (`hearth-guard`) logs to stdout like Hearth.
+
+## Found while handling things going away (2026-10-18)
+
+- **Daemon restart.** Its bus name changes owner; signals keep matching when the match rule is
+  by path (`path_namespace`), not by sender. `ManageAllDevices` is false again after a restart.
+  There is no D-Bus activation file, so calls while it is down fail instead of starting it.
+- **Controller off.** The composite device is stopped and the virtual pad disappears from under
+  the game ("Error uploading effect … Failed to get effect ID" if a rumble was playing). On
+  reconnect it is recreated at the same path, often with the input-less duplicates again.
+- **Raw pad on reconnect.** The kernel's DualSense evdev nodes are readable for a moment
+  before InputPlumber hides them: RetroArch (udev driver) opened them as player 1, and the
+  shipped DualSense autoconfig's PS button opened its menu.
+- **RetroArch player reservation** (`input_player1_device_reservation_type = 2`,
+  `input_player1_reserved_device = "045e:0b00 …"`, RetroArch 1.22.2) didn't keep the raw pad
+  out of port 1. Dropped.
+- **SDL device allowlist** (`SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT=0x045e/0x0b00`) with
+  RetroArch's `sdl2` joypad driver: across a reconnect with the game in front RetroArch only
+  ever saw "Xbox One Elite 2 Controller (1118/2816)". RetroArch's sdl2 driver numbers buttons
+  as SDL GameController (Misc1 15, paddles 16–19); fast-forward on a paddle and live remap
+  verified by hand.
+- **Device config override.** A file of the same name in `/etc/inputplumber/devices.d` wins
+  over the shipped one (`data/inputplumber/devices.d/60-ps5_ds_gamepad.yaml`): the composite
+  device then starts with the Elite pad, no virtual DualSense in between.
+- **Battery.** No InputPlumber API. The kernel's `power_supply` under the HID device has it
+  (UPower reads the same, as a gaming-input device). The DualSense reports 5, 15, 25… %.

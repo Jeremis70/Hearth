@@ -89,7 +89,7 @@ hearth/
 |---|---|---|
 | `slint`, `slint-build` | 1.18 | UI, `.slint` compiled at build time |
 | `gilrs` | 0.11 | Controller input on the dev laptop / non-InputPlumber systems |
-| `zbus` | 5.19 | D-Bus client for InputPlumber (6.0 needs rustc 1.89) |
+| `zbus` | 5.19 | D-Bus client for InputPlumber, blocking API (no tokio). Not 6.0: it needs rustc 1.89 and the workspace targets 1.88 |
 | `nmrs` | 3.5 | NetworkManager: list/connect Wi-Fi, device state, change monitoring (async, tokio) |
 | `logind-zbus` | 5.3 | Suspend / reboot / power off |
 | `x11rb` | 0.14 | Setting gamescope X11 properties |
@@ -161,15 +161,36 @@ Flow:
    close-on-exec pipe from Hearth) does the same.
 
 **Remapping and emulators.** Emulators always read the virtual pad (Dolphin
-`SDL/0/Xbox One Elite 2 Controller`, RetroArch's Elite 2 autoconfig) laid out like the console's
-shipped default, with emulator actions on its four paddles, Share and free buttons
-(`profiles::inputplumber_profile::VirtualLayout`). The user's layers become a
-`device_profile_v1` profile (`runtime/inputplumber/game.yaml`) routing each physical input to
-the virtual input the emulator reads; every save on a controls page rewrites it and it is loaded
-when the game is resumed, so remaps apply live. Stick inversion, deadzone, sensitivity, trigger
-mode and vibration can't be expressed in a profile and stay in the emulator configs (next
-launch, said on each option). Glyphs and the controller name come from the composite device's
-source devices, not the virtual pad.
+`SDL/0/Xbox One Elite 2 Controller`; RetroArch through its `sdl2` driver and Hearth's profile
+for the pad) laid out like the console's shipped default, with emulator actions on its four
+paddles, Share and free buttons (`profiles::inputplumber_profile::VirtualLayout`). A device
+allowlist keeps every other pad away from them (§6.6). The Elite 2 pad was chosen over the
+Xbox 360 one for those five spare buttons, which SDL and RetroArch both read.
+
+**Live vs next launch.** The user's layers become a `device_profile_v1` profile
+(`runtime/inputplumber/game.yaml`) routing each physical input to the virtual input the emulator
+reads; every save on a controls page rewrites it and it is loaded when the game is resumed, so
+button and stick remaps, emulator actions and Capture apply live. A profile can't express stick
+inversion (only both axes at once), deadzone, sensitivity, trigger mode or vibration: those stay
+in the emulator configs, apply at the next launch, and each option says so.
+
+**InputPlumber config.** `data/inputplumber/devices.d/60-ps5_ds_gamepad.yaml`, installed in
+`/etc/inputplumber/devices.d/` on the box, gives the DualSense the Elite pad from the moment it
+is taken (InputPlumber's own config starts with a virtual DualSense).
+
+**Things going away.**
+- InputPlumber stops or restarts: a game in front is frozen under the overlay; gilrs reads the
+  controllers for Hearth meanwhile; when InputPlumber is back (any time) Hearth takes the
+  controllers again; back within 2 s, the game resumes by itself. A game started meanwhile
+  keeps the physical pad until it ends.
+- The controller driving the game disconnects: frozen under the overlay ("Reconnect your
+  controller"); on reconnect, Resume focused, so the emulator picks up the new virtual pad while
+  the game can't move. Another pad: a notice only.
+- Controller notices (no pause): battery ≤ 20 % and ≤ 10 % once per charge (kernel
+  `power_supply`, also on gilrs), connected / disconnected.
+
+Glyphs and the controller name come from the composite device's source devices, not the virtual
+pad.
 
 **gilrs backend (laptop / fallback).** Reads controllers directly, maps D-pad + left stick (deadzone 0.5) to actions with key repeat (400 ms delay, 80 ms rate), and times Guide for short/long press. It can't hide input from a running game, which is fine for development. Emulator configs then target the physical pad and do the remapping themselves. With InputPlumber, a gilrs observer reads the virtual pad for the button test's raw stick and trigger values.
 
@@ -243,8 +264,10 @@ suspend = "sigstop"
 
 Emulator detection order: PATH binary → Flatpak (`flatpak info <id>`) → AppImage folder. Missing emulator = game shown greyed with "Install Dolphin to play".
 
-**Profiles** make every emulator behave like part of one console:
-- Fullscreen, no emulator UI, pause on focus loss, emulator hotkeys disabled, controller mapped to the virtual Xbox 360 pad, saves under `~/.local/share/hearth/saves/<system>/`.
+**Profiles** make every emulator behave like part of one console. Checklist for each one:
+- Fullscreen, no emulator UI, pause on focus loss, saves under `~/.local/share/hearth/saves/<system>/`.
+- Controller: InputPlumber's virtual Xbox Elite 2 pad, laid out like the console's default; emulator actions on its paddles, Share and free buttons, everything else unbound (no pad button reaches the emulator's menu or hotkeys).
+- The emulator only ever sees the InputPlumber virtual pad (device allowlist), never raw pads: a reconnecting controller is visible for a moment before InputPlumber hides it. SDL emulators get `SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT=0x045e/0x0b00`; RetroArch uses its `sdl2` joypad driver for it, and only Hearth's own joypad profile (its autoconfig folder is Hearth's).
 - Prefer non-destructive overrides: RetroArch `--appendconfig=data/profiles/retroarch.cfg`; Dolphin `-C Section.Key=Value` overrides; flags like `-fullscreen` for PCSX2/DuckStation. Only edit INI files (with `rust-ini`) when an emulator has no CLI override.
 - Each profile is verified when its system is added (CLI flags change between versions).
 

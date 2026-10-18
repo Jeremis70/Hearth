@@ -14,7 +14,18 @@ Last updated: 2026-10-18. Read this first, then `AGENTS.md` (rules, commands),
 - InputPlumber input (`docs/spikes/inputplumber.md`): menus hidden from games, Guide over D-Bus,
   live remapping through profiles, the virtual Elite pad for every emulator.
 
-Latest commits, newest first (InputPlumber, 2026-10-18):
+Latest commits, newest first (things going away, 2026-10-18):
+- `980df42`: controller notices (battery, connect), freeze when the game's controller goes,
+  ghost devices stripped again on reconnect.
+- `f4f5704`: emulators see only the virtual pad (SDL allowlist, RetroArch `sdl2` driver and
+  Hearth's own joypad profiles).
+- `7a75ad1`: InputPlumber DualSense config with the Elite pad (install in
+  `/etc/inputplumber/devices.d/`, already installed on this laptop).
+- `dfef039`: freeze when InputPlumber goes away, take over whenever it returns.
+- `f734b38`: survive InputPlumber restarting.
+- `3884145`: guard as its own `hearth-guard` binary.
+
+InputPlumber round, 2026-10-18:
 - `abcc994`: Mute and raw values in the button test; gilrs trigger axes, paddle order.
 - `0bf5a95`: live apply through the game's profile, per-option "next launch" notes.
 - `3b36323`: emulators on the virtual pad with a fixed layout.
@@ -85,7 +96,10 @@ The working tree is clean.
     try USB;
   - stick options (inversion, deadzone, sensitivity), triggers and vibration still apply at the
     next launch (a profile can't express them);
-  - user idea: the button test's trigger highlight could follow the pull (visual change).
+  - user idea: the button test's trigger highlight could follow the pull (visual change);
+  - user idea: a battery indicator when the pad is plugged in or unplugged ("charging · 45 %");
+  - the reconnect overlay and the notice card are placeholders (user); Kenney's controller
+    icons aren't in the repo, the card uses Lucide's gamepad.
 - Later milestones (`docs/plan.md`):
   - Capture: panel and hold-to-screenshot, see `docs/design/overlay.md` §10.
   - ES-DE import, Steam, overlay dock actions, Home row redesign.

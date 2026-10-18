@@ -129,6 +129,7 @@ mod tests {
             kind: ControlKind::Button,
             label: name.into(),
             hint: None,
+            same_as: None,
         }
     }
 

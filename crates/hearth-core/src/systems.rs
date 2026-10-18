@@ -76,6 +76,11 @@ pub struct ConsoleControl {
     /// One line for players who never held this console's controller.
     #[serde(default)]
     pub hint: Option<String>,
+    /// Another control that drives the same console input (the N64's C-up is the C-buttons
+    /// stick pushed up). Lets a remapping layer that only knows where the other one sits route
+    /// this one too.
+    #[serde(default)]
+    pub same_as: Option<String>,
 }
 
 /// Directions of a stick or D-pad, as suffixes of their derived button controls.
@@ -121,6 +126,7 @@ impl ConsoleControls {
             kind: ControlKind::Button,
             label: format!("{} {dir}", parent.label),
             hint: parent.hint.clone(),
+            same_as: None,
         }
     }
 

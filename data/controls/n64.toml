@@ -46,24 +46,28 @@ hint = "Red button in the center: pauses or opens the menu"
 name = "C-up"
 kind = "button"
 label = "C-up"
+same_as = "C-buttons up"
 hint = "Top yellow C button: often looks around in first person"
 
 [[console]]
 name = "C-down"
 kind = "button"
 label = "C-down"
+same_as = "C-buttons down"
 hint = "Bottom yellow C button: often an item or a camera move"
 
 [[console]]
 name = "C-left"
 kind = "button"
 label = "C-left"
+same_as = "C-buttons left"
 hint = "Left yellow C button: often an item or a camera move"
 
 [[console]]
 name = "C-right"
 kind = "button"
 label = "C-right"
+same_as = "C-buttons right"
 hint = "Right yellow C button: often an item or a camera move"
 
 [[console]]

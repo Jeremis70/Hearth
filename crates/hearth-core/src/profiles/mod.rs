@@ -4,6 +4,7 @@
 pub mod dolphin;
 pub mod dolphin_input;
 pub mod input;
+pub mod inputplumber_profile;
 pub mod retroarch;
 pub mod retroarch_input;
 

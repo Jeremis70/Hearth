@@ -80,6 +80,19 @@ impl ControllerIdentity {
         }
     }
 
+    /// InputPlumber's virtual pad (`xbox-elite` target), which games see instead of the real
+    /// controller when InputPlumber is used. Names checked with SDL 3.4 and evdev on
+    /// InputPlumber 0.82; never overridden by `device.toml` (that describes the real pad).
+    pub fn virtual_pad() -> Self {
+        Self {
+            kind: ControllerKind::Xbox,
+            os_name: "Microsoft X-Box One Elite 2 pad".into(),
+            vendor_id: Some(0x045e),
+            product_id: Some(0x0b00),
+            sdl_name: "Xbox One Elite 2 Controller".into(),
+        }
+    }
+
     /// Used when no controller is connected at launch: the DualSense this was developed with
     /// (USB), so a pad connected later still matches.
     pub fn fallback() -> Self {

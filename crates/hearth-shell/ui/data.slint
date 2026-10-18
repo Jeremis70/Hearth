@@ -50,6 +50,17 @@ export global Status {
     in property <string> toast;     // empty: hidden
 }
 
+// A controller notice (battery low, connected, disconnected): a small card in a corner for a
+// few seconds, never pausing anything. Set by the session in both windows.
+export global PadNotice {
+    in property <bool> shown;
+    in property <string> text;
+    // The controller's name or "15 %".
+    in property <string> detail;
+    // Battery percent shown with its icon; -1: no battery icon (connect/disconnect).
+    in property <int> battery: -1;
+}
+
 // The running game, and the actions that control it (handled in src/bridge/session.rs).
 export global Session {
     in property <bool> active;

@@ -1,10 +1,11 @@
+import { PadNoticeCard } from "components/pad_notice.slint";
 import "../../../assets/fonts/Manrope-Regular.ttf";
 import "../../../assets/fonts/Manrope-Medium.ttf";
 import "../../../assets/fonts/Manrope-SemiBold.ttf";
 
 import { Theme } from "theme.slint";
 import { UiAction, InputMap } from "input.slint";
-import { HomeData, SettingsData, Status, Session, HomeTile, TileKind, SettingsCategory, WifiRow } from "data.slint";
+import { HomeData, SettingsData, Status, PadNotice, Session, HomeTile, TileKind, SettingsCategory, WifiRow } from "data.slint";
 import { Home } from "home.slint";
 import { SettingsScreen } from "settings/settings.slint";
 import { Placeholder } from "placeholder.slint";
@@ -14,7 +15,7 @@ import { ControllerType } from "components/glyphs.slint";
 import { ControlsScreen } from "controls/screen.slint";
 import { ControlsData, Callout, Choice, OptionRow } from "controls/data.slint";
 
-export { Theme, ControllerType, OverlayWindow, OverlayPanel, HomeData, SettingsData, Status, Session, HomeTile, TileKind, SettingsCategory, WifiRow, ControlsData, Callout, Choice, OptionRow }
+export { Theme, ControllerType, OverlayWindow, OverlayPanel, HomeData, SettingsData, Status, PadNotice, Session, HomeTile, TileKind, SettingsCategory, WifiRow, ControlsData, Callout, Choice, OptionRow }
 
 enum Screen { home, settings, placeholder, controls, button-test }
 
@@ -141,6 +142,11 @@ export component AppWindow inherits Window {
         Toast {
             x: (parent.width - self.width) / 2;
             y: parent.height - Theme.safe-y - Theme.sp-96 - self.height;
+        }
+        // Controller notices, bottom right, over everything else.
+        PadNoticeCard {
+            x: parent.width - Theme.safe-x - self.width;
+            y: parent.height - Theme.safe-y - self.height;
         }
     }
 }

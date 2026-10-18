@@ -155,7 +155,6 @@ impl InputBackend for InputPlumberBackend {
             game_profile: None,
             mode: InputMode::Shell,
             devices: BTreeSet::new(),
-            ignored: BTreeSet::new(),
             released: false,
             state: PadState::default(),
             pressed: Vec::new(),
@@ -208,6 +207,8 @@ enum Msg {
     Input(String, f64),
     /// Composite devices were added or removed.
     Devices,
+    /// This composite device was (re)created: a controller reconnecting gets the path it had.
+    Added(String),
     /// The daemon got (`true`) or lost (`false`) its bus name: it restarted or stopped.
     Owner(bool),
 }
@@ -269,7 +270,9 @@ fn forward_signals(signals: MessageIterator, tx: &Sender<Msg>) {
                     .body()
                     .deserialize::<(OwnedObjectPath, AddedInterfaces)>()
                 {
-                    Ok((path, _)) if is_composite_path(path.as_str()) => Msg::Devices,
+                    Ok((path, _)) if is_composite_path(path.as_str()) => {
+                        Msg::Added(path.to_string())
+                    }
                     _ => continue,
                 }
             }
@@ -353,8 +356,6 @@ struct Worker {
     mode: InputMode,
     /// Composite devices Hearth has set up.
     devices: BTreeSet<String>,
-    /// Composite devices without inputs whose virtual devices were removed.
-    ignored: BTreeSet<String>,
     /// Handed back (Hearth is exiting): never take a controller again.
     released: bool,
     state: PadState,
@@ -380,6 +381,11 @@ impl Worker {
                 Ok(Msg::Command(command)) => self.on_command(command),
                 Ok(Msg::Input(name, value)) => self.on_input(&name, value, &mut out),
                 Ok(Msg::Devices) => refresh_at = refresh_at.min(now + DEVICES_SETTLE),
+                Ok(Msg::Added(device)) => {
+                    // A new device even if the path is known: set it up again.
+                    self.devices.remove(&device);
+                    refresh_at = refresh_at.min(now + DEVICES_SETTLE);
+                }
                 Ok(Msg::Owner(false)) => {
                     self.daemon_present = false;
                     self.daemon_gone(now, tx);
@@ -464,7 +470,6 @@ impl Worker {
         tracing::warn!("InputPlumber went away; reading controllers with gilrs until it is back");
         self.daemon = Daemon::Down(now, false);
         self.devices.clear();
-        self.ignored.clear();
         self.state = PadState::default();
         self.pressed.clear();
         self.activity.set_pressed(Vec::new());
@@ -602,12 +607,15 @@ impl Worker {
 
     /// Whether a composite device produces any input. One that doesn't (only blocked sources,
     /// see [`Client::capabilities`]) must not get a virtual pad: games would see a dead second
-    /// controller. Its targets are removed.
+    /// controller (with Hearth's InputPlumber config it even gets the Elite pad games are
+    /// allowed to see). Its targets are removed, again whenever it has some: a reconnecting
+    /// controller brings new ones at the same paths.
     fn has_inputs(&mut self, device: &str) -> bool {
         match self.client.capabilities(device) {
             Ok(caps) if !caps.is_empty() => true,
             Ok(_) => {
-                if self.ignored.insert(device.to_owned()) {
+                let has_targets = self.client.targets(device).is_ok_and(|t| !t.is_empty());
+                if has_targets {
                     tracing::info!(%device, "composite device without inputs; removing its virtual devices");
                     if let Err(err) = self.client.set_targets(device, &[]) {
                         tracing::warn!(%device, "removing its virtual devices failed: {err}");

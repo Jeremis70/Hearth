@@ -726,6 +726,7 @@ mod tests {
     #[test]
     fn controller_line_names_connection_and_battery() {
         let pad = PadInfo {
+            id: "pad".into(),
             name: "PS5 Controller".into(),
             os_name: String::new(),
             vendor_id: None,

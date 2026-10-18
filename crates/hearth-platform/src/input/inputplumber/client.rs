@@ -55,6 +55,9 @@ trait CompositeDevice {
     fn name(&self) -> zbus::Result<String>;
 
     #[zbus(property)]
+    fn persistent_id(&self) -> zbus::Result<String>;
+
+    #[zbus(property)]
     fn intercept_mode(&self) -> zbus::Result<u32>;
 
     #[zbus(property)]
@@ -71,6 +74,9 @@ trait CompositeDevice {
 
     #[zbus(property)]
     fn capabilities(&self) -> zbus::Result<Vec<String>>;
+
+    #[zbus(property)]
+    fn target_devices(&self) -> zbus::Result<Vec<String>>;
 }
 
 #[zbus::proxy(
@@ -248,6 +254,11 @@ impl Client {
         Ok(self.device(device)?.capabilities()?)
     }
 
+    /// The virtual devices a composite device feeds (object paths).
+    pub fn targets(&self, device: &str) -> Result<Vec<String>, ClientError> {
+        Ok(self.device(device)?.target_devices()?)
+    }
+
     /// The D-Bus target objects that emit a composite device's intercepted input.
     pub fn dbus_targets(&self, device: &str) -> Result<Vec<String>, ClientError> {
         Ok(self.device(device)?.dbus_devices()?)
@@ -281,7 +292,12 @@ impl Client {
             });
         }
         let fallback_name = composite.name().unwrap_or_default();
-        Ok(pad_info(&sources, &fallback_name))
+        let mut pad = pad_info(&sources, &fallback_name);
+        pad.id = match composite.persistent_id() {
+            Ok(id) if !id.is_empty() => format!("inputplumber:{id}"),
+            _ => format!("inputplumber:{device}"),
+        };
+        Ok(pad)
     }
 }
 
@@ -323,6 +339,7 @@ fn pad_info(sources: &[SourceInfo], fallback_name: &str) -> PadInfo {
     let bus = sources.iter().find_map(|s| s.bus.parse::<u16>().ok());
     let hidraw = sources.iter().find(|s| s.dev_path.contains("hidraw"));
     PadInfo {
+        id: String::new(),
         name: name.clone(),
         os_name: name,
         vendor_id: with_ids.and_then(|s| hex(&s.vendor)),

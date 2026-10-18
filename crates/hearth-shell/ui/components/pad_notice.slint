@@ -1,0 +1,51 @@
+import { Theme } from "../theme.slint";
+import { PadNotice } from "../data.slint";
+import { Icons } from "../icons.slint";
+
+// Controller notice (PadNotice): pad icon, battery icon and percent when it's about the battery,
+// one line of text. Bottom right, for a few seconds; takes no input.
+export component PadNoticeCard inherits Rectangle {
+    property <bool> critical: PadNotice.battery >= 0 && PadNotice.battery <= 10;
+    width: content.preferred-width + 2 * Theme.sp-24;
+    height: content.preferred-height + 2 * Theme.sp-16;
+    border-radius: Theme.radius-md;
+    background: Theme.surface-raised;
+    drop-shadow-blur: Theme.sp-24;
+    drop-shadow-color: #00000080;
+    opacity: PadNotice.shown ? 1 : 0;
+    animate opacity { duration: Theme.base; easing: ease-out; }
+
+    content := VerticalLayout {
+        x: Theme.sp-24;
+        y: Theme.sp-16;
+        spacing: Theme.sp-8;
+        HorizontalLayout {
+            spacing: Theme.sp-12;
+            alignment: start;
+            Image {
+                source: Icons.gamepad;
+                colorize: Theme.text-primary;
+                width: 32px * Theme.scale;
+                height: self.width;
+            }
+            if PadNotice.battery >= 0: Image {
+                source: critical ? Icons.battery-warning : Icons.battery-low;
+                colorize: Theme.warning;
+                width: 32px * Theme.scale;
+                height: self.width;
+            }
+            Text {
+                text: PadNotice.detail;
+                font-size: Theme.body-lg;
+                font-weight: Theme.medium;
+                color: PadNotice.battery >= 0 ? Theme.warning : Theme.text-primary;
+                vertical-alignment: center;
+            }
+        }
+        Text {
+            text: PadNotice.text;
+            font-size: Theme.body;
+            color: Theme.text-secondary;
+        }
+    }
+}

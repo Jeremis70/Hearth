@@ -381,6 +381,14 @@ fn pad_infos(gilrs: &Gilrs) -> Vec<PadInfo> {
     gilrs
         .gamepads()
         .map(|(_, pad)| PadInfo {
+            id: format!(
+                "gilrs:{}:{}",
+                pad.uuid()
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<String>(),
+                pad.os_name()
+            ),
             name: pad.name().to_owned(),
             os_name: pad.os_name().to_owned(),
             vendor_id: pad.vendor_id(),

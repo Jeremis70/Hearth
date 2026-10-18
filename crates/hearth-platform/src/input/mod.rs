@@ -85,6 +85,9 @@ struct ActivityState {
 /// What the input backend knows about a connected controller.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PadInfo {
+    /// Stays the same while the controller reconnects (InputPlumber's persistent id, the
+    /// Bluetooth address of a DualSense; gilrs: its SDL GUID and kernel name).
+    pub id: String,
     /// Name from the SDL mapping database ("PS5 Controller"), or the kernel name.
     pub name: String,
     /// Kernel (evdev) name.

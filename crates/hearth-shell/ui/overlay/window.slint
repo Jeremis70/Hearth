@@ -1,3 +1,4 @@
+import { PadNoticeCard } from "../components/pad_notice.slint";
 import { Theme } from "../theme.slint";
 import { UiAction, InputMap } from "../input.slint";
 import { ControlsScreen } from "../controls/screen.slint";
@@ -116,6 +117,11 @@ export component OverlayWindow inherits Window {
                 y: drawn == OverlayPanel.notice
                     ? Theme.safe-y + Theme.sp-24
                     : parent.height - Theme.safe-y - Theme.sp-96 - self.height;
+            }
+            // Controller notices, bottom right, over everything else.
+            PadNoticeCard {
+                x: parent.width - Theme.safe-x - self.width;
+                y: parent.height - Theme.safe-y - self.height;
             }
         }
     }

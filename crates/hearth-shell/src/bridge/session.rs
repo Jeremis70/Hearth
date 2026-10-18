@@ -32,7 +32,9 @@ use hearth_core::scan::scan_roms;
 use hearth_core::session::{ActiveSession, SessionState};
 use hearth_core::systems::{EmulatorKind, SuspendPolicy, Systems};
 use hearth_platform::gamescope::{AppId, Compositor, SHELL_APP_ID};
-use hearth_platform::input::{Action, InputControl, InputMode, InputStatus, PadActivity};
+use hearth_platform::input::{
+    Action, InputControl, InputMode, InputStatus, PadActivity, PadInfo, Power,
+};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::rc::Rc;
 
@@ -42,7 +44,7 @@ use super::controls_page::{
 use super::models;
 use crate::controls;
 use crate::{
-    AppWindow, ControllerType, ControlsData, OverlayPanel, OverlayWindow, Session,
+    AppWindow, ControllerType, ControlsData, OverlayPanel, OverlayWindow, PadNotice, Session,
     SettingsCategory, SettingsData, Status,
 };
 
@@ -67,6 +69,19 @@ controller until it's back. Hearth's menus still work";
 const SERVICE_BACK: &str = "Controller service is back. Resume when you're ready";
 /// Back this fast: a restart; the game resumes on its own.
 const QUICK_RESTART: Duration = Duration::from_secs(2);
+/// The controller driving the game went away.
+const PAD_LOST: &str = "Reconnect your controller";
+/// It is back, the game still frozen.
+const PAD_BACK: &str = "Controller connected. Resume when you're ready";
+/// How often controllers are checked for coming and going.
+const PAD_POLL: Duration = Duration::from_millis(250);
+/// How long a controller notice stays.
+const PAD_NOTICE_TIME: Duration = Duration::from_secs(4);
+/// Controllers coming and going this long after startup or a controller service change are
+/// that, not the player's doing: no notices.
+const PAD_SETTLE: Duration = Duration::from_secs(5);
+/// Battery levels that warn, once each per charge.
+const BATTERY_WARNINGS: [u8; 2] = [20, 10];
 /// What the Capture button does for now.
 const CAPTURE_MESSAGE: &str = "Screenshots and clips are coming later";
 /// First app id given to games (Hearth is 769).
@@ -155,6 +170,16 @@ pub struct Controller {
     testing: bool,
     /// When InputPlumber went away, and whether Hearth froze the game for it.
     service_lost: Option<(Instant, bool)>,
+    /// Controllers as last seen, to notice them coming and going.
+    known_pads: Vec<PadInfo>,
+    /// No controller notices before this (startup, controller service changes).
+    pads_settle: Instant,
+    /// The controller driving the running game (player 1 when it started).
+    game_pad: Option<String>,
+    /// Battery warnings given since each controller's last charge (by pad id).
+    battery_warned: std::collections::HashMap<String, Vec<u8>>,
+    pad_timer: slint::Timer,
+    pad_notice_timer: slint::Timer,
     test_timer: slint::Timer,
 }
 
@@ -297,8 +322,19 @@ pub fn install(setup: Setup) {
         testing: false,
         test_timer: slint::Timer::default(),
         service_lost: None,
+        known_pads: Vec::new(),
+        pads_settle: Instant::now() + PAD_SETTLE,
+        game_pad: None,
+        battery_warned: std::collections::HashMap::new(),
+        pad_timer: slint::Timer::default(),
+        pad_notice_timer: slint::Timer::default(),
     };
     CONTROLLER.with(|cell| *cell.borrow_mut() = Some(controller));
+    with(|c| {
+        c.pad_timer.start(slint::TimerMode::Repeated, PAD_POLL, || {
+            with(Controller::poll_pads);
+        });
+    });
 }
 
 /// Connects a window's controls page callbacks to the controller.
@@ -354,6 +390,19 @@ fn load_library(db: PathBuf, games_dir: PathBuf, systems: Systems) {
     if let Err(err) = spawned {
         tracing::error!("cannot start library thread: {err}");
     }
+}
+
+/// The battery warning due at `percent`, given the levels already `warned` about since the
+/// last charge (which it adds to). The lowest level reached wins, so a pad found at 5 % warns
+/// once, not twice.
+fn battery_warning(percent: u8, warned: &mut Vec<u8>) -> Option<u8> {
+    let level = BATTERY_WARNINGS
+        .into_iter()
+        .filter(|level| percent <= *level)
+        .min()
+        .filter(|level| !warned.contains(level))?;
+    warned.extend(BATTERY_WARNINGS.iter().filter(|l| **l >= level));
+    Some(level)
 }
 
 /// What the Settings page calls a controller family.
@@ -493,6 +542,8 @@ impl Controller {
     /// restart resumes it on its own.
     fn on_input_status(&mut self, status: InputStatus) {
         tracing::info!(?status, mode = ?self.mode, "controller service");
+        // Controllers vanish and come back with the service; that isn't the player's doing.
+        self.pads_settle = Instant::now() + PAD_SETTLE;
         match status {
             InputStatus::Lost => {
                 let froze = self.mode == Mode::Game && self.compositor.controls_focus();
@@ -500,9 +551,9 @@ impl Controller {
                     self.open_overlay();
                 }
                 self.service_lost = Some((Instant::now(), froze));
-                self.service_message(SERVICE_LOST);
+                self.overlay_message(SERVICE_LOST);
             }
-            InputStatus::StillLost => self.service_message(SERVICE_STILL_LOST),
+            InputStatus::StillLost => self.overlay_message(SERVICE_STILL_LOST),
             InputStatus::Back => {
                 let Some((since, froze)) = self.service_lost.take() else {
                     return;
@@ -523,14 +574,14 @@ impl Controller {
                 } else {
                     "Controller service is back"
                 };
-                self.service_message(message);
+                self.overlay_message(message);
             }
         }
     }
 
-    /// A controller service message: on the overlay while it is open (it stays until the
-    /// overlay closes), else a toast.
-    fn service_message(&mut self, message: &str) {
+    /// A message about the controller: on the overlay while it is open (it stays until the
+    /// overlay closes), over the running game, else a toast.
+    fn overlay_message(&mut self, message: &str) {
         match (&self.overlay, self.mode) {
             (Some(overlay), Mode::Overlay) => {
                 self.notice_timer.stop();
@@ -538,6 +589,159 @@ impl Controller {
             }
             (Some(_), Mode::Game) if self.compositor.controls_focus() => self.show_notice(message),
             _ => self.toast(message),
+        }
+    }
+
+    /// Notices controllers coming and going and low batteries. Called every [`PAD_POLL`].
+    fn poll_pads(&mut self) {
+        let pads = self.activity.pads();
+        let now = Instant::now();
+        if self.service_lost.is_some() || now < self.pads_settle {
+            self.known_pads = pads;
+            return;
+        }
+        let gone: Vec<PadInfo> = self
+            .known_pads
+            .iter()
+            .filter(|old| !pads.iter().any(|p| p.id == old.id))
+            .cloned()
+            .collect();
+        let came: Vec<PadInfo> = pads
+            .iter()
+            .filter(|new| !self.known_pads.iter().any(|p| p.id == new.id))
+            .cloned()
+            .collect();
+        self.known_pads.clone_from(&pads);
+        for pad in &gone {
+            self.pad_gone(pad);
+        }
+        for pad in &came {
+            self.pad_came(pad);
+        }
+        self.check_batteries(&pads);
+    }
+
+    /// Whether `pad` is the one the running game reads (or, if that one is gone, the one that
+    /// takes its place).
+    fn drives_game(&self, pad: &PadInfo) -> bool {
+        self.active.is_some()
+            && self
+                .game_pad
+                .as_ref()
+                .is_none_or(|id| *id == pad.id || !self.known_pads.iter().any(|p| &p.id == id))
+    }
+
+    /// A controller went away. The game's own controller freezes the game under the overlay
+    /// (it can't be played without it); any other gets a notice.
+    fn pad_gone(&mut self, pad: &PadInfo) {
+        tracing::info!(pad = %pad.id, name = %pad.os_name, mode = ?self.mode, "controller gone");
+        let driving = self.active.is_some() && self.game_pad.as_deref() == Some(pad.id.as_str());
+        match self.mode {
+            Mode::Game if driving && self.compositor.controls_focus() => {
+                self.open_overlay();
+                self.overlay_message(PAD_LOST);
+            }
+            Mode::Overlay if driving => self.overlay_message(PAD_LOST),
+            _ => self.pad_notice("Controller disconnected", &pad.os_name, None),
+        }
+    }
+
+    /// A controller came (back). If the game is waiting for it, the game is frozen (or stays
+    /// frozen) under the overlay with Resume focused: the emulator picks the pad up while the
+    /// game can't move, and the player resumes when ready.
+    fn pad_came(&mut self, pad: &PadInfo) {
+        tracing::info!(pad = %pad.id, name = %pad.os_name, mode = ?self.mode, "controller came");
+        if !self.drives_game(pad) {
+            self.pad_notice("Controller connected", &pad.os_name, None);
+            return;
+        }
+        self.game_pad = Some(pad.id.clone());
+        match self.mode {
+            Mode::Game if self.compositor.controls_focus() => {
+                self.open_overlay();
+                self.overlay_message(PAD_BACK);
+            }
+            Mode::Overlay => {
+                if let Some(overlay) = &self.overlay
+                    && overlay.get_panel() == OverlayPanel::Menu
+                {
+                    overlay.invoke_reset();
+                }
+                self.overlay_message(PAD_BACK);
+            }
+            _ => self.pad_notice("Controller connected", &pad.os_name, None),
+        }
+    }
+
+    /// Low battery notices: at each level of [`BATTERY_WARNINGS`] once per charge; charging
+    /// starts over.
+    fn check_batteries(&mut self, pads: &[PadInfo]) {
+        for pad in pads {
+            let warned = self.battery_warned.entry(pad.id.clone()).or_default();
+            let percent = match pad.power {
+                Power::Discharging(p) => p,
+                Power::Charging(_) | Power::Charged => {
+                    warned.clear();
+                    continue;
+                }
+                Power::Unknown | Power::Wired => continue,
+            };
+            if battery_warning(percent, warned).is_none() {
+                continue;
+            }
+            tracing::info!(pad = %pad.id, percent, "controller battery low");
+            self.pad_notice(
+                "Controller battery low",
+                &format!("{percent} %"),
+                Some(percent),
+            );
+        }
+    }
+
+    /// A controller notice for [`PAD_NOTICE_TIME`]: over the running game on the overlay's
+    /// notice panel (no scrim, no freeze), else in Hearth's windows.
+    fn pad_notice(&mut self, text: &str, detail: &str, battery: Option<u8>) {
+        let set = |data: PadNotice<'_>| {
+            data.set_text(text.into());
+            data.set_detail(detail.into());
+            data.set_battery(battery.map_or(-1, i32::from));
+            data.set_shown(true);
+        };
+        if let Some(app) = self.app.upgrade() {
+            set(app.global::<PadNotice>());
+        }
+        if let Some(overlay) = &self.overlay {
+            set(overlay.global::<PadNotice>());
+            if self.mode == Mode::Game
+                && self.compositor.controls_focus()
+                && let Some(window) = self.overlay_window
+                && overlay.get_panel() == OverlayPanel::None
+            {
+                overlay.set_panel(OverlayPanel::Notice);
+                if let Err(err) = self.compositor.set_overlay(window, true) {
+                    tracing::warn!("showing a controller notice failed: {err}");
+                }
+            }
+        }
+        self.pad_notice_timer
+            .start(slint::TimerMode::SingleShot, PAD_NOTICE_TIME, || {
+                defer(Controller::hide_pad_notice);
+            });
+    }
+
+    fn hide_pad_notice(&mut self) {
+        if let Some(app) = self.app.upgrade() {
+            app.global::<PadNotice>().set_shown(false);
+        }
+        let Some(overlay) = &self.overlay else {
+            return;
+        };
+        overlay.global::<PadNotice>().set_shown(false);
+        // Only the notice panel goes; a menu opened meanwhile stays, a toast keeps it.
+        if overlay.get_panel() == OverlayPanel::Notice
+            && overlay.global::<Status>().get_toast().is_empty()
+        {
+            self.hide_overlay();
         }
     }
 
@@ -635,6 +839,7 @@ impl Controller {
             return;
         };
         let input = self.game_input(system, &game, emulator.kind);
+        self.game_pad = self.activity.pads().first().map(|p| p.id.clone());
         if self.input.is_live() && self.applier.apply(&input) != ApplyOutcome::Applied {
             // No remapping rather than the previous game's.
             self.input.set_game_profile(None);
@@ -1518,5 +1723,25 @@ impl Controller {
         if let Some(app) = self.app.upgrade() {
             app.global::<Status>().set_toast("".into());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn battery_warns_once_per_level_per_charge() {
+        let mut warned = Vec::new();
+        assert_eq!(battery_warning(35, &mut warned), None);
+        assert_eq!(battery_warning(20, &mut warned), Some(20));
+        assert_eq!(battery_warning(15, &mut warned), None);
+        assert_eq!(battery_warning(10, &mut warned), Some(10));
+        assert_eq!(battery_warning(5, &mut warned), None);
+        // Charging clears it (the caller empties the list).
+        warned.clear();
+        // Found already at 5 %: one warning, the 10 % one.
+        assert_eq!(battery_warning(5, &mut warned), Some(10));
+        assert_eq!(battery_warning(15, &mut warned), None);
     }
 }

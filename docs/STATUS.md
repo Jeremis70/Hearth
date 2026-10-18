@@ -1,290 +1,256 @@
 # Hearth status
 
-Last updated: 2026-10-17: M2a ("first game + overlay"), then Dolphin and the controls system
-(sections 1b to 1e).
-Read this first; then `AGENTS.md` (rules, commands) and `docs/plan.md` (architecture).
+Last updated: 2026-10-17. Read this first, then `AGENTS.md` (rules, commands),
+`.github/instructions/rust.instructions.md` and `docs/plan.md` (architecture).
 
-## 1. What M2a delivered
+## 0. Where we are, and how we work
 
-Launch a real N64 game from Hearth, open an overlay over it with the Guide button, go Home,
-resume and close it. Verified end to end inside `scripts/run-gamescope.sh` with Ocarina of Time.
+**Done so far:**
+- M2a (first game + overlay).
+- Dolphin.
+- The controls system: layered files and translators.
+- The controls UI: a PS5-style controls page and the button test.
+- The Capture button (a notice only for now).
 
-- **gamescope integration** (`crates/hearth-platform/src/gamescope.rs`, `Compositor` trait,
-  `NoCompositor` outside gamescope). Hearth's window gets `STEAM_GAME=769`; each game gets its
-  own app id (10000+) set on every window whose `_NET_WM_PID` is in the game's process group or
-  its descendants (`process.rs`), retried for 15 s. Focus via
-  `GAMESCOPECTRL_BASELAYER_APPID`, verified 0.7 s later through `GAMESCOPE_FOCUSED_APP`.
-  Spike results: `docs/spikes/gamescope.md`.
-- **Library** (`hearth-core`): `data/systems.toml` (N64 only, RetroArch + mupen64plus_next),
-  read-only ROM scanner for `--games-dir` (default `~/Games`, layout `<dir>/n64/...`), No-Intro
-  title cleanup, SQLite library (`.dev-data/data/library.sqlite3`: games, last played,
-  playtime).
-- **Runtime** (`runtime/process.rs`, plan.md §6.5): own process group, watcher thread,
-  close = SIGCONT + SIGTERM then SIGKILL after 3 s, suspend/resume = SIGSTOP/SIGCONT on the
-  group. Signals refuse pgid ≤ 1 and Hearth's own group. Games get `PR_SET_PDEATHSIG=SIGKILL`
-  and an empty signal mask. Playtime excludes frozen time.
-- **RetroArch profile** (`profiles/retroarch.rs`): generated, isolated config under
-  `.dev-data/retroarch/`, all hotkeys disabled (see gotchas), log file enabled.
-- **Session logic** (`crates/hearth-shell/src/bridge/session.rs`):
-  - Home shows the real library (running game first, with a `success` dot). A or Play
-    launches; Resume / Options → Close game (confirmation dialog) on the running tile.
-  - Guide short: freeze the game, show the overlay (Now playing card with Resume, Go to
-    Home and Close game; dock buttons are placeholders). Resume, Back or Guide again: unfreeze,
-    show the game.
-  - Guide long: freeze the game and show Home with focus on its tile.
-  - When the game exits by itself, Hearth returns Home and saves playtime.
-  - Outside gamescope (or gamescope without `-e`) there is no overlay; long press closes
-    the game.
-- **Safety and robustness**:
-  - Games launched inside gamescope never reach the host Wayland session
-    (`LaunchCommand::force_x11`).
-  - Steam running → warning at startup.
-  - Ctrl+C / SIGTERM / SIGHUP / closing the window close the game properly before exiting.
-  - A crashed or killed Hearth takes its game with it (pdeathsig).
-- **Dev tools**:
-  - `scripts/run-gamescope.sh` and `scripts/send-action.sh`.
-  - `--dev-socket`, `HEARTH_RETROARCH_ARGS`.
-  - Examples: `gamescope_probe`, `overlay_probe`, `launch_timing`.
-  - `data/dev/retroarch-fps.cfg`.
+Latest commits, newest first:
+- `b1afcb3`: stick options belong to the console stick, swap_sticks and the L1 fast-forward
+  default are gone.
+- `d5ed37c`: button test rebuilt on the controls page.
+- `60e5359`: raw gilrs input, connection and battery.
+- `c72e12c`: exact-shape highlights.
 
-## 1b. Dolphin (GameCube, Wii)
+The working tree is clean.
 
-- `gc` and `wii` systems (folders `gc`/`gamecube` and `wii`; the system comes from the folder,
-  since both use .iso). The `.nkit` inner extension is dropped from titles.
-- `profiles/dolphin.rs`: native `dolphin-emu` in PATH, else the Flatpak (only the native 2609
-  build was tested). Batch mode, user dir `<HEARTH_HOME>/dolphin` (`-u`), every setting as a
-  `-C` override (checked against the 2609 source and listed with reasons in the file).
-  `Dolphin.General.UseDiscordPresence=False` is required: otherwise Dolphin writes
-  `~/.local/share/applications/discord-455712169795780630.desktop` and edits
-  `~/.config/mimeapps.list`.
-- Window search counts **mapped** windows only: Dolphin's hidden Qt main window carries
-  `_NET_WM_PID` and appears before the render window.
-- Dolphin log: `.dev-data/dolphin/Logs/hearth-launch.log` (includes "Added device: SDL/0/...").
+**Working with the user (all confirmed in past sessions):**
+- **Plan first:** for a `/plan` request, give a short plan (with a layout sketch for UI) and wait
+  for OK. Direct instructions are done straight away.
+- **Small commits:** imperative messages, one logical change each, **no Co-Authored-By trailer**,
+  and every commit must build and pass tests. A file already staged (`git rm`) slips into the
+  next commit, so check `git status` first.
+- **Finish with a report:**
+  - what was verified, with how (screenshots, logs, tests);
+  - what couldn't be tested;
+  - deviations from the request;
+  - numbered manual checks with the controller.
+- **The user edits files too** (for example `data/controls/gc.toml`). Never revert or commit
+  their uncommitted edits without asking. To test without them:
+  `git stash push <file>`, run the tests, then `git stash pop`.
+- **Preferences:**
+  - Kenney's real glyphs over text pills (pills only when no glyph exists).
+  - Defaults don't bind emulator actions.
+  - Assignable sticks (swap-on-conflict) instead of special options.
 
-## 1c. Input: resume, focus, controls files
+**Live testing safely** (this is the user's daily laptop, often with their own Hearth running):
+1. `pgrep -a hearth-shell`. If anything runs, don't start another and don't send actions or take
+   screenshots: `gamescopectl screenshot` would capture *their* session. Ask, or test offline.
+2. Start a test instance in the background:
+   `RUST_LOG=info HEARTH_GS_SIZE=1920x1080 setsid scripts/run-gamescope.sh --dev-socket ./.dev-data/actions.sock > .dev-data/test-run.log 2>&1 &`.
+   Wait for the socket. Record the pid (`pgrep -x hearth-shell`) and stop only that pid with
+   SIGTERM when done (its game goes with it).
+3. Chain the follow-up commands with `&&` after the check, so nothing runs against someone
+   else's instance.
+4. Navigation:
+   - Settings → Controllers: `right right right right accept`, then `down down down accept`.
+   - In that pane: `right` enters it, then `down` ×0/1/2 for Test buttons / N64 / GameCube, and
+     `accept`.
+   - The Sticks & options tab is `next_tab`.
+   - Launching TP: `accept` on Home, about 25 s to boot.
+5. Screenshots: `GAMESCOPE_WAYLAND_DISPLAY=gamescope-0 gamescopectl screenshot $PWD/<file>.png`.
+   They capture the base layer only (never the overlay window). Check overlay state with
+   `DISPLAY=:1 cargo run -p hearth-platform --example gamescope_probe -- windows|props`.
 
-- Menu and overlay actions fire on button **release**. A press that began in a game is disarmed
-  when Hearth takes the pad back (`PadActivity::disarm`).
-- Resume unfreezes the game at once. Waiting until the pad was at rest was tried and removed:
-  it got stuck (the pad never looked at rest), and players want input to reach the game as soon
-  as they resume.
-- A focus switch is retried for 3 s; on failure Hearth comes back and the game keeps running
-  (never left frozen).
-- **Controls files** (`crates/hearth-core/src/controls/`): Hearth pad by position → console
-  controls (declared per system in `systems.toml`) or `@actions`, plus stick, trigger and
-  vibration options. Layers: `data/controls/<system>.toml` → `<config>/controls/systems/<system>.toml`
-  → `<config>/controls/games/<system>/<serial>.toml` (or the region-free serial, e.g. `GZ2.toml`).
-  The serial is read from the ROM header (`gc/GZ2E01`, `n64/CZLE`).
-- **Stick options belong to the console stick** (`[player1.sticks."C-stick"]`: invert_x,
-  invert_y, deadzone, sensitivity) and follow it to whichever physical stick drives it. There is
-  no swap option: binding `left_stick = "C-stick"` (swap on conflict) moves the stick with its
-  options. The old `[player1.left_stick]`/`right_stick` tables and `swap_sticks` are errors that
-  say what replaced them. Emulator actions (fast-forward…) are never bound by default; users add
-  them per console or game.
-- **Translators** (`profiles/dolphin_input.rs`, `profiles/retroarch_input.rs`) regenerate the
-  emulator's input config at every launch: Dolphin GCPadNew.ini + Hotkeys.ini; RetroArch a core
-  remap file, hotkey binds (raw buttons from the joypad autoconfig) and core options. Golden
-  files in `crates/hearth-core/tests/golden/` (`HEARTH_UPDATE_GOLDEN=1` to accept changes).
-- The controller's names for each emulator come from `controls/device.rs` (override:
-  `<config>/controls/device.toml`, `sdl_name = "..."`).
-- `hearth-shell --print-controls <game id | key | part of title>` prints the resolved mapping,
-  the layer of every value and the generated files.
+**Next / open:**
+- Not tested by the user yet (all done through the dev socket or unit tests). Ask how these went:
+  - button test with real presses (held highlights, trigger bars, stick dots, PS short/long);
+  - menu navigation with the stick and D-pad now that gilrs runs unfiltered;
+  - Create = Capture in menus and in game;
+  - C-stick invert following the stick when it is moved to the left stick in TP;
+  - how the controls page reads from the couch.
+- The Sticks & options tab after `b1afcb3` was not seen live (the user's Hearth was running).
+- Open question: the user's "Create can't be assigned" was read as "defaults to Capture, never
+  reaches a game, still rebindable". The user hasn't contradicted it; lock it like Guide only if
+  asked.
+- Later milestones (`docs/plan.md`):
+  - InputPlumber: live remap via `MappingApplier`; also sees the touchpad and mic buttons.
+  - Capture: panel and hold-to-screenshot, see `docs/design/overlay.md` §10.
+  - ES-DE import, Steam, overlay dock actions, Home row redesign.
 
-## 1d. Controls UI, glyphs, single instance
+## 1. What exists
 
-- **Single instance:** `flock` on `<data>/hearth.lock` (pid inside); a second Hearth exits
-  naming the first. `--print-controls` may run alongside.
-- **Console controls** are declared in `data/controls/<system>.toml` (`[[console]]`: name, kind,
-  label, hint). Each stick and D-pad control also offers "<name> up/down/left/right" as a button
-  target, so D-pad directions and L3/R3 take any button target.
-- **`controls::edit`** writes a system or game file with `toml_edit`: only differences from the
-  layers below, comments and order kept; taking a function from another button swaps them.
-- **Glyphs:** Kenney Input Prompts in `assets/glyphs/<family>/<input>.svg`;
-  `ui/components/glyphs.slint` (`ButtonGlyph`, `ControllerType`, set from the first pad's USB ids).
-- **Drawing:** see 1e.
-- **Settings → Controllers:** connected pads, Test buttons (hold Guide to exit), one row per
-  console. **Controls page** (`ui/controls/`, `bridge/controls_page.rs`): Buttons tab with callouts
-  and a choice menu, Sticks & options tab (only what the emulator supports), Reset with
-  confirmation. Game-scoped from the overlay dock ("Controls") and Home → Options → Controls.
-- **Live apply:** not possible today. Dolphin reads controller config only at boot
-  (`Core.cpp` `Pad::LoadConfig`), RetroArch loads remaps with the content and has no network
-  command for it. `MappingApplier` (`EmulatorConfigApplier` → `NextLaunch`) is where
-  InputPlumber goes; the page says "Applies next time you start the game".
+**gamescope and sessions** (M2a)
+- `hearth-platform/src/gamescope.rs` (`Compositor` trait, `NoCompositor` outside gamescope):
+  - Hearth's window gets `STEAM_GAME=769`.
+  - Each game gets an app id (10000+) on every window of its process group (`process.rs`,
+    retried 15 s).
+  - Focus goes through `GAMESCOPECTRL_BASELAYER_APPID`, checked through `GAMESCOPE_FOCUSED_APP`
+    and retried for 3 s. If it fails, the game keeps running; it is never left frozen.
+- Runtime (`runtime/process.rs`):
+  - Each game gets its own process group; freezing is SIGSTOP/SIGCONT on that group.
+  - Close sends SIGTERM, then SIGKILL after 3 s.
+  - Games get pdeathsig and are launched from the UI thread.
+  - Playtime excludes frozen time.
+- Session (`hearth-shell/src/bridge/session.rs`):
+  - Guide short: freeze the game and open the overlay. Guide long: Home.
+  - Resume unfreezes at once.
+  - Menu actions fire on button **release**; a press that began in a game is disarmed
+    (`PadActivity::disarm`).
+- **Single instance:** a `flock` on `<data>/hearth.lock`. `--print-controls` may run alongside.
 
-## 1e. Controller drawing, leader lines, Capture
+**Overlay** (`ui/overlay/`)
+- `window.slint` routes input to the active `OverlayPanel` (none, menu, controls, notice). The
+  session sets it, together with `STEAM_OVERLAY`.
+- `quick_menu.slint` holds the Now playing card, the dock and the close confirmation.
+- The notice panel is a toast over a running game: no scrim, no freeze, and the game keeps
+  focus.
+- A new panel is a component with `handle(action) -> bool`, an enum value, and a branch in
+  `handle` and in the drawing.
 
-- **Drawing:** `assets/controllers/generic.svg` is generated by `scripts/controller-svg.py` from
-  lambdalighthouse's gamepad (source kept out of git in `assets/controllers/source/`). One color,
-  themed with `colorize`. `generic.toml` (shape center and size per input) is derived from it:
-  `HEARTH_WRITE_ANCHORS=1 cargo test -p hearth-shell anchors` rewrites it, the test fails when stale.
-- **Callouts** (`src/callouts.rs`): columns by anchor side, rows matched to anchors by shortest
-  total length with all elbows on one vertical line per side, so lines can't cross (tested at
-  1920×1080 and 1280×720). `HEARTH_CALLOUT_PREVIEW=out.svg cargo test -p hearth-shell
-  callout_preview` draws the layout. The focused input is highlighted on the drawing.
-- **Glyphs:** Kenney's own Create/Options/View/Menu/−/+ and touchpad icons; inputs without a
-  Kenney glyph (Share, paddles) show as a pill with their name. D-pad directions use Kenney's
-  `_outline` variants: the pressed side is filled, so they stay distinct when tinted one color.
-- **Capture** (`@capture`, `HearthAction`): a Hearth action on any console, never sent to the
-  emulator. `data/controls/pads/<type>.toml` (between the console default and the user's files):
-  PlayStation Create and Xbox Series / Switch Pro Share are Capture; the PlayStation touchpad
-  takes the console's Select where there is one. The session keeps `PadActivity`'s capture
-  buttons current (the game's mapping in game, the pad type's default in menus); the gilrs thread
-  sends `Action::Capture` on release. For now a toast "Screenshots and clips are coming later";
-  over a game it is the overlay's **notice** panel (no scrim, no freeze, game keeps focus).
-- **Extras:** callouts below the drawing for the connected pad's touchpad, share and paddles
-  (`ControllerIdentity::extra_inputs`). gilrs sees none of them on the DualSense (the touchpad is
-  a separate evdev device); Share and Elite paddles are mapped from raw evdev codes, unverified.
-  RetroArch can't read extras; Dolphin reads them through SDL (`Touchpad`, `Misc 1`, `Paddle n`).
-- **Overlay panels** (`ui/overlay/`): the window routes input to `OverlayPanel` (none, menu,
-  controls, notice); the quick menu is its own component.
-- **Highlights:** `assets/controllers/generic/<id>.svg`, one per input shape (sticks: ring for
-  movement, cap for the click), generated from the drawing with fill, outline and glow baked in
-  (same command as the anchors). The focused input's is tinted with the accent over the drawing.
-  Callout rows prefer reading order (D-pad up, left, right, down) when some elbows and a small
-  column shift keep lines clear; otherwise rows are matched by length.
-- **Button test** is `ControlsScreen` with `test-mode`: callouts show the input's name and live
-  state (held inputs lit, several at once; trigger % with a bar; raw stick values and a dot in
-  the ring), Guide below the drawing, header with controller, connection and battery.
-- **Raw input:** gilrs runs without its deadzone/jitter filters (only the D-pad hat conversion),
-  so drift is visible; navigation keeps its own 0.5 threshold. `PadActivity::analog()` has the
-  first pad's raw sticks and triggers; `PadInfo` has `connection` (from SDL's GUID bus) and
-  `power`. `cargo run -p hearth-platform --example pad_probe -- 10` lists pads and raw events.
-  On the DualSense gilrs delivers every standard button and PS, not the touchpad click (separate
-  evdev device) nor the mic button (not reported by hid-playstation).
+**Emulators**
+- RetroArch (`profiles/retroarch.rs`, N64 via mupen64plus_next) uses an isolated config in
+  `.dev-data/retroarch/`.
+- Dolphin (`profiles/dolphin.rs`, gc and wii) is the native `dolphin-emu`, else the Flatpak,
+  run with `-u <HEARTH_HOME>/dolphin` and `-C` overrides (reasons listed in the file).
+- Dolphin needs `UseDiscordPresence=False`: otherwise it writes outside the repo.
+- The window search counts mapped windows only.
+
+**Controls files** (`hearth-core/src/controls/`)
+- **Inputs:** Hearth pad inputs by position (`PadInput`, plus extras: touchpad, share,
+  paddle1–4).
+- **Targets:**
+  - console controls, declared in `data/controls/<system>.toml` as `[[console]]` with name,
+    kind, label and hint. Every stick and D-pad also offers "<name> up/down/left/right" as a
+    button target;
+  - `@emulator_action` (fast_forward_hold…);
+  - `@capture` (a `HearthAction`, never sent to the emulator);
+  - `none`.
+- **Layers:**
+  1. `data/controls/<system>.toml`;
+  2. `data/controls/pads/<type>.toml` (PlayStation Create = Capture, touchpad = console Select;
+     Xbox/Switch Share = Capture; controls the console lacks are skipped silently);
+  3. `<config>/controls/systems/<system>.toml`;
+  4. `<config>/controls/games/<system>/<serial>.toml`, or the region-free serial. The serial
+     comes from the ROM header (`gc/GZ2E01`).
+- **Stick options:** `[player1.sticks."C-stick"]` (invert_x, invert_y, deadzone, sensitivity)
+  belongs to the console stick and follows it to whichever physical stick drives it.
+  - There is no swap option: binding the sticks swaps them (swap-on-conflict).
+  - Old `left_stick`/`right_stick` tables and `swap_sticks` are errors naming their
+    replacement.
+  - `layers::stick_setting(stick, field)` is the setting path used for provenance.
+- **Editing:** `edit.rs` (`Editor`, `Setting`) writes only differences, with `toml_edit`
+  (comments kept), swaps on conflict, and deletes a file once it is empty.
+- **Translators:** `profiles/dolphin_input.rs` and `profiles/retroarch_input.rs` regenerate the
+  emulator config at every launch.
+  - `Capabilities::can_tune(stick)`: mupen64plus can only tune "Stick".
+  - Goldens: `crates/hearth-core/tests/golden/`; accept changes with `HEARTH_UPDATE_GOLDEN=1`.
+- **Device names:** `controls/device.rs` gives the pad's name for each emulator and
+  `extra_inputs()`. Override in `<config>/controls/device.toml`.
+- `hearth-shell --print-controls <id | key | title part>` shows bindings, options and sticks
+  with the layer of each value, plus the generated files.
+- **Live apply** is impossible today (Dolphin reads pads at boot, RetroArch has no command for
+  it). `MappingApplier` → `NextLaunch`; the page says "Applies next time you start the game".
+
+**Controls UI** (`ui/controls/`, `bridge/controls_page.rs`, `src/callouts.rs`,
+`src/controller_layout.rs`)
+- Settings → Controllers lists connected pads, Test buttons, and one row per console.
+- The game-scoped page opens from the overlay dock (Controls) and Home → Options → Controls.
+- **Drawing:** `assets/controllers/generic.svg` is generated by `scripts/controller-svg.py`
+  from the lambdalighthouse gamepad. The source sits in `assets/controllers/source/`,
+  gitignored.
+  - Generated from it: `generic.toml` (anchors) and `generic/<id>.svg` (exact-shape highlights
+    with fill, outline and glow baked in; sticks are a ring plus a cap).
+  - Regenerate both: `HEARTH_WRITE_ANCHORS=1 cargo test -p hearth-shell controller_layout`.
+    When adding an id, create a placeholder svg first: the Slint build needs the file.
+- **Callouts:** computed in Rust at 1920×1080, then scaled.
+  - Rows go in reading order (D-pad: up, left, right, down). A search picks elbows and a column
+    shift so lines never cross and avoid other buttons; it falls back to shortest-length
+    matching.
+  - Tested at 1920×1080 and 1280×720.
+  - `HEARTH_CALLOUT_PREVIEW=out.svg cargo test -p hearth-shell callout_preview` draws the
+    layout.
+- **Glyphs:** Kenney (`assets/glyphs/<family>/`); D-pad directions use the `_outline` variants.
+  Inputs without a glyph get a pill with their name. The family comes from the first pad.
+- **Button test:** `ControlsScreen` with `test-mode` (`TestPage`).
+  - Held inputs light up; triggers show % with a bar; sticks show raw values and a dot.
+  - PS sits below the drawing; holding Guide exits.
+  - The header shows the controller, connection and battery.
+
+**Input** (`hearth-platform/src/input/`)
+- gilrs runs **without its deadzone and jitter filters**. Only the D-pad hat conversion is
+  applied, by hand in `next_event`, so drift is visible. Navigation has its own 0.5 threshold.
+- `PadActivity` carries:
+  - pads (`PadInfo` with connection and battery, refreshed every 10 s);
+  - pressed inputs and raw analog values;
+  - the capture inputs (the session keeps them current: the game's mapping in game, the pad
+    type's default in menus);
+  - disarm.
+- `Action::Capture` is sent on release and never injected into the UI.
+- The DualSense on gilrs gives every standard button plus PS. It does not give the touchpad
+  click (a separate evdev device) or the mic button. Share and Elite paddles come from raw
+  evdev codes and are unverified.
+- `cargo run -p hearth-platform --example pad_probe -- 10` lists pads and raw events
+  (read-only).
 
 ## 2. Known issues and untested areas
 
-**Untested or unverified**
-- **Navigation with raw gilrs events:** stick and D-pad navigation in menus with a real pad
-  after dropping gilrs's deadzone/jitter filters (only dev-socket input was tried).
-- **Button test with real presses:** held highlights, trigger bars and the stick dot were only
-  unit-tested; values show 0.00 until the stick first moves.
-- **Capture with a real button press:** only sent through the dev socket. Create on the DualSense
-  should give the toast in menus and the notice in game (and do nothing in the game).
-- **Share / Elite paddle raw codes** (xpad `KEY_RECORD`, `BTN_TRIGGER_HAPPY5–8`, hid-nintendo
-  `BTN_Z`): from the kernel drivers' sources, no hardware here.
-- **Buttons pressed and released while a game is frozen:** whether the queued events reach the
-  game after SIGCONT is still untested by hand (InputPlumber in M3 makes this moot).
-- **Controls translation live:** checked by unit/golden tests and `--print-controls` only. Still
-  to try by hand: the TP camera override, a fast-forward the user binds in TP, and OoT
-  unchanged with the generated remap file.
-- **15 s "no window" timeout:** the path that toasts, closes the game and keeps Hearth in front
-  was never triggered live; RetroArch always mapped its window in about 0.25 s.
-- **Keyboard inside the overlay window under gamescope:** untested. Controller actions are
-  injected into it, so only keyboard use is affected.
-- **Real Guide short/long timing inside gamescope:** only exercised through the dev socket;
-  the user tested by hand and it worked.
-- **Libwayland default socket:** `force_x11` removes `WAYLAND_DISPLAY`, but a game that calls
-  libwayland directly still defaults to `wayland-0` (the host desktop). RetroArch is forced to
-  X11 by its config (`video_context_driver = "x"`); SDL, GTK and Qt get X11 env hints.
-
-**Known issues**
-- **Relative profile paths:** with `HEARTH_HOME=./.dev-data`, the paths in the generated
-  `retroarch.cfg` are relative (`./.dev-data/...`). They work because the game inherits Hearth's
-  working directory, but should be made absolute in `DataDirs`.
-- **Launching thread:** pdeathsig fires when the launching *thread* exits. Games must be launched
-  from the UI thread (they are); never from a short-lived worker.
-- **N64 C-button mode dropped:** mupen64plus-next's "hold R2 to turn the face buttons into C
-  buttons" isn't a console control, so the generated remap unbinds R2, east and north. The right
-  stick still drives the C buttons.
-- **SDL names of non-DualSense pads** in `controls/device.rs` follow SDL3's HIDAPI drivers but
-  are unverified; use `device.toml` if Dolphin doesn't see the pad.
-- **Performance on the dev laptop:** fullscreen nested gamescope ran at about 40 fps on the
-  Balanced power profile, and close to 60 on Performance (windowed: 60 on either). The cost is
-  the nested chain (game → gamescope → KDE at 125% scaling) sharing the i5-1145G7/Iris Xe power
-  budget, not Hearth (2.5% CPU while playing, debug build). The appliance should run on the
-  Performance profile (M8).
-- **Startup animation:** at startup the tile row animates from the 1280×720 preferred size to
-  fullscreen (cosmetic).
-- **Not done (out of M2a scope):**
-  - README home row redesign (fixed focus anchor, label beside the tile, console icons);
-  - Favorite, Uninstall and Properties in the game menu;
-  - overlay dock actions;
-  - the ES-DE import;
-  - InputPlumber;
-  - Steam.
+- Untested by hand: everything in §0 "Next / open", plus:
+  - presses made while a game is frozen;
+  - the 15 s "no window" path;
+  - the keyboard inside the overlay window;
+  - Share and paddle codes.
+- A game calling libwayland directly would still default to `wayland-0`. RetroArch is forced
+  to X11 (`video_context_driver = "x"`).
+- `retroarch.cfg` paths are relative with `HEARTH_HOME=./.dev-data`. They work, but should be
+  absolute.
+- N64: mupen64plus's "hold R2 for C buttons" mode is dropped; the right stick drives the C
+  buttons.
+- SDL names of non-DualSense pads are unverified (use `device.toml`).
+- Performance: fullscreen nested gamescope runs at about 40 fps on Balanced and about 60 on
+  Performance (the nested chain on an i5-1145G7, not Hearth).
+- Cosmetic: at startup the tile row animates from 1280×720 to fullscreen.
+- Not done: Home row redesign, Favorite/Uninstall/Properties, overlay dock actions other than
+  Controls, ES-DE import, InputPlumber, Steam.
 
 ## 3. How to run and test
 
-**Prerequisites:** gamescope, RetroArch with `/usr/lib/libretro/mupen64plus_next_libretro.so`,
-and joypad profiles (`retroarch-autoconfig-udev-git` from the AUR, installed to
-`/usr/share/libretro/autoconfig/udev`). Quit Steam and any other Hearth instance first: they all
-read the controller.
+- **Prerequisites:**
+  - gamescope;
+  - RetroArch with `/usr/lib/libretro/mupen64plus_next_libretro.so` and
+    `retroarch-autoconfig-udev-git`;
+  - Dolphin 2609;
+  - quit Steam first.
+- **Desktop, no overlay:** `HEARTH_HOME=./.dev-data cargo run -p hearth-shell -- --windowed`.
+- **Real thing:** `scripts/run-gamescope.sh` (options: `HEARTH_GS_SIZE`,
+  `HEARTH_GS_FULLSCREEN=1`, `HEARTH_GS_ARGS`).
+- **Dev socket actions:** up, down, left, right, accept, back, prev_tab, next_tab, options,
+  home_short, home_long, capture.
+- **Keyboard:**
+  - arrows; Enter/Space = Accept; Esc/Backspace = Back;
+  - Q/E = tabs; O = Options;
+  - F1/F2 = Guide short/long.
+- **Logs:**
+  - Hearth: stderr (`RUST_LOG=info,hearth_shell=debug`);
+  - RetroArch: `.dev-data/retroarch/logs/`;
+  - Dolphin: `.dev-data/dolphin/Logs/hearth-launch.log`;
+  - library: `.dev-data/data/library.sqlite3`.
+- **FPS counter:** `HEARTH_RETROARCH_ARGS="--appendconfig=data/dev/retroarch-fps.cfg"`.
+- **Checks:** `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
+  `cargo test --workspace` (core 75, platform 25, shell 13 tests).
 
-**Running Hearth**
-- **Plain desktop, no overlay:** `HEARTH_HOME=./.dev-data cargo run -p hearth-shell -- --windowed`
-- **Real thing:** `scripts/run-gamescope.sh`. Steam mode, the display's native size; extra
-  arguments go to hearth-shell. Options:
-  - `HEARTH_GS_SIZE=WxH` overrides the size.
-  - `HEARTH_GS_FULLSCREEN=1` starts fullscreen.
-  - `HEARTH_GS_ARGS="..."` passes extra gamescope flags.
-  - For fullscreen tests use `powerprofilesctl set performance`.
-  - Closest to the console: run the script from a text console (Ctrl+Alt+F3), so gamescope
-    drives the display directly.
+## 4. Gotchas
 
-**Scripted driving**
-- Start Hearth with `--dev-socket ./.dev-data/actions.sock`, then
-  `scripts/send-action.sh accept home_short back home_long options down accept`.
-- Action names: up, down, left, right, accept, back, prev_tab, next_tab, options, home_short,
-  home_long.
-
-**Keyboard**
-- Arrows; Enter / Space = Accept; Esc / Backspace = Back; Q / E = tabs; O = Options;
-  F1 = Guide short; F2 = Guide long.
-- Inside gamescope the keyboard goes to whichever window is focused, so use the controller or
-  the dev socket while a game is in front.
-
-**Inspecting**
-- gamescope state:
-  `DISPLAY=:N cargo run -p hearth-platform --example gamescope_probe -- props|windows|tag <pgid> <app>|focus <app>...`.
-  The display number is in the log ("Starting Xwayland on :N"); a second gamescope gets `:2`.
-- Screenshots: `GAMESCOPE_WAYLAND_DISPLAY=gamescope-N gamescopectl screenshot $PWD/.dev-data/x.png`.
-  These capture the base layer only: the overlay never shows in them, so check it by eye.
-- FPS counter: `HEARTH_RETROARCH_ARGS="--appendconfig=data/dev/retroarch-fps.cfg" scripts/run-gamescope.sh`.
-- Timing outside the UI:
-  `cargo run -p hearth-core --example launch_timing -- ./.dev-data/retroarch <core> <rom> 600`.
-
-**Logs**
-- Hearth: stderr, with `RUST_LOG=info,hearth_shell=debug`.
-- RetroArch: `.dev-data/retroarch/logs/retroarch.log` (video init, joypad autoconfig) and
-  `.dev-data/retroarch/logs/hearth-launch.log` (its stdout/stderr).
-- Library: `.dev-data/data/library.sqlite3`.
-- Leftover games: `ps -C retroarch`. Kill only Hearth-spawned groups, and SIGCONT a frozen one
-  first.
-
-**Checks:** `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
-`cargo test --workspace` (core 67, platform 24, shell 6 tests).
-
-## 4. Gotchas for a fresh session
-
-- **gamescope needs `-e` (Steam mode).** Without it, `GAMESCOPECTRL_BASELAYER_APPID` is ignored,
-  the newest window keeps the screen, the overlay plane isn't drawn and `GAMESCOPE_FOCUSED_APP`
-  doesn't exist. Hearth detects this (`controls_focus() == false`) and behaves as if outside
-  gamescope. The `SteamGameId` env var is ignored; tag windows yourself.
-- **Overlay = `STEAM_OVERLAY` only.** 1 shows it, 0 hides it. Keep `GAMESCOPE_EXTERNAL_OVERLAY`
-  at 0: with both set, gamescope draws the window on two layers (darker scrim, and two
-  copies when the output is resized), and leaving it at 1 kept the window drawn while hidden.
-  The overlay content is also transparent while hidden (`shown` property).
-- **gamescope detection needs `GAMESCOPE_WAYLAND_DISPLAY`** in the environment (gamescope
-  exports it to its children) *and* `GAMESCOPE_FOCUSABLE_WINDOWS` / `GAMESCOPE_FOCUS_DISPLAY`
-  on the root window. KDE's own Xwayland (`:0`) carries stale `GAMESCOPE_*` properties
-  (probably from Steam), so root properties alone give false positives.
-- **RetroArch isolation:** always `retroarch --config <generated cfg>`; never read or write
-  `~/.config/retroarch`. Every writable path is under `<HEARTH_HOME>/retroarch/`; only the joypad
-  autoconfig folder (read-only system path) is outside.
-- **Hotkey trick:** setting a RetroArch gamepad bind to `"nul"` makes it *fall back to the
-  autoconfig profile*, and the DualSense profile binds the PS button to the menu
-  (`input_menu_toggle_btn = "10"`). So every hotkey's `_btn` is bound to button `999` and
-  `_axis` to `+99` (nonexistent), keyboard binds are `"nul"`, and `enable_hotkey` is bound to the
-  nonexistent button too. This also defeats RetroArch's "autoconf menu toggle regardless of
-  enable_hotkey" path (`input/input_driver.c`, v1.22.2).
-- **RetroArch must use X11 inside gamescope:** `video_context_driver = "x"` plus the env rule.
-  Otherwise it opens on the host desktop through `wayland-0`.
-- **Two or more Hearth or gamescope instances at once** confuse testing: `:1` vs `:2`,
-  `gamescope-0` vs `gamescope-1`, and every instance reacts to the controller. Check
-  `ps -C hearth-shell,retroarch` before testing.
-- **Slint:** globals are per window (the overlay window sets its own `Theme.scale`);
-  `run_event_loop_until_quit` is used, so window close quits explicitly; Slint callbacks must
-  call the session controller through `defer()` (it is in a `RefCell`), never directly.
-- **Commits:** imperative, one logical change each, no Co-Authored-By trailer. Check that every
-  commit builds (stash unstaged changes, run clippy and tests, then commit).
+- **gamescope needs `-e`** (Steam mode). Without it there is no focus control and no overlay
+  plane, and Hearth behaves as if outside gamescope.
+- **Detecting gamescope** needs `GAMESCOPE_WAYLAND_DISPLAY` in the environment: KDE's Xwayland
+  carries stale `GAMESCOPE_*` root properties.
+- **Overlay = `STEAM_OVERLAY` only.** Keep `GAMESCOPE_EXTERNAL_OVERLAY` at 0, or the window is
+  drawn twice. A hidden overlay must also be transparent (`panel: none`).
+- **RetroArch:**
+  - always `--config <generated cfg>`, never `~/.config/retroarch`;
+  - every hotkey is bound to button 999 / axis +99, because `"nul"` falls back to the
+    autoconfig profile and PS would open the menu;
+  - X11 only inside gamescope.
+- **Slint:**
+  - globals are per window;
+  - callbacks reach the session through `defer()`;
+  - `@image-url` paths must exist at build time.
+- **Clippy** rejects large `Err` types (`result_large_err`): map gilrs errors to `String`.

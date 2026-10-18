@@ -21,16 +21,50 @@ const IDLE_WAIT: Duration = Duration::from_millis(250);
 const PADS_REFRESH: Duration = Duration::from_secs(10);
 
 /// Controller input via gilrs, on its own thread.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct GilrsBackend {
     started: bool,
     activity: PadActivity,
+    /// Sends actions (an observer only keeps `activity` current).
+    emits: bool,
+}
+
+/// gilrs has no SDL mapping for InputPlumber's virtual Elite pad and names its buttons by
+/// evdev code, but xpad (and InputPlumber, like it) reports Xbox X as `BTN_X`, which is
+/// `BTN_NORTH`, and Y as `BTN_Y`, which is `BTN_WEST`. SDL and RetroArch number buttons and
+/// get it right; for gilrs the two are swapped back here.
+fn swap_north_west(name: &'static str) -> &'static str {
+    match name {
+        "north" => "west",
+        "west" => "north",
+        other => other,
+    }
+}
+
+impl Default for GilrsBackend {
+    fn default() -> Self {
+        Self {
+            started: false,
+            activity: PadActivity::new(),
+            emits: true,
+        }
+    }
 }
 
 impl GilrsBackend {
     /// Creates a backend; nothing is opened until [`InputBackend::start`].
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A backend that only keeps its [`PadActivity`] current (held inputs, raw stick and
+    /// trigger values) and sends no actions: the button test reads InputPlumber's virtual pad
+    /// through it (see [`swap_north_west`]).
+    pub fn observer() -> Self {
+        Self {
+            emits: false,
+            ..Self::default()
+        }
     }
 
     /// Live "is anything held" state of every controller, updated after each event.
@@ -47,6 +81,7 @@ impl InputBackend for GilrsBackend {
         // Gilrs isn't Send, so it is created on the thread that uses it.
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let activity = self.activity.clone();
+        let emits = self.emits;
         thread::Builder::new()
             .name("hearth-gilrs".into())
             .spawn(move || {
@@ -58,7 +93,7 @@ impl InputBackend for GilrsBackend {
                     }
                 };
                 let _ = ready_tx.send(Ok(()));
-                run(gilrs, &tx, &activity);
+                run(gilrs, &tx, &activity, emits);
             })
             .map_err(|err| InputError::Start(err.to_string()))?;
         ready_rx
@@ -98,16 +133,26 @@ fn analog(gilrs: &Gilrs) -> Analog {
     let Some((_, pad)) = gilrs.gamepads().next() else {
         return Analog::default();
     };
-    let trigger = |b| pad.button_data(b).map_or(0.0, |d| d.value());
     Analog {
         left: (pad.value(Axis::LeftStickX), pad.value(Axis::LeftStickY)),
         right: (pad.value(Axis::RightStickX), pad.value(Axis::RightStickY)),
-        l2: trigger(Button::LeftTrigger2),
-        r2: trigger(Button::RightTrigger2),
+        l2: trigger(pad, Button::LeftTrigger2, Axis::LeftZ),
+        r2: trigger(pad, Button::RightTrigger2, Axis::RightZ),
     }
 }
 
-fn run(mut gilrs: Gilrs, tx: &Sender<Action>, activity: &PadActivity) {
+/// A trigger's pull, 0..1. Pads with an SDL mapping report it as an analog button; without
+/// one (InputPlumber's virtual Elite pad) gilrs reports the raw `ABS_Z`/`ABS_RZ` as an axis
+/// going from -1 (released) to 1.
+fn trigger(pad: gilrs::Gamepad<'_>, button: Button, axis: Axis) -> f32 {
+    match (pad.button_data(button), pad.axis_data(axis)) {
+        (Some(data), _) => data.value(),
+        (None, Some(data)) => f32::midpoint(data.value(), 1.0),
+        (None, None) => 0.0,
+    }
+}
+
+fn run(mut gilrs: Gilrs, tx: &Sender<Action>, activity: &PadActivity, emits: bool) {
     for (_, pad) in gilrs.gamepads() {
         tracing::info!(name = pad.name(), "controller connected");
     }
@@ -176,10 +221,17 @@ fn run(mut gilrs: Gilrs, tx: &Sender<Action>, activity: &PadActivity) {
                     pressed.push(name);
                 }
             }
+            if !emits {
+                // The observer only ever reads InputPlumber's virtual pad.
+                pressed = pressed.into_iter().map(swap_north_west).collect();
+            }
             activity.set_pressed(pressed);
             activity.set_analog(analog(&gilrs));
         }
         state.tick(now, &mut out);
+        if !emits {
+            out.clear();
+        }
         for action in out.drain(..) {
             if tx.send(action).is_err() {
                 tracing::debug!("action receiver dropped; stopping gilrs thread");
@@ -235,10 +287,12 @@ fn extra_name(code: u32) -> Option<&'static str> {
         167 => "share",
         // hid-nintendo: Switch Pro Capture.
         0x135 => "share",
-        // xpad: Xbox Elite Series 2 paddles (BTN_TRIGGER_HAPPY5–8).
+        // xpad: Xbox Elite Series 2 paddles, numbered as SDL's mapping of the device does
+        // (BTN_TRIGGER_HAPPY5–8 are paddles 1, 3, 2, 4; checked on InputPlumber's virtual
+        // Elite 2 pad, which uses the same codes).
         0x2c4 => "paddle1",
-        0x2c5 => "paddle2",
-        0x2c6 => "paddle3",
+        0x2c5 => "paddle3",
+        0x2c6 => "paddle2",
         0x2c7 => "paddle4",
         _ => return None,
     })
@@ -273,6 +327,14 @@ fn pressed_inputs(gilrs: &Gilrs) -> Vec<&'static str> {
                 && let Some(name) = position_name(button)
                 && !pressed.contains(&name)
             {
+                pressed.push(name);
+            }
+        }
+        for (name, button, axis) in [
+            ("l2", Button::LeftTrigger2, Axis::LeftZ),
+            ("r2", Button::RightTrigger2, Axis::RightZ),
+        ] {
+            if trigger(pad, button, axis) > STICK_DEADZONE && !pressed.contains(&name) {
                 pressed.push(name);
             }
         }
@@ -330,6 +392,7 @@ mod tests {
         assert_eq!(extra_name(key(167)), Some("share"));
         assert_eq!(extra_name(key(0x135)), Some("share"));
         assert_eq!(extra_name(key(0x2c4)), Some("paddle1"));
+        assert_eq!(extra_name(key(0x2c6)), Some("paddle2"));
         assert_eq!(extra_name(key(0x2c7)), Some("paddle4"));
         assert_eq!(extra_name(key(0x130)), None);
         // An absolute axis with the same number isn't a key.

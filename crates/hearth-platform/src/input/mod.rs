@@ -241,6 +241,9 @@ pub enum InputMode {
     Shell,
     /// A game receives everything except the Guide button.
     Game,
+    /// The button test, with no game running: the controller's input goes to the virtual pad
+    /// (where gilrs reads raw stick and trigger values), Guide and the extras to the shell.
+    Test,
 }
 
 /// What the session can ask of the backend that owns the controllers.

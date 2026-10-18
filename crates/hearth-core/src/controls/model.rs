@@ -57,6 +57,8 @@ pub enum PadInput {
     Paddle3,
     /// Back paddle 4, when present.
     Paddle4,
+    /// Microphone mute button (DualSense), when present. Only InputPlumber reads it.
+    Mute,
 }
 
 /// What kind of control an input is, which decides what it can be bound to.
@@ -74,7 +76,7 @@ pub enum InputKind {
 
 impl PadInput {
     /// Every input, in file order.
-    pub const ALL: [PadInput; 25] = [
+    pub const ALL: [PadInput; 26] = [
         Self::South,
         Self::East,
         Self::West,
@@ -100,6 +102,7 @@ impl PadInput {
         Self::Paddle2,
         Self::Paddle3,
         Self::Paddle4,
+        Self::Mute,
     ];
 
     /// The four D-pad direction inputs with their direction names.
@@ -138,6 +141,7 @@ impl PadInput {
             Self::Paddle2 => "paddle2",
             Self::Paddle3 => "paddle3",
             Self::Paddle4 => "paddle4",
+            Self::Mute => "mute",
         }
     }
 
@@ -166,6 +170,7 @@ impl PadInput {
                 | Self::Paddle2
                 | Self::Paddle3
                 | Self::Paddle4
+                | Self::Mute
         )
     }
 }

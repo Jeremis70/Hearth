@@ -199,6 +199,7 @@ fn button_name(input: PadInput) -> Option<&'static str> {
         PadInput::Paddle2 => "LeftPaddle1",
         PadInput::Paddle3 => "RightPaddle2",
         PadInput::Paddle4 => "LeftPaddle2",
+        PadInput::Mute => "Mute",
         _ => return None,
     })
 }

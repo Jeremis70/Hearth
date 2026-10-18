@@ -125,7 +125,8 @@ impl ControllerIdentity {
     /// can read it is another matter (gilrs can't see the DualSense touchpad).
     pub fn extra_inputs(&self) -> Vec<PadInput> {
         match (self.kind, self.product_id) {
-            (ControllerKind::DualSense | ControllerKind::DualShock4, _) => vec![PadInput::Touchpad],
+            (ControllerKind::DualSense, _) => vec![PadInput::Touchpad, PadInput::Mute],
+            (ControllerKind::DualShock4, _) => vec![PadInput::Touchpad],
             (ControllerKind::SwitchPro, _) => vec![PadInput::Share],
             // Xbox Series X|S controller (USB, Bluetooth).
             (ControllerKind::Xbox, Some(0x0b12 | 0x0b13)) => vec![PadInput::Share],
@@ -195,7 +196,7 @@ mod tests {
     fn extras_by_controller() {
         assert_eq!(
             ControllerIdentity::fallback().extra_inputs(),
-            [PadInput::Touchpad]
+            [PadInput::Touchpad, PadInput::Mute]
         );
         let series =
             ControllerIdentity::from_pad("Xbox Wireless Controller", Some(0x045e), Some(0x0b13));

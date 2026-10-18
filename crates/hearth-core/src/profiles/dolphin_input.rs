@@ -49,7 +49,8 @@ fn sdl_button(input: PadInput) -> Option<&'static str> {
         PadInput::DpadLeft => "Pad W",
         PadInput::DpadRight => "Pad E",
         PadInput::Touchpad => "Touchpad",
-        PadInput::Share => "Misc 1",
+        // SDL reports both as misc1 (no controller has both).
+        PadInput::Share | PadInput::Mute => "Misc 1",
         PadInput::Paddle1 => "Paddle 1",
         PadInput::Paddle2 => "Paddle 2",
         PadInput::Paddle3 => "Paddle 3",

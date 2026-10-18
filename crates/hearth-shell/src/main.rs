@@ -77,6 +77,8 @@ struct Input {
     backend: Box<dyn InputBackend>,
     activity: PadActivity,
     control: InputControl,
+    /// With InputPlumber: gilrs watching the virtual pad, for the button test's raw values.
+    observer: Option<GilrsBackend>,
 }
 
 /// Picks the controller backend. `auto` falls back to gilrs and says why.
@@ -87,6 +89,7 @@ fn select_input(choice: InputChoice, runtime_dir: &std::path::Path) -> anyhow::R
             activity: backend.activity(),
             control: InputControl::detached(),
             backend: Box::new(backend),
+            observer: None,
         }
     };
     let inputplumber = || {
@@ -94,6 +97,7 @@ fn select_input(choice: InputChoice, runtime_dir: &std::path::Path) -> anyhow::R
             activity: backend.activity(),
             control: backend.control(),
             backend: Box::new(backend),
+            observer: Some(GilrsBackend::observer()),
         })
     };
     Ok(match choice {
@@ -216,6 +220,7 @@ fn main() -> anyhow::Result<()> {
         controls_dir,
         runtime_dir: dirs.runtime().to_path_buf(),
         activity: input.activity.clone(),
+        raw_activity: input.observer.as_ref().map(GilrsBackend::activity),
         input: input.control.clone(),
         library_db: dirs.library_db(),
         games_dir,
@@ -235,6 +240,9 @@ fn main() -> anyhow::Result<()> {
     );
 
     let mut backends: Vec<Box<dyn InputBackend>> = vec![input.backend];
+    if let Some(observer) = input.observer {
+        backends.push(Box::new(observer));
+    }
     if let Some(path) = args.dev_socket {
         backends.push(Box::new(DevSocketBackend::new(path)));
     }

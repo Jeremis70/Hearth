@@ -168,3 +168,8 @@ mapping:
       gamepad:
         button: LeftPaddle2
     target_events: []
+  - name: "mute: none"
+    source_event:
+      gamepad:
+        button: Mute
+    target_events: []

@@ -124,6 +124,7 @@ pub struct Controller {
     dolphin: DolphinProfile,
     controls_dir: PathBuf,
     activity: PadActivity,
+    raw_activity: Option<PadActivity>,
     input: InputControl,
     library_db: PathBuf,
     entries: Vec<LibraryEntry>,
@@ -174,6 +175,9 @@ pub struct Setup {
     pub runtime_dir: PathBuf,
     /// Live controller state: connected pads, disarming held buttons.
     pub activity: PadActivity,
+    /// With InputPlumber: the virtual pad as gilrs sees it (raw stick and trigger values for
+    /// the button test).
+    pub raw_activity: Option<PadActivity>,
     /// Who gets the controller (InputPlumber), and the game's remapping.
     pub input: InputControl,
     /// Library database file.
@@ -260,6 +264,7 @@ pub fn install(setup: Setup) {
         dolphin: setup.dolphin,
         controls_dir: setup.controls_dir,
         activity: setup.activity,
+        raw_activity: setup.raw_activity,
         input: setup.input,
         library_db: setup.library_db,
         entries: Vec::new(),
@@ -1082,9 +1087,15 @@ impl Controller {
         controls::device(&self.activity.pads(), &self.controls_dir).kind
     }
 
-    /// Player 1's extra inputs (touchpad, share, paddles).
+    /// Player 1's extra inputs (touchpad, share, paddles, mute) that the input backend reads:
+    /// gilrs can't see the touchpad (a separate device) or the mute button.
     fn pad_extras(&self) -> Vec<PadInput> {
-        controls::device(&self.activity.pads(), &self.controls_dir).extra_inputs()
+        let live = self.input.is_live();
+        controls::device(&self.activity.pads(), &self.controls_dir)
+            .extra_inputs()
+            .into_iter()
+            .filter(|i| live || *i != PadInput::Mute)
+            .collect()
     }
 
     /// Button glyphs follow the first connected controller (both windows have their own
@@ -1336,27 +1347,53 @@ impl Controller {
         };
         self.testing = true;
         let device = controls::device(&self.activity.pads(), &self.controls_dir);
-        // Guide, and the extras gilrs can read (it can't see the touchpad, a separate device).
+        let live = self.input.is_live();
+        // Guide, and the extras the backend reads.
         let extras: Vec<&'static str> = std::iter::once("guide")
             .chain(
-                device
-                    .extra_inputs()
+                self.pad_extras()
                     .into_iter()
-                    .filter(|i| *i != PadInput::Touchpad)
+                    .filter(|i| live || *i != PadInput::Touchpad)
                     .map(PadInput::name),
             )
             .collect();
         let page = TestPage::new(&extras);
         let name = device.sdl_name.clone();
         let line = controls_page::controller_line(&name, self.activity.pads().first());
-        page.fill(&app.global::<ControlsData>(), &line);
+        let data = app.global::<ControlsData>();
+        page.fill(&data, &line);
+        // With InputPlumber, menus get presses only. Raw values come from the virtual pad,
+        // which may only get the input while no game could see it.
+        let raw = match &self.raw_activity {
+            Some(raw) if self.active.is_none() => {
+                self.input.set_mode(InputMode::Test);
+                Some(raw.clone())
+            }
+            Some(_) => {
+                data.set_message("Stick and trigger values show when no game is running".into());
+                None
+            }
+            None => None,
+        };
         let activity = self.activity.clone();
         let weak = self.app.clone();
         let update = move || {
             let Some(app) = weak.upgrade() else {
                 return;
             };
-            page.update(&activity.pressed(), &activity.analog());
+            let mut pressed = activity.pressed();
+            let analog = match &raw {
+                Some(raw) => {
+                    for input in raw.pressed() {
+                        if !pressed.contains(&input) {
+                            pressed.push(input);
+                        }
+                    }
+                    raw.analog()
+                }
+                None => activity.analog(),
+            };
+            page.update(&pressed, &analog);
             let data = app.global::<ControlsData>();
             let line = controls_page::controller_line(&name, activity.pads().first());
             if data.get_scope_line() != line.as_str() {
@@ -1373,7 +1410,10 @@ impl Controller {
         self.testing = false;
         self.test_timer.stop();
         self.activity.disarm();
+        // The controller back to Hearth's menus (InputPlumber).
+        self.set_mode(self.mode);
         if let Some(app) = self.app.upgrade() {
+            app.global::<ControlsData>().set_message("".into());
             app.invoke_close_button_test();
         }
     }

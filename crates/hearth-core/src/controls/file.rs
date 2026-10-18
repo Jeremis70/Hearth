@@ -52,18 +52,14 @@ pub struct StickChanges {
 pub struct Layer {
     /// Input → target, in file order.
     pub binds: Vec<(PadInput, Target)>,
-    /// Left stick changes.
-    pub left_stick: StickChanges,
-    /// Right stick changes.
-    pub right_stick: StickChanges,
+    /// Console stick (canonical name) → its option changes.
+    pub sticks: Vec<(String, StickChanges)>,
     /// New trigger mode.
     pub trigger_mode: Option<TriggerMode>,
     /// New trigger threshold.
     pub trigger_threshold: Option<f32>,
     /// New vibration setting.
     pub vibration: Option<bool>,
-    /// New swap_sticks setting.
-    pub swap_sticks: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -78,11 +74,14 @@ struct Doc {
 #[serde(deny_unknown_fields)]
 struct PlayerDoc {
     vibration: Option<bool>,
-    swap_sticks: Option<bool>,
     bind: Option<BTreeMap<String, Spanned<String>>>,
-    left_stick: Option<StickDoc>,
-    right_stick: Option<StickDoc>,
+    /// Console stick name → options.
+    sticks: Option<BTreeMap<Spanned<String>, StickDoc>>,
     triggers: Option<TriggerDoc>,
+    // Removed keys, read only to explain what replaced them.
+    swap_sticks: Option<Spanned<toml::Value>>,
+    left_stick: Option<Spanned<toml::Value>>,
+    right_stick: Option<Spanned<toml::Value>>,
 }
 
 #[derive(Deserialize)]
@@ -130,7 +129,23 @@ pub fn parse_layer(
         return Ok((layer, warnings));
     };
     layer.vibration = player.vibration;
-    layer.swap_sticks = player.swap_sticks;
+    if let Some(old) = &player.swap_sticks {
+        errors.push(problem(
+            Some(old.span()),
+            "swap_sticks was removed: bind the sticks instead (left_stick = \"C-stick\")".into(),
+        ));
+    }
+    for old in [&player.left_stick, &player.right_stick]
+        .into_iter()
+        .flatten()
+    {
+        errors.push(problem(
+            Some(old.span()),
+            "stick options belong to the console stick now: use [player1.sticks.\"<stick>\"] \
+             (for example [player1.sticks.\"C-stick\"])"
+                .into(),
+        ));
+    }
 
     // Sort binds by position in the file, so "first in the file" is well defined.
     let mut binds: Vec<_> = player.bind.unwrap_or_default().into_iter().collect();
@@ -176,22 +191,43 @@ pub fn parse_layer(
         }
     }
 
-    for (doc, changes) in [
-        (player.left_stick, &mut layer.left_stick),
-        (player.right_stick, &mut layer.right_stick),
-    ] {
-        let Some(doc) = doc else { continue };
-        changes.invert_x = doc.invert_x;
-        changes.invert_y = doc.invert_y;
-        changes.deadzone = in_range(doc.deadzone, "deadzone", 0.0, 0.9, &problem, &mut errors);
-        changes.sensitivity = in_range(
-            doc.sensitivity,
-            "sensitivity",
-            0.5,
-            2.0,
-            &problem,
-            &mut errors,
-        );
+    let mut sticks: Vec<_> = player.sticks.unwrap_or_default().into_iter().collect();
+    sticks.sort_by_key(|(name, _)| name.span().start);
+    for (name, doc) in sticks {
+        let stick = controls
+            .find(name.get_ref())
+            .filter(|c| c.kind == ControlKind::Stick);
+        let Some(stick) = stick else {
+            let names: Vec<_> = controls
+                .declared()
+                .iter()
+                .filter(|c| c.kind == ControlKind::Stick)
+                .map(|c| format!("\"{}\"", c.name))
+                .collect();
+            errors.push(problem(
+                Some(name.span()),
+                format!(
+                    "unknown stick '{}' (expected one of: {})",
+                    name.get_ref(),
+                    names.join(", ")
+                ),
+            ));
+            continue;
+        };
+        let changes = StickChanges {
+            invert_x: doc.invert_x,
+            invert_y: doc.invert_y,
+            deadzone: in_range(doc.deadzone, "deadzone", 0.0, 0.9, &problem, &mut errors),
+            sensitivity: in_range(
+                doc.sensitivity,
+                "sensitivity",
+                0.5,
+                2.0,
+                &problem,
+                &mut errors,
+            ),
+        };
+        layer.sticks.push((stick.name, changes));
     }
     if let Some(triggers) = player.triggers {
         if let Some(mode) = triggers.mode {
@@ -325,7 +361,7 @@ mod tests {
     #[test]
     fn parses_binds_and_options() {
         let (layer, warnings) = parse(
-            "[player1]\nvibration = false\n[player1.bind]\nsouth = \"a\"\nl1 = \"@fast_forward_hold\"\nr1 = \"none\"\nright_stick = \"C-stick\"\n[player1.right_stick]\ninvert_x = true\ndeadzone = 0.1\n[player1.triggers]\nmode = \"digital\"\n",
+            "[player1]\nvibration = false\n[player1.bind]\nsouth = \"a\"\nl1 = \"@fast_forward_hold\"\nr1 = \"none\"\nright_stick = \"C-stick\"\n[player1.sticks.\"c-stick\"]\ninvert_x = true\ndeadzone = 0.1\n[player1.triggers]\nmode = \"digital\"\n",
         )
         .unwrap();
         assert!(warnings.is_empty());
@@ -342,9 +378,12 @@ mod tests {
             ]
         );
         assert_eq!(layer.vibration, Some(false));
-        assert_eq!(layer.right_stick.invert_x, Some(true));
-        assert_eq!(layer.right_stick.deadzone, Some(0.1));
-        assert_eq!(layer.left_stick, StickChanges::default());
+        // Stick names are matched like controls (any case) and stored canonical.
+        assert_eq!(layer.sticks.len(), 1);
+        let (stick, changes) = &layer.sticks[0];
+        assert_eq!(stick, "C-stick");
+        assert_eq!(changes.invert_x, Some(true));
+        assert_eq!(changes.deadzone, Some(0.1));
         assert_eq!(layer.trigger_mode, Some(TriggerMode::Digital));
     }
 
@@ -370,7 +409,7 @@ mod tests {
 
     #[test]
     fn unknown_keys_and_players_are_errors() {
-        let errors = parse("[player1.left_stick]\ninvert_z = true\n").unwrap_err();
+        let errors = parse("[player1.sticks.\"Main stick\"]\ninvert_z = true\n").unwrap_err();
         assert_eq!(errors[0].line, Some(2));
         assert!(errors[0].message.contains("invert_z"), "{}", errors[0]);
         let errors = parse("[player2.bind]\nsouth = \"A\"\n").unwrap_err();
@@ -383,10 +422,38 @@ mod tests {
             "[player1.bind]\nleft_stick = \"A\"\nsouth = \"Main stick\"\nleft_stick = \"x\"\n",
         );
         assert!(errors.is_err());
-        let errors = parse("[player1.right_stick]\ndeadzone = 1.5\n").unwrap_err();
+        let errors = parse("[player1.sticks.\"C-stick\"]\ndeadzone = 1.5\n").unwrap_err();
         assert!(errors[0].message.contains("out of range"), "{}", errors[0]);
         let errors = parse("[player1.bind]\nleft_stick = \"@screenshot\"\n").unwrap_err();
         assert!(errors[0].message.contains("can't drive an action"));
+    }
+
+    #[test]
+    fn stick_options_need_a_console_stick_and_old_keys_explain_themselves() {
+        let errors = parse("[player1.sticks.\"D-pad\"]\ninvert_x = true\n").unwrap_err();
+        assert_eq!(errors[0].line, Some(1));
+        assert!(
+            errors[0].message.contains("unknown stick 'D-pad'"),
+            "{}",
+            errors[0]
+        );
+        assert!(
+            errors[0].message.contains("\"Main stick\", \"C-stick\""),
+            "{}",
+            errors[0]
+        );
+        let errors = parse("[player1]\nswap_sticks = true\n").unwrap_err();
+        assert!(
+            errors[0].message.contains("swap_sticks was removed"),
+            "{}",
+            errors[0]
+        );
+        let errors = parse("[player1.right_stick]\ninvert_x = true\n").unwrap_err();
+        assert!(
+            errors[0].message.contains("[player1.sticks.\"<stick>\"]"),
+            "{}",
+            errors[0]
+        );
     }
 
     #[test]

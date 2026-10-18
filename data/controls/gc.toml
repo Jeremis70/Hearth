@@ -73,7 +73,6 @@ hint = "Small cross below the main stick: rarely used, sometimes for items or me
 
 [player1]
 vibration = true
-swap_sticks = false
 
 [player1.bind]
 south = "A"
@@ -87,16 +86,15 @@ start = "Start"
 dpad = "D-pad"
 left_stick = "Main stick"
 right_stick = "C-stick"
-# L1 is unused on GameCube: hold it to run the game unthrottled.
-l1 = "@fast_forward_hold"
 
-[player1.left_stick]
+# Options belong to the console stick and follow it to whichever physical stick drives it.
+[player1.sticks."Main stick"]
 invert_x = false
 invert_y = false
 deadzone = 0.0
 sensitivity = 1.0
 
-[player1.right_stick]
+[player1.sticks."C-stick"]
 invert_x = false
 invert_y = false
 deadzone = 0.0

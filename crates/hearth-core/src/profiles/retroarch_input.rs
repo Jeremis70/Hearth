@@ -29,8 +29,8 @@ pub const CAPABILITIES: Capabilities = Capabilities {
         EmulatorAction::Screenshot,
         EmulatorAction::Rewind,
     ],
-    stick_deadzone: [true, false],
-    stick_sensitivity: [true, false],
+    // mupen64plus-next's core options tune the N64 analog stick only.
+    stick_tuning: Some(&["Stick"]),
     analog_triggers: false,
     vibration: true,
 };
@@ -360,16 +360,17 @@ pub fn translate(
 
     // mupen64plus-next stick options: 0–30 % deadzone, 50–150 % sensitivity, steps of 5.
     if core.library_name == MUPEN64PLUS_NEXT.library_name {
-        let left = mapping.left_stick;
+        // The N64 analog stick's options, whichever physical stick drives it.
+        let stick = mapping.stick_options("Stick");
         let step5 = |v: f32, min: f32, max: f32| ((v * 20.0).round() * 5.0).clamp(min, max);
-        let deadzone = step5(left.deadzone, 0.0, 30.0);
-        if (deadzone - left.deadzone * 100.0).abs() > 0.01 {
+        let deadzone = step5(stick.deadzone, 0.0, 30.0);
+        if (deadzone - stick.deadzone * 100.0).abs() > 0.01 {
             out.warnings.push(format!(
-                "RetroArch: left_stick.deadzone {} becomes {deadzone}% (mupen64plus-next allows 0–30 in steps of 5)",
-                left.deadzone
+                "RetroArch: the Stick deadzone {} becomes {deadzone}% (mupen64plus-next allows 0–30 in steps of 5)",
+                stick.deadzone
             ));
         }
-        let sensitivity = step5(left.sensitivity, 50.0, 150.0);
+        let sensitivity = step5(stick.sensitivity, 50.0, 150.0);
         out.core_options
             .push(("mupen64plus-astick-deadzone".into(), format!("{deadzone}")));
         out.core_options.push((
@@ -380,10 +381,10 @@ pub fn translate(
     out
 }
 
-/// Sets the four half-axes of the physical stick behind `input`: `targets` are the ids for
-/// X+, X-, Y+, Y- before inversion.
+/// Sets the four half-axes of physical stick `input`: `targets` are the ids for X+, X-, Y+, Y-
+/// before inversion, which comes from the console stick it drives.
 fn stick_axes(mapping: &Mapping, input: PadInput, targets: [i32; 4], axes: &mut [i32; 8]) {
-    let (physical, options) = mapping.stick_source(input);
+    let options = mapping.options_of_physical(input);
     let [x_plus, x_minus, y_plus, y_minus] = targets;
     let (x_plus, x_minus) = if options.invert_x {
         (x_minus, x_plus)
@@ -395,11 +396,7 @@ fn stick_axes(mapping: &Mapping, input: PadInput, targets: [i32; 4], axes: &mut 
     } else {
         (y_plus, y_minus)
     };
-    let first = if physical == PadInput::LeftStick {
-        0
-    } else {
-        4
-    };
+    let first = if input == PadInput::LeftStick { 0 } else { 4 };
     axes[first..first + 4].copy_from_slice(&[x_plus, x_minus, y_plus, y_minus]);
 }
 
@@ -514,14 +511,14 @@ mod tests {
     }
 
     #[test]
-    fn inversion_swap_and_actions() {
+    fn stick_options_follow_their_stick_and_actions() {
         let mapping = n64_mapping(Some(
-            "[player1]\nswap_sticks = true\n[player1.bind]\nl3 = \"@fast_forward_hold\"\nselect = \"@save_state\"\neast = \"C-down\"\nl2 = \"@rewind\"\n[player1.left_stick]\ninvert_y = true\n[player1.right_stick]\ndeadzone = 0.2\n",
+            "[player1.bind]\nleft_stick = \"C-buttons\"\nright_stick = \"Stick\"\nl3 = \"@fast_forward_hold\"\nselect = \"@save_state\"\neast = \"C-down\"\nl2 = \"@rewind\"\n[player1.sticks.\"C-buttons\"]\ninvert_y = true\ndeadzone = 0.2\n[player1.sticks.\"Stick\"]\ndeadzone = 0.25\n",
         ));
         let autoconfig = Autoconfig::parse("ds.cfg".into(), DUALSENSE);
         let t = translate(&mapping, &MUPEN64PLUS_NEXT, Some(&autoconfig));
-        // Swapped: the physical right stick drives the N64 stick, the left one the C buttons,
-        // with the left stick's Y inverted.
+        // The physical right stick drives the N64 stick, the left one the C buttons, with the C
+        // buttons' Y inverted; the N64 stick keeps its own deadzone on the right.
         assert!(rmp(&t).contains("input_player1_stk_r_x+ = \"16\"\n"));
         assert!(
             rmp(&t).contains("input_player1_stk_l_y+ = \"23\"\ninput_player1_stk_l_y- = \"22\"\n")
@@ -534,8 +531,16 @@ mod tests {
         assert_eq!(setting(&t, "input_rewind_axis"), Some("+2"));
         assert_eq!(setting(&t, "rewind_enable"), Some("true"));
         assert_eq!(setting(&t, "input_enable_hotkey_btn"), Some("nul"));
+        assert!(
+            t.core_options
+                .contains(&("mupen64plus-astick-deadzone".into(), "25".into()))
+        );
         assert_eq!(t.warnings.len(), 1, "{:?}", t.warnings);
-        assert!(t.warnings[0].contains("right_stick.deadzone"));
+        assert!(
+            t.warnings[0].contains("the C-buttons deadzone"),
+            "{:?}",
+            t.warnings
+        );
     }
 
     #[test]

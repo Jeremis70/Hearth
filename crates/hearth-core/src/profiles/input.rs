@@ -22,10 +22,8 @@ pub struct Capabilities {
     pub emulator: &'static str,
     /// Supported emulator actions.
     pub actions: &'static [EmulatorAction],
-    /// Stick deadzone, per physical stick (left, right).
-    pub stick_deadzone: [bool; 2],
-    /// Stick sensitivity, per physical stick (left, right).
-    pub stick_sensitivity: [bool; 2],
+    /// Console sticks whose deadzone and sensitivity it can set, by name; `None`: every one.
+    pub stick_tuning: Option<&'static [&'static str]>,
     /// Digital trigger mode.
     pub analog_triggers: bool,
     /// Rumble on/off.
@@ -33,6 +31,12 @@ pub struct Capabilities {
 }
 
 impl Capabilities {
+    /// Whether it can set console stick `stick`'s deadzone and sensitivity.
+    pub fn can_tune(&self, stick: &str) -> bool {
+        self.stick_tuning
+            .is_none_or(|sticks| sticks.contains(&stick))
+    }
+
     /// Warnings for everything in `mapping` this emulator can't honor.
     pub fn check(&self, mapping: &Mapping) -> Vec<String> {
         let mut warnings = Vec::new();
@@ -47,18 +51,17 @@ impl Capabilities {
                 ));
             }
         }
-        for (i, (name, stick)) in [
-            ("left_stick", mapping.left_stick),
-            ("right_stick", mapping.right_stick),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            if stick.deadzone > 0.0 && !self.stick_deadzone[i] {
-                warnings.push(format!("{emulator} can't set {name}.deadzone; ignored"));
+        for (name, stick) in &mapping.sticks {
+            if self.can_tune(name) {
+                continue;
             }
-            if stick.sensitivity != 1.0 && !self.stick_sensitivity[i] {
-                warnings.push(format!("{emulator} can't set {name}.sensitivity; ignored"));
+            if stick.deadzone > 0.0 {
+                warnings.push(format!("{emulator} can't set the {name} deadzone; ignored"));
+            }
+            if stick.sensitivity != 1.0 {
+                warnings.push(format!(
+                    "{emulator} can't set the {name} sensitivity; ignored"
+                ));
             }
         }
         if mapping.triggers.mode == TriggerMode::Digital && !self.analog_triggers {

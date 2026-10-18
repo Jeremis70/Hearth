@@ -86,7 +86,6 @@ hint = "Cross on the left grip: rarely used in 3D games"
 
 [player1]
 vibration = true
-swap_sticks = false
 
 [player1.bind]
 south = "A"
@@ -99,12 +98,13 @@ dpad = "D-pad"
 left_stick = "Stick"
 right_stick = "C-buttons"
 
-[player1.left_stick]
+# Options belong to the console stick and follow it to whichever physical stick drives it.
+[player1.sticks."Stick"]
 invert_x = false
 invert_y = false
 deadzone = 0.15
 sensitivity = 1.0
 
-[player1.right_stick]
+[player1.sticks."C-buttons"]
 invert_x = false
 invert_y = false

@@ -75,6 +75,12 @@ resume and close it. Verified end to end inside `scripts/run-gamescope.sh` with 
   vibration options. Layers: `data/controls/<system>.toml` → `<config>/controls/systems/<system>.toml`
   → `<config>/controls/games/<system>/<serial>.toml` (or the region-free serial, e.g. `GZ2.toml`).
   The serial is read from the ROM header (`gc/GZ2E01`, `n64/CZLE`).
+- **Stick options belong to the console stick** (`[player1.sticks."C-stick"]`: invert_x,
+  invert_y, deadzone, sensitivity) and follow it to whichever physical stick drives it. There is
+  no swap option: binding `left_stick = "C-stick"` (swap on conflict) moves the stick with its
+  options. The old `[player1.left_stick]`/`right_stick` tables and `swap_sticks` are errors that
+  say what replaced them. Emulator actions (fast-forward…) are never bound by default; users add
+  them per console or game.
 - **Translators** (`profiles/dolphin_input.rs`, `profiles/retroarch_input.rs`) regenerate the
   emulator's input config at every launch: Dolphin GCPadNew.ini + Hotkeys.ini; RetroArch a core
   remap file, hotkey binds (raw buttons from the joypad autoconfig) and core options. Golden
@@ -160,8 +166,8 @@ resume and close it. Verified end to end inside `scripts/run-gamescope.sh` with 
 - **Buttons pressed and released while a game is frozen:** whether the queued events reach the
   game after SIGCONT is still untested by hand (InputPlumber in M3 makes this moot).
 - **Controls translation live:** checked by unit/golden tests and `--print-controls` only. Still
-  to try by hand: the TP camera override, L1 fast-forward in TP, and OoT unchanged with the
-  generated remap file.
+  to try by hand: the TP camera override, a fast-forward the user binds in TP, and OoT
+  unchanged with the generated remap file.
 - **15 s "no window" timeout:** the path that toasts, closes the game and keeps Hearth in front
   was never triggered live; RetroArch always mapped its window in about 0.25 s.
 - **Keyboard inside the overlay window under gamescope:** untested. Controller actions are

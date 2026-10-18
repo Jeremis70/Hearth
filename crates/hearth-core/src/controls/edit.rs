@@ -13,8 +13,8 @@ use toml_edit::{DocumentMut, Item, Table, value};
 use super::device::ControllerKind;
 use super::key::GameKey;
 use super::layers::{Resolved, UserLayers, game_file, resolve_layers, system_file};
-use super::model::{InputKind, Mapping, PadInput, StickOptions, Target, TriggerMode};
-use crate::systems::System;
+use super::model::{InputKind, Mapping, PadInput, Target, TriggerMode};
+use crate::systems::{ControlKind, System};
 
 /// Errors saving a controls change.
 #[derive(Debug, thiserror::Error)]
@@ -38,6 +38,10 @@ pub enum EditError {
         /// Parser message.
         message: String,
     },
+    /// Stick options for something that isn't one of the console's sticks (by its canonical
+    /// name).
+    #[error("{0} isn't a stick of this console")]
+    NotAStick(String),
     /// A target the input can't drive.
     #[error("{input} can't drive {target}")]
     Incompatible {
@@ -57,46 +61,20 @@ pub enum Scope {
     Game,
 }
 
-/// Which stick an option belongs to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Stick {
-    /// Left.
-    Left,
-    /// Right.
-    Right,
-}
-
-impl Stick {
-    fn key(self) -> &'static str {
-        match self {
-            Self::Left => "left_stick",
-            Self::Right => "right_stick",
-        }
-    }
-
-    fn of(self, mapping: &Mapping) -> StickOptions {
-        match self {
-            Self::Left => mapping.left_stick,
-            Self::Right => mapping.right_stick,
-        }
-    }
-}
-
-/// One option change.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// One option change. Stick options name the console stick ("C-stick"): they follow it to
+/// whichever physical stick drives it.
+#[derive(Debug, Clone, PartialEq)]
 pub enum Setting {
     /// Rumble.
     Vibration(bool),
-    /// Swap sticks.
-    SwapSticks(bool),
-    /// Invert a stick's X.
-    InvertX(Stick, bool),
-    /// Invert a stick's Y.
-    InvertY(Stick, bool),
-    /// A stick's deadzone.
-    Deadzone(Stick, f32),
-    /// A stick's sensitivity.
-    Sensitivity(Stick, f32),
+    /// Invert a console stick's X.
+    InvertX(String, bool),
+    /// Invert a console stick's Y.
+    InvertY(String, bool),
+    /// A console stick's deadzone.
+    Deadzone(String, f32),
+    /// A console stick's sensitivity.
+    Sensitivity(String, f32),
     /// Trigger mode.
     TriggerMode(TriggerMode),
     /// Trigger threshold.
@@ -258,45 +236,52 @@ impl Editor {
     /// Changes one option.
     pub fn set(&self, setting: Setting) -> Result<(), EditError> {
         let base = self.base();
-        let (path, new, old): (Vec<&str>, Item, Item) = match setting {
+        if let Setting::InvertX(stick, _)
+        | Setting::InvertY(stick, _)
+        | Setting::Deadzone(stick, _)
+        | Setting::Sensitivity(stick, _) = &setting
+            && !self
+                .system
+                .controls
+                .find(stick)
+                .is_some_and(|c| c.kind == ControlKind::Stick && c.name == *stick)
+        {
+            return Err(EditError::NotAStick(stick.clone()));
+        }
+        let (path, new, old): (Vec<&str>, Item, Item) = match &setting {
             Setting::Vibration(v) => (
                 vec!["player1", "vibration"],
-                value(v),
+                value(*v),
                 value(base.vibration),
             ),
-            Setting::SwapSticks(v) => (
-                vec!["player1", "swap_sticks"],
-                value(v),
-                value(base.swap_sticks),
-            ),
             Setting::InvertX(s, v) => (
-                vec!["player1", s.key(), "invert_x"],
-                value(v),
-                value(s.of(&base).invert_x),
+                vec!["player1", "sticks", s, "invert_x"],
+                value(*v),
+                value(base.stick_options(s).invert_x),
             ),
             Setting::InvertY(s, v) => (
-                vec!["player1", s.key(), "invert_y"],
-                value(v),
-                value(s.of(&base).invert_y),
+                vec!["player1", "sticks", s, "invert_y"],
+                value(*v),
+                value(base.stick_options(s).invert_y),
             ),
             Setting::Deadzone(s, v) => (
-                vec!["player1", s.key(), "deadzone"],
-                value(round(v)),
-                value(round(s.of(&base).deadzone)),
+                vec!["player1", "sticks", s, "deadzone"],
+                value(round(*v)),
+                value(round(base.stick_options(s).deadzone)),
             ),
             Setting::Sensitivity(s, v) => (
-                vec!["player1", s.key(), "sensitivity"],
-                value(round(v)),
-                value(round(s.of(&base).sensitivity)),
+                vec!["player1", "sticks", s, "sensitivity"],
+                value(round(*v)),
+                value(round(base.stick_options(s).sensitivity)),
             ),
             Setting::TriggerMode(m) => (
                 vec!["player1", "triggers", "mode"],
-                value(mode_name(m)),
+                value(mode_name(*m)),
                 value(mode_name(base.triggers.mode)),
             ),
             Setting::TriggerThreshold(v) => (
                 vec!["player1", "triggers", "threshold"],
-                value(round(v)),
+                value(round(*v)),
                 value(round(base.triggers.threshold)),
             ),
         };
@@ -319,13 +304,14 @@ impl Editor {
         }
     }
 
-    /// Whether this scope's file sets `setting_path` (`bind.south`, `right_stick.invert_x`).
-    pub fn overrides(&self, setting_path: &str) -> bool {
+    /// Whether this scope's file sets the setting at `path` under `[player1]`
+    /// (`["bind", "south"]`, `["sticks", "C-stick", "invert_x"]`).
+    pub fn overrides(&self, path: &[&str]) -> bool {
         let Ok(doc) = self.load() else {
             return false;
         };
         let mut item = doc.as_item().get("player1");
-        for part in setting_path.split('.') {
+        for part in path {
             item = item.and_then(|i| i.get(part));
         }
         item.is_some()
@@ -500,26 +486,40 @@ mod tests {
     fn reassigning_swaps_and_writes_only_differences() {
         let f = fixture();
         let e = editor(&f, Scope::System);
-        let done = e
-            .assign(
-                PadInput::R1,
-                Target::Action(EmulatorAction::FastForwardHold),
-            )
-            .unwrap();
-        // Fast-forward was on L1; L1 gets R1's Z.
-        assert_eq!(
-            done.swapped,
-            Some((PadInput::L1, Target::Control("Z".into())))
-        );
-        let m = e.current().mapping;
-        assert_eq!(m.target(PadInput::L1), Some(&Target::Control("Z".into())));
+        // Z moves from R1 to the unused L1: R1 is left with L1's nothing.
+        let done = e.assign(PadInput::L1, Target::Control("Z".into())).unwrap();
+        assert_eq!(done.swapped, Some((PadInput::R1, Target::None)));
         assert_eq!(
             fs::read_to_string(e.path()).unwrap(),
-            "[player1.bind]\nr1 = \"@fast_forward_hold\"\nl1 = \"Z\"\n"
+            "[player1.bind]\nl1 = \"Z\"\nr1 = \"none\"\n"
         );
-        // Swapping back restores the default: the file goes away.
+        // Moving it back restores the default: the file goes away.
         e.assign(PadInput::R1, Target::Control("Z".into())).unwrap();
         assert!(!e.path().exists());
+        // A on east: south gets east's B.
+        let done = e
+            .assign(PadInput::East, Target::Control("A".into()))
+            .unwrap();
+        assert_eq!(
+            done.swapped,
+            Some((PadInput::South, Target::Control("B".into())))
+        );
+        let m = e.current().mapping;
+        assert_eq!(
+            m.target(PadInput::South),
+            Some(&Target::Control("B".into()))
+        );
+        // An emulator action is added by hand like any other function.
+        e.assign(
+            PadInput::L1,
+            Target::Action(EmulatorAction::FastForwardHold),
+        )
+        .unwrap();
+        assert!(
+            fs::read_to_string(e.path())
+                .unwrap()
+                .contains("l1 = \"@fast_forward_hold\"\n")
+        );
     }
 
     #[test]
@@ -554,23 +554,33 @@ mod tests {
     fn options_and_game_scope_and_reset() {
         let f = fixture();
         let game = editor(&f, Scope::Game);
-        game.set(Setting::InvertX(Stick::Right, true)).unwrap();
-        game.set(Setting::Deadzone(Stick::Left, 0.15)).unwrap();
+        game.set(Setting::InvertX("C-stick".into(), true)).unwrap();
+        game.set(Setting::Deadzone("Main stick".into(), 0.15))
+            .unwrap();
         assert_eq!(game.path(), f.user.join("games/gc/GZ2E01.toml"));
         let text = fs::read_to_string(game.path()).unwrap();
         assert!(
-            text.contains("[player1.right_stick]\ninvert_x = true\n"),
+            text.contains("[player1.sticks.C-stick]\ninvert_x = true\n"),
             "{text}"
         );
-        assert!(text.contains("deadzone = 0.15\n"), "{text}");
-        assert!(game.overrides("right_stick.invert_x"));
-        assert!(!game.overrides("bind.south"));
+        assert!(
+            text.contains("[player1.sticks.\"Main stick\"]\ndeadzone = 0.15\n"),
+            "{text}"
+        );
+        assert!(game.overrides(&["sticks", "C-stick", "invert_x"]));
+        assert!(!game.overrides(&["bind", "south"]));
+        // Only console sticks have stick options.
+        assert!(matches!(
+            game.set(Setting::InvertX("D-pad".into(), true)),
+            Err(EditError::NotAStick(_))
+        ));
         // The system layer doesn't see the game's file.
         let system = editor(&f, Scope::System);
-        assert!(!system.current().mapping.right_stick.invert_x);
-        assert!(game.current().mapping.right_stick.invert_x);
+        assert!(!system.current().mapping.stick_options("C-stick").invert_x);
+        assert!(game.current().mapping.stick_options("C-stick").invert_x);
         // Setting back to the value below removes it.
-        game.set(Setting::Deadzone(Stick::Left, 0.0)).unwrap();
+        game.set(Setting::Deadzone("Main stick".into(), 0.0))
+            .unwrap();
         assert!(
             !fs::read_to_string(game.path())
                 .unwrap()
@@ -578,21 +588,21 @@ mod tests {
         );
         game.reset().unwrap();
         assert!(!game.path().exists());
-        assert!(!game.current().mapping.right_stick.invert_x);
+        assert!(!game.current().mapping.stick_options("C-stick").invert_x);
     }
 
     #[test]
     fn hand_edited_files_keep_comments_and_order() {
         let f = fixture();
         let e = editor(&f, Scope::Game);
-        let original = "# My TP tweaks\n\n[player1.right_stick]\n# camera felt reversed\ninvert_x = true\n\n[player1.bind]\nselect = \"@screenshot\"  # handy\n";
+        let original = "# My TP tweaks\n\n[player1.sticks.C-stick]\n# camera felt reversed\ninvert_x = true\n\n[player1.bind]\nselect = \"@screenshot\"  # handy\n";
         fs::create_dir_all(e.path().parent().unwrap()).unwrap();
         fs::write(e.path(), original).unwrap();
         e.set(Setting::Vibration(false)).unwrap();
         let text = fs::read_to_string(e.path()).unwrap();
         assert!(
             text.starts_with(
-                "# My TP tweaks\n\n[player1.right_stick]\n# camera felt reversed\ninvert_x = true\n"
+                "# My TP tweaks\n\n[player1.sticks.C-stick]\n# camera felt reversed\ninvert_x = true\n"
             ),
             "{text}"
         );

@@ -379,33 +379,29 @@ impl Default for TriggerOptions {
 pub struct Mapping {
     /// Input → target. Inputs not listed drive nothing.
     pub binds: BTreeMap<PadInput, Target>,
-    /// Left stick options (applied to the physical left stick, before swapping).
-    pub left_stick: StickOptions,
-    /// Right stick options.
-    pub right_stick: StickOptions,
+    /// Options of each console stick, by its canonical name ("Main stick"). They belong to the
+    /// console stick, so they follow it to whichever physical stick drives it. Sticks not
+    /// listed use the defaults.
+    pub sticks: BTreeMap<String, StickOptions>,
     /// Trigger options.
     pub triggers: TriggerOptions,
     /// Rumble.
     pub vibration: bool,
-    /// Physical left stick drives what is bound to `right_stick`, and the other way around.
-    pub swap_sticks: bool,
 }
 
 impl Default for Mapping {
     fn default() -> Self {
         Self {
             binds: BTreeMap::new(),
-            left_stick: StickOptions::default(),
-            right_stick: StickOptions::default(),
+            sticks: BTreeMap::new(),
             triggers: TriggerOptions::default(),
             vibration: true,
-            swap_sticks: false,
         }
     }
 }
 
 impl Mapping {
-    /// What `input` drives (after `swap_sticks`), if anything.
+    /// What `input` drives, if anything.
     pub fn target(&self, input: PadInput) -> Option<&Target> {
         self.binds.get(&input).filter(|t| **t != Target::None)
     }
@@ -426,19 +422,25 @@ impl Mapping {
         out
     }
 
-    /// The physical stick whose movement drives the binding of `stick` (`LeftStick` or
-    /// `RightStick`), and that stick's options.
-    pub fn stick_source(&self, stick: PadInput) -> (PadInput, StickOptions) {
-        let physical = match (stick, self.swap_sticks) {
-            (PadInput::LeftStick, false) | (PadInput::RightStick, true) => PadInput::LeftStick,
-            _ => PadInput::RightStick,
-        };
-        let options = if physical == PadInput::LeftStick {
-            self.left_stick
-        } else {
-            self.right_stick
-        };
-        (physical, options)
+    /// The options of console stick `control` (defaults if it has none).
+    pub fn stick_options(&self, control: &str) -> StickOptions {
+        self.sticks.get(control).copied().unwrap_or_default()
+    }
+
+    /// The options for physical stick `input` (`LeftStick`, `RightStick`): those of the console
+    /// stick bound to it, or the defaults when it drives something else (a D-pad) or nothing.
+    pub fn options_of_physical(&self, input: PadInput) -> StickOptions {
+        match self.target(input) {
+            Some(Target::Control(control)) => self.stick_options(control),
+            _ => StickOptions::default(),
+        }
+    }
+
+    /// The physical stick driving console stick `control`, if one does.
+    pub fn physical_stick_of(&self, control: &str) -> Option<PadInput> {
+        [PadInput::LeftStick, PadInput::RightStick]
+            .into_iter()
+            .find(|i| matches!(self.target(*i), Some(Target::Control(c)) if c == control))
     }
 }
 
@@ -474,18 +476,35 @@ mod tests {
     }
 
     #[test]
-    fn swap_sticks_exchanges_physical_sources() {
-        let mut m = Mapping {
-            right_stick: StickOptions {
+    fn stick_options_follow_the_console_stick() {
+        let mut m = Mapping::default();
+        m.sticks.insert(
+            "C-stick".into(),
+            StickOptions {
                 invert_x: true,
                 ..StickOptions::default()
             },
-            ..Mapping::default()
-        };
-        assert_eq!(m.stick_source(PadInput::RightStick).0, PadInput::RightStick);
-        m.swap_sticks = true;
-        let (physical, options) = m.stick_source(PadInput::LeftStick);
-        assert_eq!(physical, PadInput::RightStick);
-        assert!(options.invert_x);
+        );
+        m.binds
+            .insert(PadInput::LeftStick, Target::Control("Main stick".into()));
+        m.binds
+            .insert(PadInput::RightStick, Target::Control("C-stick".into()));
+        assert!(m.options_of_physical(PadInput::RightStick).invert_x);
+        assert!(!m.options_of_physical(PadInput::LeftStick).invert_x);
+        // The C-stick moves to the left stick; its inversion goes with it.
+        m.binds
+            .insert(PadInput::LeftStick, Target::Control("C-stick".into()));
+        m.binds
+            .insert(PadInput::RightStick, Target::Control("Main stick".into()));
+        assert!(m.options_of_physical(PadInput::LeftStick).invert_x);
+        assert!(!m.options_of_physical(PadInput::RightStick).invert_x);
+        assert_eq!(m.physical_stick_of("C-stick"), Some(PadInput::LeftStick));
+        // A D-pad on a stick has no stick options.
+        m.binds
+            .insert(PadInput::LeftStick, Target::Control("D-pad".into()));
+        assert_eq!(
+            m.options_of_physical(PadInput::LeftStick),
+            StickOptions::default()
+        );
     }
 }

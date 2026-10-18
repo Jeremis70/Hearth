@@ -4,12 +4,13 @@
 use std::fmt::Write as _;
 use std::path::Path;
 
+use hearth_core::controls::layers::stick_setting;
 use hearth_core::controls::{ControllerIdentity, GameKey, PadInput, Resolved, resolve};
 use hearth_core::model::Game;
 use hearth_core::profiles::input::Translation;
 use hearth_core::profiles::retroarch_input::{self, Autoconfig};
 use hearth_core::profiles::{RetroArchProfile, dolphin_input};
-use hearth_core::systems::{EmulatorKind, System};
+use hearth_core::systems::{ControlKind, EmulatorKind, System};
 use hearth_platform::input::PadInfo;
 
 /// Everything about a game's controls for one launch.
@@ -19,6 +20,8 @@ pub struct GameInput {
     pub key: GameKey,
     /// Resolved mapping, `None` if the system declares no controls.
     pub resolved: Option<Resolved>,
+    /// The console's sticks (canonical names), whose options the mapping holds.
+    pub sticks: Vec<String>,
     /// Player 1's controller.
     pub device: ControllerIdentity,
     /// Generated emulator configuration.
@@ -75,9 +78,17 @@ pub fn game_input(
             }
         }
     };
+    let sticks = system
+        .controls
+        .declared()
+        .iter()
+        .filter(|c| c.kind == ControlKind::Stick)
+        .map(|c| c.name.clone())
+        .collect();
     GameInput {
         key,
         resolved,
+        sticks,
         device,
         translation,
         autoconfig,
@@ -139,23 +150,8 @@ impl GameInput {
                 }
                 out.push_str("\noptions:\n");
                 let m = &r.mapping;
-                let options: [(&str, String); 12] = [
+                let options: [(&str, String); 3] = [
                     ("vibration", m.vibration.to_string()),
-                    ("swap_sticks", m.swap_sticks.to_string()),
-                    ("left_stick.invert_x", m.left_stick.invert_x.to_string()),
-                    ("left_stick.invert_y", m.left_stick.invert_y.to_string()),
-                    ("left_stick.deadzone", m.left_stick.deadzone.to_string()),
-                    (
-                        "left_stick.sensitivity",
-                        m.left_stick.sensitivity.to_string(),
-                    ),
-                    ("right_stick.invert_x", m.right_stick.invert_x.to_string()),
-                    ("right_stick.invert_y", m.right_stick.invert_y.to_string()),
-                    ("right_stick.deadzone", m.right_stick.deadzone.to_string()),
-                    (
-                        "right_stick.sensitivity",
-                        m.right_stick.sensitivity.to_string(),
-                    ),
                     (
                         "triggers.mode",
                         format!("{:?}", m.triggers.mode).to_lowercase(),
@@ -164,6 +160,27 @@ impl GameInput {
                 ];
                 for (name, value) in &options {
                     let _ = writeln!(out, "  {name:<24} = {value:<8} {}", r.source(name));
+                }
+                // Stick options belong to the console stick and follow it.
+                out.push_str("\nsticks:\n");
+                for stick in &self.sticks {
+                    let on = m
+                        .physical_stick_of(stick)
+                        .map_or("not bound".to_owned(), |i| format!("on {i}"));
+                    let _ = writeln!(out, "  {stick} ({on})");
+                    let o = m.stick_options(stick);
+                    for (field, value) in [
+                        ("invert_x", o.invert_x.to_string()),
+                        ("invert_y", o.invert_y.to_string()),
+                        ("deadzone", o.deadzone.to_string()),
+                        ("sensitivity", o.sensitivity.to_string()),
+                    ] {
+                        let _ = writeln!(
+                            out,
+                            "    {field:<22} = {value:<8} {}",
+                            r.source(&stick_setting(stick, field))
+                        );
+                    }
                 }
                 if !r.problems.is_empty() {
                     out.push_str("\nproblems:\n");

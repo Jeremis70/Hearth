@@ -4,7 +4,7 @@
 
 use std::rc::Rc;
 
-use hearth_core::controls::edit::{Editor, Scope, Setting, Stick};
+use hearth_core::controls::edit::{Editor, Scope, Setting};
 use hearth_core::controls::{EmulatorAction, HearthAction, Mapping, PadInput, Target, TriggerMode};
 use hearth_core::profiles::input::Capabilities;
 use hearth_core::profiles::{dolphin_input, retroarch_input};
@@ -237,68 +237,58 @@ impl Page {
                     kind,
                 });
             };
-        for (stick, name, opts, base_opts) in [
-            ("left_stick", "Left stick", m.left_stick, base.left_stick),
-            (
-                "right_stick",
-                "Right stick",
-                m.right_stick,
-                base.right_stick,
-            ),
-        ] {
-            let what = self.stick_function(m, stick);
+        // Options belong to the console stick: they follow it to whichever physical stick
+        // drives it. Ids: "stick:<console stick>:<option>".
+        let (sticks, labels): (Vec<String>, Vec<String>) = self
+            .system()
+            .controls
+            .declared()
+            .iter()
+            .filter(|c| c.kind == ControlKind::Stick)
+            .map(|c| (c.name.clone(), c.label.clone()))
+            .unzip();
+        for (stick, label) in sticks.iter().zip(&labels) {
+            let (opts, base_opts) = (m.stick_options(stick), base.stick_options(stick));
+            let place = match m.physical_stick_of(stick) {
+                Some(PadInput::LeftStick) => {
+                    "It is on the left stick; this follows it if you move it."
+                }
+                Some(_) => "It is on the right stick; this follows it if you move it.",
+                None => "No stick drives it right now.",
+            };
             push(
-                &format!("{stick}.invert_x"),
-                format!("{name}: invert left/right"),
+                &format!("stick:{stick}:invert_x"),
+                format!("{label}: invert left/right"),
                 on_off(opts.invert_x).into(),
-                &format!("Flips {what} left and right"),
+                &format!("Flips the {label} left and right. {place}"),
                 opts.invert_x != base_opts.invert_x,
                 0,
             );
             push(
-                &format!("{stick}.invert_y"),
-                format!("{name}: invert up/down"),
+                &format!("stick:{stick}:invert_y"),
+                format!("{label}: invert up/down"),
                 on_off(opts.invert_y).into(),
-                &format!("Flips {what} up and down"),
+                &format!("Flips the {label} up and down. {place}"),
                 opts.invert_y != base_opts.invert_y,
                 0,
             );
         }
-        push(
-            "swap_sticks",
-            "Swap sticks".into(),
-            on_off(m.swap_sticks).into(),
-            "The left stick does what the right one did, and the other way around",
-            m.swap_sticks != base.swap_sticks,
-            0,
-        );
-        for (i, (stick, name, v, b)) in [
-            (
-                "left_stick",
-                "Left stick",
-                m.left_stick.deadzone,
-                base.left_stick.deadzone,
-            ),
-            (
-                "right_stick",
-                "Right stick",
-                m.right_stick.deadzone,
-                base.right_stick.deadzone,
-            ),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            if self.caps.stick_deadzone[i] {
-                push(
-                    &format!("{stick}.deadzone"),
-                    format!("{name}: deadzone"),
-                    pct(v),
-                    "How far the stick must move before the game notices. Raise it if the game moves by itself",
-                    (v - b).abs() > 0.001,
-                    1,
-                );
+        for (stick, label) in sticks.iter().zip(&labels) {
+            if !self.caps.can_tune(stick) {
+                continue;
             }
+            let (v, b) = (
+                m.stick_options(stick).deadzone,
+                base.stick_options(stick).deadzone,
+            );
+            push(
+                &format!("stick:{stick}:deadzone"),
+                format!("{label}: deadzone"),
+                pct(v),
+                "How far the stick must move before the game notices. Raise it if the game moves by itself",
+                (v - b).abs() > 0.001,
+                1,
+            );
         }
         let has_triggers = self
             .system()
@@ -351,23 +341,6 @@ impl Page {
             2,
         );
         rows
-    }
-
-    /// "the camera" style description of what a physical stick drives.
-    fn stick_function(&self, m: &Mapping, stick: &str) -> String {
-        let input = if stick == "left_stick" {
-            PadInput::LeftStick
-        } else {
-            PadInput::RightStick
-        };
-        let driving = [PadInput::LeftStick, PadInput::RightStick]
-            .into_iter()
-            .find(|i| m.stick_source(*i).0 == input)
-            .and_then(|i| m.target(i).cloned());
-        match driving.and_then(|t| self.target_label(&t)) {
-            Some((label, _)) => format!("the {label}"),
-            None => "this stick".into(),
-        }
     }
 
     /// Everything `input` can do, with the index of its current target.
@@ -458,46 +431,28 @@ impl Page {
             return Ok("Back to defaults".into());
         }
         let m = self.editor.current().mapping;
-        let stick = |name: &str| {
-            if name == "left_stick" {
-                Stick::Left
-            } else {
-                Stick::Right
-            }
-        };
         let (max_dz, dz_step) = deadzone_range(emulator_kind(self.system()));
         let stepped = |v: f32, step_size: f32, min: f32, max: f32| {
             let dir = if step < 0 { -1.0 } else { 1.0 };
             ((v / step_size).round() * step_size + dir * step_size).clamp(min, max)
         };
-        let setting = match id.split_once('.') {
-            Some((s, "invert_x")) => {
-                let opts = if s == "left_stick" {
-                    m.left_stick
-                } else {
-                    m.right_stick
-                };
-                Setting::InvertX(stick(s), !opts.invert_x)
-            }
-            Some((s, "invert_y")) => {
-                let opts = if s == "left_stick" {
-                    m.left_stick
-                } else {
-                    m.right_stick
-                };
-                Setting::InvertY(stick(s), !opts.invert_y)
-            }
-            Some((s, "deadzone")) => {
-                if step == 0 {
-                    return Ok(String::new());
+        if let Some((stick, field)) = id.strip_prefix("stick:").and_then(|r| r.rsplit_once(':')) {
+            let opts = m.stick_options(stick);
+            let stick = stick.to_owned();
+            let setting = match field {
+                "invert_x" => Setting::InvertX(stick, !opts.invert_x),
+                "invert_y" => Setting::InvertY(stick, !opts.invert_y),
+                "deadzone" if step == 0 => return Ok(String::new()),
+                "deadzone" => {
+                    Setting::Deadzone(stick, stepped(opts.deadzone, dz_step, 0.0, max_dz))
                 }
-                let opts = if s == "left_stick" {
-                    m.left_stick
-                } else {
-                    m.right_stick
-                };
-                Setting::Deadzone(stick(s), stepped(opts.deadzone, dz_step, 0.0, max_dz))
-            }
+                _ => return Err(format!("unknown option {id}")),
+            };
+            self.editor.set(setting).map_err(|e| e.to_string())?;
+            self.changed = true;
+            return Ok(String::new());
+        }
+        let setting = match id.split_once('.') {
             Some(("triggers", "mode")) => Setting::TriggerMode(match m.triggers.mode {
                 TriggerMode::Analog => TriggerMode::Digital,
                 TriggerMode::Digital => TriggerMode::Analog,
@@ -508,7 +463,6 @@ impl Page {
                 }
                 Setting::TriggerThreshold(stepped(m.triggers.threshold, 0.05, 0.5, 1.0))
             }
-            _ if id == "swap_sticks" => Setting::SwapSticks(!m.swap_sticks),
             _ if id == "vibration" => Setting::Vibration(!m.vibration),
             _ => return Err(format!("unknown option {id}")),
         };

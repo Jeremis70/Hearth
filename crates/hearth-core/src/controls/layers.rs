@@ -46,7 +46,7 @@ impl fmt::Display for Source {
 pub struct Resolved {
     /// The mapping.
     pub mapping: Mapping,
-    /// Setting path (`bind.south`, `right_stick.invert_x`, …) → the layer that set it.
+    /// Setting path (`bind.south`, `sticks."C-stick".invert_x`, …) → the layer that set it.
     pub sources: BTreeMap<String, Source>,
     /// Layers that were applied, in order.
     pub applied: Vec<Source>,
@@ -233,18 +233,10 @@ impl Resolved {
             sources.insert(key.to_owned(), source.clone());
         };
         let mapping = &mut self.mapping;
-        apply_stick(
-            &mut mapping.left_stick,
-            &layer.left_stick,
-            "left_stick",
-            &mut set,
-        );
-        apply_stick(
-            &mut mapping.right_stick,
-            &layer.right_stick,
-            "right_stick",
-            &mut set,
-        );
+        for (stick, changes) in &layer.sticks {
+            let options = mapping.sticks.entry(stick.clone()).or_default();
+            apply_stick(options, changes, stick, &mut set);
+        }
         if let Some(mode) = layer.trigger_mode {
             mapping.triggers.mode = mode;
             set("triggers.mode");
@@ -257,34 +249,36 @@ impl Resolved {
             mapping.vibration = vibration;
             set("vibration");
         }
-        if let Some(swap) = layer.swap_sticks {
-            mapping.swap_sticks = swap;
-            set("swap_sticks");
-        }
     }
 }
 
+/// The setting path of a console stick's option, as sources and `--print-controls` name it:
+/// `sticks."C-stick".invert_x`.
+pub fn stick_setting(stick: &str, field: &str) -> String {
+    format!("sticks.\"{stick}\".{field}")
+}
+
 fn apply_stick(
-    stick: &mut StickOptions,
+    options: &mut StickOptions,
     changes: &StickChanges,
-    name: &str,
+    stick: &str,
     set: &mut impl FnMut(&str),
 ) {
     if let Some(v) = changes.invert_x {
-        stick.invert_x = v;
-        set(&format!("{name}.invert_x"));
+        options.invert_x = v;
+        set(&stick_setting(stick, "invert_x"));
     }
     if let Some(v) = changes.invert_y {
-        stick.invert_y = v;
-        set(&format!("{name}.invert_y"));
+        options.invert_y = v;
+        set(&stick_setting(stick, "invert_y"));
     }
     if let Some(v) = changes.deadzone {
-        stick.deadzone = v;
-        set(&format!("{name}.deadzone"));
+        options.deadzone = v;
+        set(&stick_setting(stick, "deadzone"));
     }
     if let Some(v) = changes.sensitivity {
-        stick.sensitivity = v;
-        set(&format!("{name}.sensitivity"));
+        options.sensitivity = v;
+        set(&stick_setting(stick, "sensitivity"));
     }
 }
 
@@ -343,7 +337,7 @@ mod tests {
         let user = dir.path().join("controls");
         write(
             user.join("games/gc/GZ2E01.toml"),
-            "[player1.right_stick]\ninvert_x = true\n",
+            "[player1.sticks.\"C-stick\"]\ninvert_x = true\n",
         );
         let r = resolve(
             &system("gc"),
@@ -352,14 +346,39 @@ mod tests {
             ControllerKind::Generic,
         )
         .unwrap();
-        assert!(r.mapping.right_stick.invert_x);
-        assert!(!r.mapping.left_stick.invert_x);
-        assert!(matches!(r.source("right_stick.invert_x"), Source::Game(_)));
+        assert!(r.mapping.stick_options("C-stick").invert_x);
+        assert!(!r.mapping.stick_options("Main stick").invert_x);
+        assert!(matches!(
+            r.source(&stick_setting("C-stick", "invert_x")),
+            Source::Game(_)
+        ));
         assert!(matches!(r.source("bind.south"), Source::Default(_)));
-        assert_eq!(
-            r.mapping.target(PadInput::L1),
-            Some(&Target::Action(EmulatorAction::FastForwardHold))
+        // No emulator action by default: L1 does nothing on GameCube.
+        assert_eq!(r.mapping.target(PadInput::L1), None);
+    }
+
+    #[test]
+    fn stick_options_follow_their_stick_to_the_other_side() {
+        let dir = tempdir();
+        let user = dir.path().join("controls");
+        write(
+            user.join("systems/gc.toml"),
+            "[player1.sticks.\"C-stick\"]\ninvert_x = true\n",
         );
+        write(
+            user.join("games/gc/GZ2E01.toml"),
+            "[player1.bind]\nleft_stick = \"C-stick\"\nright_stick = \"Main stick\"\n",
+        );
+        let r = resolve(
+            &system("gc"),
+            &tp_key(dir.path()),
+            &user,
+            ControllerKind::Generic,
+        )
+        .unwrap();
+        assert!(r.problems.is_empty(), "{:?}", r.problems);
+        assert!(r.mapping.options_of_physical(PadInput::LeftStick).invert_x);
+        assert!(!r.mapping.options_of_physical(PadInput::RightStick).invert_x);
     }
 
     #[test]
@@ -399,7 +418,7 @@ mod tests {
         let user = dir.path().join("controls");
         write(
             user.join("games/gc/GZ2E01.toml"),
-            "[player1.bind]\nsouth = \"Zz\"\n[player1.right_stick]\ninvert_x = true\n",
+            "[player1.bind]\nsouth = \"Zz\"\n[player1.sticks.\"C-stick\"]\ninvert_x = true\n",
         );
         let r = resolve(
             &system("gc"),
@@ -409,7 +428,7 @@ mod tests {
         )
         .unwrap();
         assert!(r.has_errors());
-        assert!(!r.mapping.right_stick.invert_x);
+        assert!(!r.mapping.stick_options("C-stick").invert_x);
         assert_eq!(
             r.mapping.target(PadInput::South),
             Some(&Target::Control("A".into()))

@@ -19,8 +19,7 @@ pub const CAPABILITIES: Capabilities = Capabilities {
         EmulatorAction::LoadState,
         EmulatorAction::Screenshot,
     ],
-    stick_deadzone: [true, true],
-    stick_sensitivity: [true, true],
+    stick_tuning: None,
     analog_triggers: true,
     vibration: true,
 };
@@ -65,8 +64,9 @@ fn directions(mapping: &Mapping, input: PadInput) -> [String; 4] {
     match input {
         PadInput::Dpad => ["Pad N", "Pad S", "Pad W", "Pad E"].map(q),
         _ => {
-            let (physical, options) = mapping.stick_source(input);
-            let side = if physical == PadInput::LeftStick {
+            // The options of the console stick it drives follow it to this physical stick.
+            let options = mapping.options_of_physical(input);
+            let side = if input == PadInput::LeftStick {
                 "Left"
             } else {
                 "Right"
@@ -144,22 +144,15 @@ pub fn translate(mapping: Option<&Mapping>, device: &ControllerIdentity) -> Tran
                 }
             }
         }
-        for stick in ["Main Stick", "C-Stick"] {
-            let options = [PadInput::LeftStick, PadInput::RightStick]
-                .into_iter()
-                .find(|i| {
-                    matches!(mapping.target(*i), Some(Target::Control(c)) if gc_group(c) == Some(stick))
-                })
-                .map(|i| mapping.stick_source(i).1);
+        for (control, stick) in [("Main stick", "Main Stick"), ("C-stick", "C-Stick")] {
+            let options = mapping.stick_options(control);
             lines.push((format!("{stick}/Calibration"), CIRCLE.into()));
-            if let Some(options) = options {
-                if options.deadzone > 0.0 {
-                    lines.push((format!("{stick}/Dead Zone"), percent(options.deadzone)));
-                }
-                if options.sensitivity != 1.0 {
-                    for dir in ["Up", "Down", "Left", "Right"] {
-                        lines.push((format!("{stick}/{dir}/Range"), percent(options.sensitivity)));
-                    }
+            if options.deadzone > 0.0 {
+                lines.push((format!("{stick}/Dead Zone"), percent(options.deadzone)));
+            }
+            if options.sensitivity != 1.0 {
+                for dir in ["Up", "Down", "Left", "Right"] {
+                    lines.push((format!("{stick}/{dir}/Range"), percent(options.sensitivity)));
                 }
             }
         }
@@ -289,7 +282,7 @@ mod tests {
     fn twilight_princess_inverts_camera_x() {
         let t = translate(
             Some(&gc_mapping(Some(
-                "[player1.right_stick]\ninvert_x = true\n",
+                "[player1.sticks.\"C-stick\"]\ninvert_x = true\n",
             ))),
             &ControllerIdentity::fallback(),
         );
@@ -302,13 +295,14 @@ mod tests {
     #[test]
     fn options_change_expressions() {
         let mapping = gc_mapping(Some(
-            "[player1]\nswap_sticks = true\nvibration = false\n[player1.bind]\nl1 = \"@rewind\"\nselect = \"@screenshot\"\n[player1.left_stick]\ndeadzone = 0.2\nsensitivity = 1.5\n[player1.triggers]\nmode = \"digital\"\nthreshold = 0.5\n",
+            "[player1]\nvibration = false\n[player1.bind]\nleft_stick = \"C-stick\"\nright_stick = \"Main stick\"\nl1 = \"@rewind\"\nselect = \"@screenshot\"\n[player1.sticks.\"C-stick\"]\ninvert_y = true\ndeadzone = 0.2\nsensitivity = 1.5\n[player1.triggers]\nmode = \"digital\"\nthreshold = 0.5\n",
         ));
         let t = translate(Some(&mapping), &ControllerIdentity::fallback());
         let gcpad = file(&t, "GCPadNew.ini");
-        // Swapped: the C-stick follows the physical left stick (with its options).
-        assert!(gcpad.contains("C-Stick/Up = `Left Y+`"), "{gcpad}");
+        // The C-stick moved to the physical left stick, with its options.
+        assert!(gcpad.contains("C-Stick/Up = `Left Y-`"), "{gcpad}");
         assert!(gcpad.contains("Main Stick/Up = `Right Y+`"));
+        assert!(!gcpad.contains("Main Stick/Dead Zone"));
         assert!(gcpad.contains("C-Stick/Dead Zone = 20.0"));
         assert!(gcpad.contains("C-Stick/Up/Range = 150.0"));
         assert!(gcpad.contains("Triggers/L-Analog = `Trigger L` > 0.50"));

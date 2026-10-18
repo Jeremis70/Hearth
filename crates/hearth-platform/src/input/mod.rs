@@ -75,6 +75,7 @@ struct ActivityState {
     pads: Mutex<Vec<PadInfo>>,
     pressed: Mutex<Vec<&'static str>>,
     capture: Mutex<Vec<&'static str>>,
+    analog: Mutex<Analog>,
 }
 
 /// What the input backend knows about a connected controller.
@@ -88,6 +89,63 @@ pub struct PadInfo {
     pub vendor_id: Option<u16>,
     /// USB product id.
     pub product_id: Option<u16>,
+    /// How it is connected.
+    pub connection: Connection,
+    /// Battery, as the kernel reports it.
+    pub power: Power,
+}
+
+/// How a controller is connected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Connection {
+    /// USB cable.
+    Usb,
+    /// Bluetooth.
+    Bluetooth,
+    /// Unknown or something else.
+    #[default]
+    Other,
+}
+
+impl Connection {
+    /// From a Linux input bus type (`BUS_USB`, `BUS_BLUETOOTH`).
+    pub fn from_bus(bus: u16) -> Self {
+        match bus {
+            0x03 => Self::Usb,
+            0x05 => Self::Bluetooth,
+            _ => Self::Other,
+        }
+    }
+}
+
+/// A controller's battery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Power {
+    /// Not reported.
+    #[default]
+    Unknown,
+    /// No battery (wired-only pad).
+    Wired,
+    /// On battery, percent left.
+    Discharging(u8),
+    /// Charging, percent.
+    Charging(u8),
+    /// Full and plugged in.
+    Charged,
+}
+
+/// Raw analog values of the first controller: sticks -1..1 (up is positive y, as gilrs reports
+/// it) and triggers 0..1, with no deadzone, so drift shows.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Analog {
+    /// Left stick x, y.
+    pub left: (f32, f32),
+    /// Right stick x, y.
+    pub right: (f32, f32),
+    /// Left trigger.
+    pub l2: f32,
+    /// Right trigger.
+    pub r2: f32,
 }
 
 impl PadActivity {
@@ -153,6 +211,16 @@ impl PadActivity {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
+    }
+
+    /// Raw analog values of the first controller, for the button test.
+    pub fn analog(&self) -> Analog {
+        *self.0.analog.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Replaces the analog values.
+    pub fn set_analog(&self, analog: Analog) {
+        *self.0.analog.lock().unwrap_or_else(PoisonError::into_inner) = analog;
     }
 
     /// Increases with every [`PadActivity::disarm`].

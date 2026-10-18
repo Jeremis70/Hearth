@@ -8,14 +8,20 @@ use std::sync::mpsc::{self, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use gilrs::{Axis, Button, EventType, Gilrs};
+use gilrs::ev::filter::{Filter, axis_dpad_to_button};
+use gilrs::{Axis, Button, Event, EventType, Gilrs, GilrsBuilder, PowerInfo};
 
 use super::repeat::stick_direction;
 use super::repeat::{DirectionSource, GuidePress, HeldDirections, KeyRepeat, STICK_DEADZONE};
-use super::{Action, Direction, InputBackend, InputError, InputMode, PadActivity, PadInfo};
+use super::{
+    Action, Analog, Connection, Direction, InputBackend, InputError, InputMode, PadActivity,
+    PadInfo, Power,
+};
 
 /// Longest time the input thread sleeps without an event or a pending deadline.
 const IDLE_WAIT: Duration = Duration::from_millis(250);
+/// How often the controller list (battery levels) is refreshed.
+const PADS_REFRESH: Duration = Duration::from_secs(10);
 
 /// Controller input via gilrs, on its own thread.
 #[derive(Debug, Default)]
@@ -47,10 +53,10 @@ impl InputBackend for GilrsBackend {
         thread::Builder::new()
             .name("hearth-gilrs".into())
             .spawn(move || {
-                let gilrs = match Gilrs::new() {
+                let gilrs = match open() {
                     Ok(gilrs) => gilrs,
                     Err(err) => {
-                        let _ = ready_tx.send(Err(err.to_string()));
+                        let _ = ready_tx.send(Err(err));
                         return;
                     }
                 };
@@ -71,6 +77,43 @@ impl InputBackend for GilrsBackend {
     }
 }
 
+/// gilrs without its deadzone and jitter filters, so the button test sees raw values (drift);
+/// Hearth's navigation has its own thresholds. Its state is updated by [`next_event`].
+fn open() -> Result<Gilrs, String> {
+    GilrsBuilder::new()
+        .with_default_filters(false)
+        .set_update_state(false)
+        .build()
+        .map_err(|err| err.to_string())
+}
+
+/// The next event, with D-pad hats turned into D-pad buttons (gilrs's own filter, the one
+/// default filter kept). gilrs's state gets both the raw event (raw axis values) and the
+/// converted one (D-pad buttons).
+fn next_event(gilrs: &mut Gilrs, wait: Duration) -> Option<Event> {
+    let raw = gilrs.next_event_blocking(Some(wait))?;
+    let event = Some(raw).filter_ev(&axis_dpad_to_button, gilrs)?;
+    gilrs.update(&raw);
+    if event != raw && !event.is_dropped() {
+        gilrs.update(&event);
+    }
+    (!event.is_dropped()).then_some(event)
+}
+
+/// Raw analog values of the first controller.
+fn analog(gilrs: &Gilrs) -> Analog {
+    let Some((_, pad)) = gilrs.gamepads().next() else {
+        return Analog::default();
+    };
+    let trigger = |b| pad.button_data(b).map_or(0.0, |d| d.value());
+    Analog {
+        left: (pad.value(Axis::LeftStickX), pad.value(Axis::LeftStickY)),
+        right: (pad.value(Axis::RightStickX), pad.value(Axis::RightStickY)),
+        l2: trigger(Button::LeftTrigger2),
+        r2: trigger(Button::RightTrigger2),
+    }
+}
+
 fn run(mut gilrs: Gilrs, tx: &Sender<Action>, activity: &PadActivity) {
     for (_, pad) in gilrs.gamepads() {
         tracing::info!(name = pad.name(), "controller connected");
@@ -82,13 +125,18 @@ fn run(mut gilrs: Gilrs, tx: &Sender<Action>, activity: &PadActivity) {
     let mut extras: Vec<&'static str> = Vec::new();
     // Capture buttons pressed and not yet released.
     let mut capture_held: Vec<&'static str> = Vec::new();
+    let mut pads_refreshed = Instant::now();
     loop {
         let now = Instant::now();
         let wait = state.deadline().map_or(IDLE_WAIT, |d| {
             d.saturating_duration_since(now).min(IDLE_WAIT)
         });
-        let event = gilrs.next_event_blocking(Some(wait));
+        let event = next_event(&mut gilrs, wait);
         let now = Instant::now();
+        if now >= pads_refreshed + PADS_REFRESH {
+            activity.set_pads(pad_infos(&gilrs));
+            pads_refreshed = now;
+        }
         if let Some(event) = event {
             match event.event {
                 EventType::ButtonPressed(button, code) => {
@@ -153,6 +201,7 @@ fn run(mut gilrs: Gilrs, tx: &Sender<Action>, activity: &PadActivity) {
                 }
             }
             activity.set_pressed(pressed);
+            activity.set_analog(analog(&gilrs));
         }
         state.tick(now, &mut out);
         for action in out.drain(..) {
@@ -272,6 +321,18 @@ fn pad_infos(gilrs: &Gilrs) -> Vec<PadInfo> {
             os_name: pad.os_name().to_owned(),
             vendor_id: pad.vendor_id(),
             product_id: pad.product_id(),
+            connection: {
+                // gilrs's id is SDL's GUID: the bus type comes first, little-endian.
+                let uuid = pad.uuid();
+                Connection::from_bus(u16::from_le_bytes([uuid[0], uuid[1]]))
+            },
+            power: match pad.power_info() {
+                PowerInfo::Unknown => Power::Unknown,
+                PowerInfo::Wired => Power::Wired,
+                PowerInfo::Discharging(p) => Power::Discharging(p),
+                PowerInfo::Charging(p) => Power::Charging(p),
+                PowerInfo::Charged => Power::Charged,
+            },
         })
         .collect()
 }

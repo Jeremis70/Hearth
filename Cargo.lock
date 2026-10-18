@@ -1832,6 +1832,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tracing",
  "x11rb 0.14.0",
+ "zbus",
 ]
 
 [[package]]

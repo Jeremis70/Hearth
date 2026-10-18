@@ -9,6 +9,7 @@ rust-version.workspace = true
 [dependencies]
 gilrs.workspace = true
 x11rb.workspace = true
+zbus.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 

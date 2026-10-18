@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 pub mod dev_socket;
 pub mod gilrs;
+pub mod inputplumber;
 pub mod repeat;
 
 /// Everything the UI can be asked to do by a controller.

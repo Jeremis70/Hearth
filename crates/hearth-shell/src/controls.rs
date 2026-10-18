@@ -8,10 +8,21 @@ use hearth_core::controls::layers::stick_setting;
 use hearth_core::controls::{ControllerIdentity, GameKey, PadInput, Resolved, resolve};
 use hearth_core::model::Game;
 use hearth_core::profiles::input::Translation;
+use hearth_core::profiles::inputplumber_profile::{self, Profile, VirtualLayout};
 use hearth_core::profiles::retroarch_input::{self, Autoconfig};
 use hearth_core::profiles::{RetroArchProfile, dolphin_input};
 use hearth_core::systems::{ControlKind, EmulatorKind, System};
 use hearth_platform::input::PadInfo;
+
+/// Which controller the emulator reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PadTarget {
+    /// The real controller (gilrs): the emulator's config does the remapping.
+    Physical,
+    /// InputPlumber's virtual pad: the emulator's config is fixed (the console's default
+    /// layout) and an InputPlumber profile does the remapping.
+    Virtual,
+}
 
 /// Everything about a game's controls for one launch.
 #[derive(Debug, Clone)]
@@ -24,8 +35,12 @@ pub struct GameInput {
     pub sticks: Vec<String>,
     /// Player 1's controller.
     pub device: ControllerIdentity,
+    /// The controller the emulator reads (`device`, or InputPlumber's virtual pad).
+    pub emulator_device: ControllerIdentity,
     /// Generated emulator configuration.
     pub translation: Translation,
+    /// InputPlumber profile doing the remapping ([`PadTarget::Virtual`]).
+    pub profile: Option<Profile>,
     /// Where the RetroArch joypad profile came from, if used.
     pub autoconfig: Option<std::path::PathBuf>,
 }
@@ -42,7 +57,7 @@ pub fn device(pads: &[PadInfo], controls_dir: &Path) -> ControllerIdentity {
     identity.with_overrides(controls_dir)
 }
 
-/// Resolves and translates `game`'s controls for `kind`.
+/// Resolves and translates `game`'s controls for `kind`, for the emulator reading `pad`.
 pub fn game_input(
     system: &System,
     game: &Game,
@@ -50,21 +65,48 @@ pub fn game_input(
     controls_dir: &Path,
     device: ControllerIdentity,
     retroarch: &RetroArchProfile,
+    pad: PadTarget,
 ) -> GameInput {
     let key = GameKey::for_rom(&system.id, &game.path, &game.title);
     let resolved = resolve(system, &key, controls_dir, device.kind);
-    let mapping = resolved.as_ref().map(|r| &r.mapping);
+    let user_mapping = resolved.as_ref().map(|r| &r.mapping);
+    let actions = match kind {
+        EmulatorKind::Dolphin => dolphin_input::CAPABILITIES.actions,
+        EmulatorKind::Retroarch => retroarch_input::CAPABILITIES.actions,
+    };
+    // With the virtual pad the emulator always gets the console's default layout; the
+    // user's mapping becomes the profile.
+    let (emulator_mapping, profile, emulator_device) = match pad {
+        PadTarget::Physical => (user_mapping.cloned(), None, device.clone()),
+        PadTarget::Virtual => {
+            let layout = VirtualLayout::for_system(system, actions);
+            match (user_mapping, layout) {
+                (Some(mapping), Some(layout)) => (
+                    Some(layout.emulator_mapping(mapping)),
+                    Some(inputplumber_profile::translate(
+                        mapping,
+                        &layout,
+                        &system.controls,
+                        &key.as_string(),
+                    )),
+                    ControllerIdentity::virtual_pad(),
+                ),
+                _ => (None, None, ControllerIdentity::virtual_pad()),
+            }
+        }
+    };
+    let mapping = emulator_mapping.as_ref();
     let mut autoconfig = None;
-    let translation = match kind {
+    let mut translation = match kind {
         EmulatorKind::Dolphin => {
             // Only GameCube controls exist for now; Wii games get an unbound pad.
             let mapping = mapping.filter(|_| system.id.as_str() == "gc");
-            dolphin_input::translate(mapping, &device)
+            dolphin_input::translate(mapping, &emulator_device)
         }
         EmulatorKind::Retroarch => {
             match (mapping, retroarch_input::core_table(system.id.as_str())) {
                 (Some(mapping), Some(core)) => {
-                    let found = Autoconfig::find(retroarch.autoconfig_dir(), &device);
+                    let found = Autoconfig::find(retroarch.autoconfig_dir(), &emulator_device);
                     autoconfig = found.as_ref().map(|a| a.path.clone());
                     retroarch_input::translate(mapping, &core, found.as_ref())
                 }
@@ -78,6 +120,11 @@ pub fn game_input(
             }
         }
     };
+    if let Some(profile) = &profile {
+        translation
+            .warnings
+            .extend(profile.warnings.iter().cloned());
+    }
     let sticks = system
         .controls
         .declared()
@@ -90,7 +137,9 @@ pub fn game_input(
         resolved,
         sticks,
         device,
+        emulator_device,
         translation,
+        profile,
         autoconfig,
     }
 }
@@ -125,6 +174,13 @@ impl GameInput {
             "controller: {:?} \"{}\" (SDL: \"{}\")",
             self.device.kind, self.device.os_name, self.device.sdl_name
         );
+        if self.emulator_device != self.device {
+            let _ = writeln!(
+                out,
+                "emulator reads: \"{}\" (SDL: \"{}\"), remapped by InputPlumber",
+                self.emulator_device.os_name, self.emulator_device.sdl_name
+            );
+        }
         if let Some(path) = &self.autoconfig {
             let _ = writeln!(out, "joypad profile: {}", path.display());
         }
@@ -199,6 +255,10 @@ impl GameInput {
         for (path, text) in &self.translation.files {
             let _ = writeln!(out, "\n--- {path}");
             out.push_str(text);
+        }
+        if let Some(profile) = &self.profile {
+            out.push_str("\n--- InputPlumber profile\n");
+            out.push_str(&profile.yaml);
         }
         if !self.translation.settings.is_empty() {
             out.push_str("\n--- retroarch.cfg (input settings)\n");

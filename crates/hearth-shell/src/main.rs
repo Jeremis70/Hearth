@@ -136,7 +136,14 @@ fn main() -> anyhow::Result<()> {
     let controls_dir = hearth_core::controls::user_dir(dirs.config());
 
     if let Some(query) = args.print_controls {
-        return print_controls(&query, &games_dir, &systems, &controls_dir, &dirs);
+        return print_controls(
+            &query,
+            &games_dir,
+            &systems,
+            &controls_dir,
+            &dirs,
+            args.input,
+        );
     }
 
     // Before anything reads the controller or opens a window. (--print-controls only
@@ -207,6 +214,7 @@ fn main() -> anyhow::Result<()> {
         profile: RetroArchProfile::new(dirs.retroarch()),
         dolphin: DolphinProfile::new(dirs.dolphin(), dolphin),
         controls_dir,
+        runtime_dir: dirs.runtime().to_path_buf(),
         activity: input.activity.clone(),
         input: input.control.clone(),
         library_db: dirs.library_db(),
@@ -258,6 +266,7 @@ fn print_controls(
     systems: &Systems,
     controls_dir: &std::path::Path,
     dirs: &DataDirs,
+    input: InputChoice,
 ) -> anyhow::Result<()> {
     let games = hearth_core::scan::scan_roms(games_dir, systems);
     let keys: Vec<_> = games
@@ -296,13 +305,36 @@ fn print_controls(
         .get(&game.system)
         .context("game of an unknown system")?;
     let kind = system.emulator().context("system has no emulator")?.kind;
-    let pads = hearth_platform::input::gilrs::connected_pads().unwrap_or_else(|err| {
-        tracing::warn!("can't list controllers: {err}");
-        Vec::new()
-    });
+    // Like a launch would: InputPlumber's virtual pad when Hearth would use it. Its managed
+    // controllers are hidden from gilrs, so ask it about them.
+    let client = (input != InputChoice::Gilrs)
+        .then(|| hearth_platform::input::inputplumber::client::Client::connect().ok())
+        .flatten();
+    let mut pads: Vec<_> = client
+        .iter()
+        .flat_map(|c| {
+            let devices = c.composite_devices().unwrap_or_default();
+            devices
+                .into_iter()
+                .filter(|d| c.capabilities(d).is_ok_and(|caps| !caps.is_empty()))
+                .filter_map(|d| c.source_pad(&d).ok())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    if pads.is_empty() {
+        pads = hearth_platform::input::gilrs::connected_pads().unwrap_or_else(|err| {
+            tracing::warn!("can't list controllers: {err}");
+            Vec::new()
+        });
+    }
+    let pad = if client.is_some() {
+        controls::PadTarget::Virtual
+    } else {
+        controls::PadTarget::Physical
+    };
     let device = controls::device(&pads, controls_dir);
     let retroarch = RetroArchProfile::new(dirs.retroarch());
-    let input = controls::game_input(system, game, kind, controls_dir, device, &retroarch);
+    let input = controls::game_input(system, game, kind, controls_dir, device, &retroarch, pad);
     print!("{}", input.describe(game));
     Ok(())
 }

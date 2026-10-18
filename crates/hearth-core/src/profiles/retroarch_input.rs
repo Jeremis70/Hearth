@@ -210,6 +210,9 @@ impl Autoconfig {
 
     /// Raw `(key suffix, value)` binding of a Hearth input: `("btn", "4")` or `("axis", "+2")`.
     fn raw(&self, input: PadInput) -> Option<(&'static str, &str)> {
+        if let Some(raw) = self.virtual_pad_extra(input) {
+            return Some(("btn", raw));
+        }
         let name = match input {
             PadInput::South => "b",
             PadInput::East => "a",
@@ -233,6 +236,30 @@ impl Autoconfig {
             self.values
                 .get(&format!("input_{name}_{kind}"))
                 .map(|v| (kind, v.as_str()))
+        })
+    }
+}
+
+impl Autoconfig {
+    /// Raw button numbers of InputPlumber's virtual Elite 2 pad extras, which its autoconfig
+    /// file doesn't list: RetroArch's udev driver numbers `BTN_TRIGGER_HAPPY5–8` 15–18 and
+    /// `KEY_RECORD` 19 (checked against SDL's mapping of the same device; see
+    /// `docs/spikes/inputplumber.md`).
+    fn virtual_pad_extra(&self, input: PadInput) -> Option<&'static str> {
+        let ids = (
+            self.values.get("input_vendor_id").map(String::as_str),
+            self.values.get("input_product_id").map(String::as_str),
+        );
+        if ids != (Some("1118"), Some("2816")) {
+            return None;
+        }
+        Some(match input {
+            PadInput::Paddle1 => "15",
+            PadInput::Paddle3 => "16",
+            PadInput::Paddle2 => "17",
+            PadInput::Paddle4 => "18",
+            PadInput::Share => "19",
+            _ => return None,
         })
     }
 }
@@ -558,6 +585,19 @@ mod tests {
         assert!(Autoconfig::find(dir.path(), &by_name).is_some());
         let other = ControllerIdentity::from_pad("Other", Some(1), Some(2));
         assert!(Autoconfig::find(dir.path(), &other).is_none());
+    }
+
+    #[test]
+    fn virtual_pad_extras_have_raw_numbers() {
+        let elite = Autoconfig::parse(
+            "elite.cfg".into(),
+            "input_vendor_id = \"1118\"\ninput_product_id = \"2816\"\ninput_select_btn = \"6\"\n",
+        );
+        assert_eq!(elite.raw(PadInput::Paddle1), Some(("btn", "15")));
+        assert_eq!(elite.raw(PadInput::Share), Some(("btn", "19")));
+        assert_eq!(elite.raw(PadInput::Select), Some(("btn", "6")));
+        let ds = Autoconfig::parse("ds.cfg".into(), DUALSENSE);
+        assert_eq!(ds.raw(PadInput::Paddle1), None);
     }
 
     #[test]

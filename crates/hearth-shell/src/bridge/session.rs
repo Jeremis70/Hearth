@@ -24,6 +24,7 @@ use hearth_core::controls::edit::{Editor, Scope};
 use hearth_core::controls::{ControllerKind, GameKey, HearthAction, PadInput, Target, defaults};
 use hearth_core::library::{Library, LibraryEntry};
 use hearth_core::model::{GameId, SystemId};
+use hearth_core::profiles::inputplumber_profile::Profile;
 use hearth_core::profiles::{DolphinProfile, RetroArchProfile};
 use hearth_core::runtime::{
     LaunchCtx, ProcessRuntime, Runtime, RuntimeEvent, Session as RuntimeSession, SessionId,
@@ -123,6 +124,7 @@ pub struct Controller {
     profile: RetroArchProfile,
     dolphin: DolphinProfile,
     controls_dir: PathBuf,
+    runtime_dir: PathBuf,
     activity: PadActivity,
     input: InputControl,
     library_db: PathBuf,
@@ -170,6 +172,8 @@ pub struct Setup {
     pub dolphin: DolphinProfile,
     /// The user's controls files (`<config>/controls`).
     pub controls_dir: PathBuf,
+    /// Files read by other processes (the game's InputPlumber profile).
+    pub runtime_dir: PathBuf,
     /// Live controller state: connected pads, disarming held buttons.
     pub activity: PadActivity,
     /// Who gets the controller (InputPlumber), and the game's remapping.
@@ -249,6 +253,7 @@ pub fn install(setup: Setup) {
         profile: setup.profile,
         dolphin: setup.dolphin,
         controls_dir: setup.controls_dir,
+        runtime_dir: setup.runtime_dir,
         activity: setup.activity,
         input: setup.input,
         library_db: setup.library_db,
@@ -552,6 +557,11 @@ impl Controller {
             return;
         };
         let device = controls::device(&self.activity.pads(), &self.controls_dir);
+        let pad = if self.input.is_live() {
+            controls::PadTarget::Virtual
+        } else {
+            controls::PadTarget::Physical
+        };
         let input = controls::game_input(
             system,
             &game,
@@ -559,7 +569,12 @@ impl Controller {
             &self.controls_dir,
             device,
             &self.profile,
+            pad,
         );
+        if self.input.is_live() {
+            self.input
+                .set_game_profile(self.write_game_profile(input.profile.as_ref()));
+        }
         tracing::info!(key = %input.key.as_string(), "controls resolved");
         self.game_capture = input
             .resolved
@@ -652,6 +667,24 @@ impl Controller {
             }
         }
         self.refresh();
+    }
+
+    /// Writes the running game's InputPlumber profile where the daemon reads it. `None` (no
+    /// remapping) if there is none or it can't be written.
+    fn write_game_profile(&self, profile: Option<&Profile>) -> Option<PathBuf> {
+        let profile = profile?;
+        let path = self.runtime_dir.join("inputplumber").join("game.yaml");
+        let written = path
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| std::fs::write(&path, &profile.yaml));
+        match written {
+            Ok(()) => Some(path),
+            Err(err) => {
+                tracing::warn!(path = %path.display(), "writing the controller profile failed: {err}");
+                None
+            }
+        }
     }
 
     /// Looks for the game's windows on a worker thread and tags them with `app_id`.

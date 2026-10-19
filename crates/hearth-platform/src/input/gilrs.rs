@@ -33,17 +33,15 @@ pub struct GilrsBackend {
     stop: Arc<AtomicBool>,
 }
 
-/// gilrs has no SDL mapping for InputPlumber's virtual Elite pad and names its buttons by
-/// evdev code, but xpad (and InputPlumber, like it) reports Xbox X as `BTN_X`, which is
-/// `BTN_NORTH`, and Y as `BTN_Y`, which is `BTN_WEST`. SDL and RetroArch number buttons and
-/// get it right; for gilrs the two are swapped back here.
-fn swap_north_west(name: &'static str) -> &'static str {
-    match name {
-        "north" => "west",
-        "west" => "north",
-        other => other,
-    }
-}
+/// SDL's mapping of InputPlumber's virtual Elite 2 pad (and the real one on xpad), which
+/// gilrs's database lacks. Without it gilrs names buttons by evdev code, and xpad's Xbox X
+/// (the left button) is `BTN_X`, the same code as `BTN_NORTH`. From SDL 2.32's database, by
+/// gilrs's GUID (no name CRC), without the paddles and misc1 gilrs can't parse; those keep
+/// coming as raw codes (see [`extra_name`]).
+const ELITE_2_MAPPING: &str = "030000005e040000000b000001000000,Xbox One Elite 2 Controller,\
+a:b0,b:b1,x:b2,y:b3,back:b6,guide:b8,start:b7,leftstick:b9,rightstick:b10,leftshoulder:b4,\
+rightshoulder:b5,dpup:h0.1,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,leftx:a0,lefty:a1,rightx:a3,\
+righty:a4,lefttrigger:a2,righttrigger:a5,platform:Linux,";
 
 impl Default for GilrsBackend {
     fn default() -> Self {
@@ -78,7 +76,7 @@ impl GilrsBackend {
 
     /// A backend that only keeps its [`PadActivity`] current (held inputs, raw stick and
     /// trigger values) and sends no actions: the button test reads InputPlumber's virtual pad
-    /// through it (see [`swap_north_west`]).
+    /// through it (with [`ELITE_2_MAPPING`]).
     pub fn observer() -> Self {
         Self {
             emits: false,
@@ -131,6 +129,7 @@ fn open() -> Result<Gilrs, String> {
     GilrsBuilder::new()
         .with_default_filters(false)
         .set_update_state(false)
+        .add_mappings(ELITE_2_MAPPING)
         .build()
         .map_err(|err| err.to_string())
 }
@@ -246,10 +245,6 @@ fn run(
                 if !pressed.contains(name) {
                     pressed.push(name);
                 }
-            }
-            if !emits {
-                // The observer only ever reads InputPlumber's virtual pad.
-                pressed = pressed.into_iter().map(swap_north_west).collect();
             }
             activity.set_pressed(pressed);
             activity.set_analog(analog(&gilrs));

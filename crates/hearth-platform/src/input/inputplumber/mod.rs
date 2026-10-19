@@ -324,13 +324,15 @@ fn is_composite_path(path: &str) -> bool {
 }
 
 /// Hearth pad position name of an InputPlumber D-Bus event. D-pad and left stick both send
-/// `ui_up`… (InputPlumber merges them), so both count as the D-pad here.
+/// `ui_up`… (InputPlumber merges them), so both count as the D-pad here. InputPlumber names
+/// the top and left face buttons by evdev code (`BTN_NORTH` is `BTN_X`, the left button), so
+/// its `West` (`ui_action`) is the top button and `North` (`ui_context`) the left one.
 fn position_of(event: &str) -> Option<&'static str> {
     Some(match event {
         "ui_accept" => "south",
         "ui_back" => "east",
-        "ui_action" => "west",
-        "ui_context" => "north",
+        "ui_context" => "west",
+        "ui_action" => "north",
         "ui_l1" => "l1",
         "ui_r1" => "r1",
         "ui_l2" => "l2",

@@ -19,14 +19,14 @@ mapping:
   - name: "west: B"
     source_event:
       gamepad:
-        button: West
+        button: North
     target_events:
       - gamepad:
-          button: West
+          button: North
   - name: "north: none"
     source_event:
       gamepad:
-        button: North
+        button: West
     target_events: []
   - name: "l1: L"
     source_event:

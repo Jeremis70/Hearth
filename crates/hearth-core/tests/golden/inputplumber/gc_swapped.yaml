@@ -21,17 +21,17 @@ mapping:
   - name: "west: X"
     source_event:
       gamepad:
-        button: West
-    target_events:
-      - gamepad:
-          button: West
-  - name: "north: Y"
-    source_event:
-      gamepad:
         button: North
     target_events:
       - gamepad:
           button: North
+  - name: "north: Y"
+    source_event:
+      gamepad:
+        button: West
+    target_events:
+      - gamepad:
+          button: West
   - name: "l1: @fast_forward_hold"
     source_event:
       gamepad:

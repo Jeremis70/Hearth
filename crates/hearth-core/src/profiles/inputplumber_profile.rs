@@ -178,12 +178,17 @@ enum Event {
 
 /// InputPlumber's name for a button-like input (`GamepadButton` in `capability.rs`). Paddle
 /// numbers follow SDL: paddle1 is the upper right one.
+///
+/// InputPlumber names the top and left face buttons by evdev code, not by position: like
+/// xpad, Xbox X (left, PlayStation Square) is `BTN_X`, the same code as `BTN_NORTH`, so it is
+/// `North`, and Y (top, Triangle) is `West` (its DualSense driver reports Square as `North`,
+/// and its Xbox pads write `North` as code 307, which SDL reads as X).
 fn button_name(input: PadInput) -> Option<&'static str> {
     Some(match input {
         PadInput::South => "South",
         PadInput::East => "East",
-        PadInput::West => "West",
-        PadInput::North => "North",
+        PadInput::West => "North",
+        PadInput::North => "West",
         PadInput::L1 => "LeftBumper",
         PadInput::R1 => "RightBumper",
         PadInput::L3 => "LeftStick",

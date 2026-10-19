@@ -117,12 +117,21 @@ on/off, axis→trigger. These stay in the emulator configs.
   for 4 s each ("Unable to create initialized UdevDevice … after 80 attempts"). Listing devices
   on every signal kept Hearth's input thread busy for seconds; only `CompositeDevice*` paths are
   watched now, debounced.
-- **Face button codes.** The Xbox target writes West (Square) as code 307 and North (Triangle)
-  as 308, like real xpad (`BTN_X` = `BTN_NORTH`). SDL (`x:b2`) and RetroArch (`input_y_btn = 2`)
-  number buttons by code order and get it right; gilrs has no SDL mapping for the virtual pad
-  and names them by code, so its observer swaps them back.
+- **Face button names (corrected 2026-10-19).** InputPlumber names the left and top face
+  buttons by evdev code, not by position: its DualSense driver reports Square as
+  `GamepadButton::North` and Triangle as `West`, and its Xbox pads write `North` as code 307
+  (`BTN_NORTH`, which is xpad's `BTN_X`, the left button) and `West` as 308. evtest on the
+  virtual pad: Square 307, Triangle 308. SDL 2 and 3 map the pad `x:b2,y:b3` (307 is X, left),
+  so emulators read it right. Hearth first used InputPlumber's names as positions: identity
+  mappings came out right by two cancelling mistakes, but anything bound to west or north hit
+  the other button (N64 B, on west, landed on Triangle) and the D-Bus menus read `ui_action`
+  as west. The earlier note here said the codes were fine and swapped them back in gilrs; that
+  hid it. Fixed where Hearth names InputPlumber's buttons (`inputplumber_profile::button_name`,
+  `position_of`); gilrs gets SDL's mapping for the pad instead of a swap. Verified with an SDL2
+  probe on the generated GameCube and N64 profiles and by hand in both emulators.
 - **Triggers in gilrs.** Without an SDL mapping gilrs reports the virtual pad's `ABS_Z`/`ABS_RZ`
-  as axes `LeftZ`/`RightZ` from -1 (released) to 1.
+  as axes `LeftZ`/`RightZ` from -1 (released) to 1. Hearth now gives gilrs the pad's mapping
+  (`gilrs::ELITE_2_MAPPING`); the axis fallback stays for other unmapped pads.
 - **Profiles.** `Mute` is accepted as a button name although the JSON schema doesn't list it.
   A mapping with `target_events: []` drops the input. All generated profiles load without
   warnings.

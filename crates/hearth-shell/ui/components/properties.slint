@@ -1,0 +1,61 @@
+import { Theme } from "../theme.slint";
+import { GameProperties } from "../data.slint";
+
+component Field inherits HorizontalLayout {
+    in property <string> label;
+    in property <string> value;
+    in property <bool> disabled: false;
+    spacing: Theme.sp-24;
+    Text {
+        text: label;
+        width: 240px * Theme.scale;
+        font-size: Theme.body;
+        color: disabled ? Theme.text-disabled : Theme.text-secondary;
+    }
+    Text {
+        text: value;
+        horizontal-stretch: 1;
+        wrap: word-wrap;
+        font-size: Theme.body;
+        font-weight: Theme.medium;
+        color: disabled ? Theme.text-disabled : Theme.text-primary;
+    }
+}
+
+// Read-only facts about a game, with the artwork actions still to come shown disabled.
+// Back closes it (handled by the owner).
+export component PropertiesPanel inherits Rectangle {
+    in property <GameProperties> data;
+
+    background: Theme.scrim;
+
+    Rectangle {
+        width: 1080px * Theme.scale;
+        height: layout.preferred-height;
+        border-radius: Theme.radius-lg;
+        background: Theme.surface-raised;
+
+        layout := VerticalLayout {
+            padding: Theme.sp-48;
+            spacing: Theme.sp-16;
+            Text {
+                text: data.title;
+                font-size: Theme.title;
+                font-weight: Theme.semibold;
+                color: Theme.text-primary;
+                wrap: word-wrap;
+            }
+            Rectangle { height: Theme.sp-8; }
+            Field { label: "Console"; value: data.console; }
+            Field { label: "File"; value: data.path; }
+            Field { label: "Size"; value: data.size; }
+            Field { label: "Artwork match"; value: data.match-name; }
+            Rectangle {
+                height: 1px;
+                background: Theme.divider;
+            }
+            Field { label: "Change artwork"; value: "Coming later"; disabled: true; }
+            Field { label: "Wrong game?"; value: "Coming later"; disabled: true; }
+        }
+    }
+}

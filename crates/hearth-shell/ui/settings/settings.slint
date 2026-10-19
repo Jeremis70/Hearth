@@ -6,6 +6,7 @@ import { ListRow } from "../components/list_row.slint";
 import { HintBar } from "../components/hint_bar.slint";
 import { NetworkPane } from "network.slint";
 import { ControllersPane } from "controllers.slint";
+import { DisplayPane } from "display.slint";
 
 // Glides behind the focused row of a list.
 component FocusFrame inherits Rectangle {
@@ -50,6 +51,7 @@ export global Settings {
         if key == "folders" { return Icons.folder; }
         if key == "emulators" { return Icons.cpu; }
         if key == "controllers" { return Icons.gamepad; }
+        if key == "display" { return Icons.volume; }
         Icons.power
     }
 
@@ -72,7 +74,12 @@ export component SettingsScreen inherits Rectangle {
     property <int> count: SettingsData.categories.length;
     property <string> key: SettingsData.categories[index].key;
     property <int> content-count: key == "network" ? SettingsData.wifi.length
-        : key == "controllers" ? SettingsData.controller-items.length : 0;
+        : key == "controllers" ? SettingsData.controller-items.length
+        : key == "display" ? (picking ? SettingsData.pack-choices.length : SettingsData.display-items.length)
+        : 0;
+    // Display & sound: the pack list of one category is open.
+    property <bool> picking: false;
+    property <int> picking-row: 0;
     property <bool> has-content: content-count > 0;
     property <length> list-top: 180px * Theme.scale;
 
@@ -81,6 +88,7 @@ export component SettingsScreen inherits Rectangle {
         index = 0;
         pane = 0;
         content-index = 0;
+        picking = false;
     }
 
     public function handle(action: UiAction) -> bool {
@@ -97,8 +105,8 @@ export component SettingsScreen inherits Rectangle {
             return false;
         }
         if pane == 0 {
-            if action == UiAction.up { index = max(0, index - 1); content-index = 0; return true; }
-            if action == UiAction.down { index = min(count - 1, index + 1); content-index = 0; return true; }
+            if action == UiAction.up { index = max(0, index - 1); content-index = 0; picking = false; return true; }
+            if action == UiAction.down { index = min(count - 1, index + 1); content-index = 0; picking = false; return true; }
             if (action == UiAction.right || action == UiAction.accept) && has-content { pane = 1; return true; }
             if action == UiAction.back || action == UiAction.left { level = 0; return true; }
             return false;
@@ -108,6 +116,19 @@ export component SettingsScreen inherits Rectangle {
         if action == UiAction.accept {
             if key == "network" { SettingsData.wifi-selected(SettingsData.wifi[content-index].ssid); }
             if key == "controllers" { SettingsData.controller-item(SettingsData.controller-items[content-index].key); }
+            if key == "display" && !picking {
+                picking-row = content-index;
+                SettingsData.open-packs(SettingsData.display-items[content-index].key);
+                picking = true;
+                content-index = 0;
+            } else if key == "display" {
+                SettingsData.choose-pack(SettingsData.display-items[picking-row].key, SettingsData.pack-choices[content-index].key);
+            }
+            return true;
+        }
+        if (action == UiAction.left || action == UiAction.back) && picking {
+            picking = false;
+            content-index = picking-row;
             return true;
         }
         if action == UiAction.left || action == UiAction.back { pane = 0; return true; }
@@ -174,7 +195,12 @@ export component SettingsScreen inherits Rectangle {
             if key == "controllers": ControllersPane {
                 focus-index: pane == 1 ? content-index : -1;
             }
-            if key != "network" && key != "controllers": Text {
+            if key == "display": DisplayPane {
+                focus-index: pane == 1 ? content-index : -1;
+                picking: picking;
+                picking-label: SettingsData.display-items[picking-row].label;
+            }
+            if key != "network" && key != "controllers" && key != "display": Text {
                 x: Theme.sp-24;
                 y: Theme.sp-24;
                 width: parent.width - 2 * Theme.sp-24;

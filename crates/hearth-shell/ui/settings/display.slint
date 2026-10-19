@@ -1,0 +1,76 @@
+import { Theme } from "../theme.slint";
+import { Icons } from "../icons.slint";
+import { SettingsData } from "../data.slint";
+import { ListRow } from "../components/list_row.slint";
+
+component RowFocus inherits Rectangle {
+    in property <int> index;
+    in property <length> top;
+    x: 0;
+    y: top + max(0, index) * (Theme.row-height + Theme.row-gap);
+    animate y { duration: Theme.fast; easing: ease-out; }
+    height: Theme.row-height;
+    border-radius: Theme.radius-md;
+    background: Theme.surface-raised;
+    border-width: Theme.focus-ring-width;
+    border-color: Theme.focus-ring;
+    drop-shadow-blur: Theme.focus-glow-radius;
+    drop-shadow-color: Theme.focus-glow;
+    opacity: index >= 0 ? 1 : 0;
+    animate opacity { duration: Theme.fast; easing: ease-out; }
+}
+
+// Display & sound pane: "Console icons" and "UI sounds" (SettingsData.display-items), each
+// opening a list of installed packs plus "Hearth default" (SettingsData.pack-choices).
+export component DisplayPane inherits Rectangle {
+    in property <int> focus-index: -1;    // -1 when focus is in the sidebar
+    in property <bool> picking: false;    // the pack list is shown
+    in property <string> picking-label;
+
+    property <length> list-top: picking ? heading.height + Theme.sp-24 : 0;
+
+    heading := Text {
+        x: 0;
+        y: 0;
+        visible: picking;
+        text: picking-label;
+        font-size: Theme.heading;
+        font-weight: Theme.semibold;
+        color: Theme.text-primary;
+    }
+
+    RowFocus {
+        width: parent.width;
+        top: list-top;
+        index: focus-index;
+    }
+
+    if !picking: Rectangle {
+        for item[i] in SettingsData.display-items: ListRow {
+            x: 0;
+            y: i * (Theme.row-height + Theme.row-gap);
+            width: parent.width;
+            icon: item.key == "console_icons" ? Icons.gamepad : Icons.volume;
+            label: item.label;
+            value: item.status;
+            trailing-icon: Icons.chevron-right;
+            has-trailing-icon: true;
+            show-divider: i != focus-index && i + 1 != focus-index;
+        }
+    }
+
+    if picking: Rectangle {
+        y: list-top;
+        for choice[i] in SettingsData.pack-choices: ListRow {
+            x: 0;
+            y: i * (Theme.row-height + Theme.row-gap);
+            width: parent.width;
+            icon: Icons.folder;
+            label: choice.label;
+            value: choice.status;
+            trailing-icon: Icons.check;
+            has-trailing-icon: choice.key == SettingsData.pack-selected;
+            show-divider: i != focus-index && i + 1 != focus-index;
+        }
+    }
+}

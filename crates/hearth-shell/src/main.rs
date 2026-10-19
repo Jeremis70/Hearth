@@ -12,6 +12,9 @@ use std::time::Duration;
 
 use anyhow::Context;
 use clap::Parser;
+use hearth_core::art::{ArtCache, MetadataProvider, MockMetadataProvider, SteamGridDb};
+use hearth_core::config::{self, Config};
+use hearth_core::packs::Resolver;
 use hearth_core::paths::{self, DataDirs};
 use hearth_core::profiles::{DolphinInstall, DolphinProfile, RetroArchProfile};
 use hearth_core::systems::Systems;
@@ -58,6 +61,27 @@ struct Args {
     /// and allows Hearth to use it, else gilrs).
     #[arg(long, value_enum, default_value_t = InputChoice::Auto)]
     input: InputChoice,
+    /// Never use the network for artwork: a mock provider that is always offline, so games
+    /// keep cached art or placeholders and wait in the needs-art queue.
+    #[arg(long)]
+    mock_network: bool,
+}
+
+/// Hearth's bundled assets (default console icons, sounds). TODO: an installed location
+/// once Hearth is packaged.
+fn assets_dir() -> PathBuf {
+    PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets"))
+}
+
+/// The artwork provider: SteamGridDB with an API key, a mock with `--mock-network`, else
+/// none (placeholders, logged once by the art worker).
+fn art_provider(mock_network: bool, config: &Config) -> Option<Box<dyn MetadataProvider>> {
+    if mock_network {
+        tracing::info!("--mock-network: artwork comes from the cache only");
+        return Some(Box::new(MockMetadataProvider::offline()));
+    }
+    let key = config.steamgriddb_key(std::env::var(config::STEAMGRIDDB_KEY_ENV).ok())?;
+    Some(Box::new(SteamGridDb::new(key)))
 }
 
 /// `--input`.
@@ -199,6 +223,12 @@ fn main() -> anyhow::Result<()> {
         None => tracing::info!("Dolphin not found: GameCube and Wii games won't launch"),
     }
 
+    let config = Config::load(&dirs.config_file()).unwrap_or_else(|err| {
+        tracing::warn!("ignoring the config file: {err}");
+        Config::default()
+    });
+    let icons = bridge::art::ConsoleIcons::new(Resolver::new(dirs.packs(), assets_dir(), &config));
+
     let input = select_input(args.input, dirs.runtime())?;
     // Hands the controllers back even if Hearth is killed (SIGKILL included).
     let guard = input.control.is_live().then(guard::Guard::spawn).flatten();
@@ -216,6 +246,11 @@ fn main() -> anyhow::Result<()> {
         input: input.control.clone(),
         library_db: dirs.library_db(),
         games_dir,
+        art_cache: ArtCache::new(dirs.art_cache()),
+        art_provider: art_provider(args.mock_network, &config),
+        icons,
+        config_file: dirs.config_file(),
+        packs_dir: dirs.packs().to_path_buf(),
     });
 
     let clock = slint::Timer::default();

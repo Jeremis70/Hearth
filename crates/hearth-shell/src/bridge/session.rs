@@ -20,15 +20,18 @@ use std::sync::mpsc::{self, Sender};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use hearth_core::art::{ArtCache, ArtService, MetadataProvider, remove_orphaned_art};
+use hearth_core::config::{self, PackCategory};
 use hearth_core::controls::edit::{Editor, Scope};
 use hearth_core::controls::{ControllerKind, GameKey, HearthAction, PadInput, Target, defaults};
 use hearth_core::library::{Library, LibraryEntry};
-use hearth_core::model::{GameId, SystemId};
+use hearth_core::model::{Game, GameId, SystemId};
+use hearth_core::packs;
 use hearth_core::profiles::{DolphinProfile, RetroArchProfile};
 use hearth_core::runtime::{
     LaunchCtx, ProcessRuntime, Runtime, RuntimeEvent, Session as RuntimeSession, SessionId,
 };
-use hearth_core::scan::scan_roms;
+use hearth_core::scan::{root_is_available, scan_roms};
 use hearth_core::session::{ActiveSession, SessionState};
 use hearth_core::systems::{EmulatorKind, SuspendPolicy, Systems};
 use hearth_platform::gamescope::{AppId, Compositor, SHELL_APP_ID};
@@ -38,14 +41,15 @@ use hearth_platform::input::{
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::rc::Rc;
 
+use super::art::{self as art_ui, ArtMap, ConsoleIcons, DecodedArt};
 use super::controls_page::{
     self, ApplyOutcome, EmulatorConfigApplier, InputPlumberApplier, MappingApplier, Page, TestPage,
 };
 use super::models;
 use crate::controls;
 use crate::{
-    AppWindow, ControllerType, ControlsData, OverlayPanel, OverlayWindow, PadNotice, Session,
-    SettingsCategory, SettingsData, Status,
+    AppWindow, ControllerType, ControlsData, GameProperties, HomeData, OverlayPanel, OverlayWindow,
+    PadNotice, Session, SettingsCategory, SettingsData, Status,
 };
 
 /// How long to look for a game's window before giving up.
@@ -152,6 +156,13 @@ pub struct Controller {
     input: InputControl,
     library_db: PathBuf,
     entries: Vec<LibraryEntry>,
+    /// Decoded art per game, filled in by the art worker.
+    art: ArtMap,
+    icons: ConsoleIcons,
+    /// Hearth's settings file (pack choices).
+    config_file: PathBuf,
+    /// Installed asset packs.
+    packs_dir: PathBuf,
     active: Option<ActiveSession>,
     closing: bool,
     mode: Mode,
@@ -220,6 +231,16 @@ pub struct Setup {
     pub library_db: PathBuf,
     /// Root scanned for ROMs (read-only).
     pub games_dir: PathBuf,
+    /// Cached art.
+    pub art_cache: ArtCache,
+    /// Where art comes from; `None` without an API key.
+    pub art_provider: Option<Box<dyn MetadataProvider>>,
+    /// Console icons (pack, then Hearth's glyphs).
+    pub icons: ConsoleIcons,
+    /// Hearth's settings file.
+    pub config_file: PathBuf,
+    /// Installed asset packs.
+    pub packs_dir: PathBuf,
 }
 
 /// Creates the controller, wires the UI callbacks and starts the library scan.
@@ -246,9 +267,32 @@ pub fn install(setup: Setup) {
         session.on_close_game(|| defer(Controller::close_game));
         session.on_home_button(|long| defer(move |c| c.home_button(long)));
         session.on_open_controls(|| defer(|c| c.open_game_controls(MAIN)));
-        app.global::<SettingsData>().on_controller_item(|key| {
+        let home = app.global::<HomeData>();
+        home.on_toggle_favorite(|id| {
+            let id = GameId::new(id.as_str());
+            defer(move |c| c.toggle_favorite(&id));
+        });
+        home.on_open_game_controls(|id| {
+            let id = GameId::new(id.as_str());
+            defer(move |c| c.open_controls_for(&id));
+        });
+        // Synchronous: the panel shows the values right away. Never re-entrant (Slint calls it
+        // while handling a key, after `route` returned).
+        home.on_request_properties(|id| {
+            with(|c| c.fill_properties(&GameId::new(id.as_str())));
+        });
+        let settings = app.global::<SettingsData>();
+        settings.on_controller_item(|key| {
             let key = key.to_string();
             defer(move |c| c.settings_controller_item(&key));
+        });
+        // Synchronous, like request-properties: the list is shown right after.
+        settings.on_open_packs(|key| {
+            with(|c| c.fill_pack_choices(&key));
+        });
+        settings.on_choose_pack(|key, id| {
+            let (key, id) = (key.to_string(), id.to_string());
+            defer(move |c| c.choose_pack(&key, &id));
         });
         wire_controls(&app.global::<ControlsData>(), MAIN);
     }
@@ -275,11 +319,18 @@ pub fn install(setup: Setup) {
         );
     }
 
-    load_library(
+    let art_service = art_ui::start(
+        setup.art_cache.clone(),
         setup.library_db.clone(),
-        setup.games_dir.clone(),
-        setup.systems.clone(),
+        setup.art_provider,
     );
+    load_library(LibraryLoad {
+        db: setup.library_db.clone(),
+        games_dir: setup.games_dir.clone(),
+        systems: setup.systems.clone(),
+        art_cache: setup.art_cache,
+        art: art_service,
+    });
 
     let applier: Box<dyn MappingApplier> = if setup.input.is_live() {
         Box::new(InputPlumberApplier {
@@ -307,6 +358,10 @@ pub fn install(setup: Setup) {
         input: setup.input,
         library_db: setup.library_db,
         entries: Vec::new(),
+        art: ArtMap::new(),
+        icons: setup.icons,
+        config_file: setup.config_file,
+        packs_dir: setup.packs_dir,
         active: None,
         closing: false,
         mode: Mode::Shell,
@@ -330,6 +385,7 @@ pub fn install(setup: Setup) {
         pad_notice_timer: slint::Timer::default(),
     };
     CONTROLLER.with(|cell| *cell.borrow_mut() = Some(controller));
+    with(Controller::fill_display_items);
     with(|c| {
         c.pad_timer.start(slint::TimerMode::Repeated, PAD_POLL, || {
             with(Controller::poll_pads);
@@ -368,19 +424,43 @@ pub fn route(action: Action) -> Route {
     with(|c| c.route(action)).unwrap_or(Route::None)
 }
 
-/// Scans the games root and loads the library on a worker thread.
-fn load_library(db: PathBuf, games_dir: PathBuf, systems: Systems) {
+/// What the library thread needs.
+struct LibraryLoad {
+    db: PathBuf,
+    games_dir: PathBuf,
+    systems: Systems,
+    art_cache: ArtCache,
+    art: Option<ArtService>,
+}
+
+/// Scans the games root and loads the library on a worker thread, then hands the games to the
+/// art worker. A root that can't be read (missing, unmounted) leaves the library as it was:
+/// no game, history or art is dropped for it.
+fn load_library(load: LibraryLoad) {
     let spawned = thread::Builder::new()
         .name("hearth-library".into())
         .spawn(move || {
-            let result = Library::open(&db).and_then(|mut library| {
-                let games = scan_roms(&games_dir, &systems);
-                tracing::info!(count = games.len(), root = %games_dir.display(), "scanned games");
-                library.sync(&games)?;
+            let result = Library::open(&load.db).and_then(|mut library| {
+                if root_is_available(&load.games_dir) {
+                    let games = scan_roms(&load.games_dir, &load.systems);
+                    tracing::info!(count = games.len(), root = %load.games_dir.display(), "scanned games");
+                    let removed = library.sync(&games)?;
+                    remove_orphaned_art(&library, &load.art_cache, &removed, &load.games_dir);
+                } else {
+                    tracing::warn!(
+                        root = %load.games_dir.display(),
+                        "games folder unavailable; showing the library as last scanned"
+                    );
+                }
                 library.recent()
             });
             match result {
-                Ok(entries) => defer(move |c| c.set_entries(entries)),
+                Ok(entries) => {
+                    if let Some(art) = &load.art {
+                        art.library_loaded(entries.iter().map(|e| e.game.clone()).collect());
+                    }
+                    defer(move |c| c.set_entries(entries));
+                }
                 Err(err) => {
                     tracing::warn!("loading the library failed: {err}");
                     defer(move |c| c.toast(&format!("Couldn't load the library: {err}")));
@@ -1311,6 +1391,12 @@ impl Controller {
         self.refresh();
     }
 
+    /// New art for a game, from the art worker.
+    pub fn set_art(&mut self, game: GameId, art: DecodedArt) {
+        self.art.insert(game, art.into());
+        self.refresh_tiles();
+    }
+
     fn title(&self) -> String {
         self.active
             .as_ref()
@@ -1319,16 +1405,27 @@ impl Controller {
     }
 
     /// Rebuilds the tile row and the session globals.
-    fn refresh(&self) {
+    fn refresh(&mut self) {
+        self.refresh_tiles();
+        self.sync_session_ui();
+    }
+
+    /// Rebuilds the tile row. Rows are updated in place when the games are the same, so
+    /// Home keeps its focus and animations.
+    fn refresh_tiles(&mut self) {
         let Some(app) = self.app.upgrade() else {
             return;
         };
         let running = self.active.as_ref().map(|a| &a.game.id);
-        models::set_tiles(
-            &app,
-            models::home_tiles(&self.entries, &self.systems, running, unix_now()),
+        let tiles = models::home_tiles(
+            &self.entries,
+            &self.systems,
+            running,
+            unix_now(),
+            &self.art,
+            &mut self.icons,
         );
-        self.sync_session_ui();
+        models::set_tiles(&app, tiles);
     }
 
     fn sync_session_ui(&self) {
@@ -1462,6 +1559,25 @@ impl Controller {
             return;
         };
         let game = active.game.clone();
+        self.open_controls_page(&game, true, which);
+    }
+
+    /// Home → Options → Controls for this game, running or not.
+    fn open_controls_for(&mut self, id: &GameId) {
+        let running = self.active.as_ref().is_some_and(|a| &a.game.id == id);
+        let Some(game) = self
+            .entries
+            .iter()
+            .find(|e| &e.game.id == id)
+            .map(|e| e.game.clone())
+        else {
+            return;
+        };
+        self.open_controls_page(&game, running, MAIN);
+    }
+
+    /// A game's controls page. `affects_running`: changes apply to the running game.
+    fn open_controls_page(&mut self, game: &Game, affects_running: bool, which: usize) {
         let Some(system) = self.systems.get(&game.system).cloned() else {
             return;
         };
@@ -1482,7 +1598,7 @@ impl Controller {
         self.pages[which] = Some(Page::new(
             editor,
             Some(game.title.clone()),
-            true,
+            affects_running,
             self.applier.is_live(),
             self.pad_extras(),
         ));
@@ -1497,6 +1613,59 @@ impl Controller {
         } else if let Some(overlay) = &self.overlay {
             overlay.invoke_open_controls();
         }
+    }
+
+    /// Flips a game's favorite mark (shown at once, saved off the UI thread).
+    fn toggle_favorite(&mut self, id: &GameId) {
+        let Some(entry) = self.entries.iter_mut().find(|e| &e.game.id == id) else {
+            return;
+        };
+        entry.favorite = !entry.favorite;
+        let favorite = entry.favorite;
+        let (db, id) = (self.library_db.clone(), id.clone());
+        let spawned = thread::Builder::new()
+            .name("hearth-favorite".into())
+            .spawn(move || {
+                if let Err(err) = Library::open(&db).and_then(|l| l.set_favorite(&id, favorite)) {
+                    tracing::warn!("saving the favorite failed: {err}");
+                    defer(move |c| c.toast(&format!("Couldn't save the favorite: {err}")));
+                }
+            });
+        if let Err(err) = spawned {
+            tracing::error!("cannot start favorite thread: {err}");
+        }
+        self.refresh_tiles();
+    }
+
+    /// Fills `HomeData.properties` for a game.
+    fn fill_properties(&self, id: &GameId) {
+        let (Some(app), Some(entry)) = (
+            self.app.upgrade(),
+            self.entries.iter().find(|e| &e.game.id == id),
+        ) else {
+            return;
+        };
+        let game = &entry.game;
+        let console = self
+            .systems
+            .get(&game.system)
+            .map_or_else(|| game.system.to_string(), |s| s.name.clone());
+        let size = std::fs::metadata(&game.path).map_or_else(
+            |_| "File not found".to_owned(),
+            |m| models::format_size(m.len()),
+        );
+        let match_name = self
+            .art
+            .get(id)
+            .and_then(|a| a.match_name.clone())
+            .unwrap_or_else(|| "None (placeholder art)".to_owned());
+        app.global::<HomeData>().set_properties(GameProperties {
+            title: game.title.as_str().into(),
+            console: console.into(),
+            path: game.path.display().to_string().into(),
+            size: size.into(),
+            match_name: match_name.into(),
+        });
     }
 
     fn controls_choices(&mut self, which: usize, input: &str) -> i32 {
@@ -1591,6 +1760,93 @@ impl Controller {
     }
 
     /// Settings → Controllers rows: connected pads, the button test, each console.
+    /// Settings → Display & sound: the selected pack of each category.
+    fn fill_display_items(&mut self) {
+        let Some(app) = self.app.upgrade() else {
+            return;
+        };
+        let packs = packs::installed(&self.packs_dir);
+        let items: Vec<SettingsCategory> = PackCategory::ALL
+            .into_iter()
+            .map(|category| {
+                let status = match self.icons.selected(category) {
+                    None => "Hearth default".to_owned(),
+                    Some(id) => packs
+                        .iter()
+                        .find(|p| p.id == id)
+                        .map_or_else(|| format!("{id} (missing)"), |p| p.name.clone()),
+                };
+                SettingsCategory {
+                    key: category.key().into(),
+                    label: match category {
+                        PackCategory::ConsoleIcons => "Console icons",
+                        PackCategory::UiSounds => "UI sounds",
+                    }
+                    .into(),
+                    status: status.into(),
+                }
+            })
+            .collect();
+        app.global::<SettingsData>()
+            .set_display_items(ModelRc::from(Rc::new(VecModel::from(items))));
+    }
+
+    /// The pack list of one category: Hearth default, then the installed packs that have
+    /// files for it.
+    fn fill_pack_choices(&mut self, key: &str) {
+        let (Some(app), Some(category)) = (
+            self.app.upgrade(),
+            PackCategory::ALL.into_iter().find(|c| c.key() == key),
+        ) else {
+            return;
+        };
+        let mut choices = vec![SettingsCategory {
+            key: "".into(),
+            label: "Hearth default".into(),
+            status: "Built in".into(),
+        }];
+        choices.extend(
+            packs::installed(&self.packs_dir)
+                .into_iter()
+                .filter(|p| p.categories.contains(&category))
+                .map(|p| SettingsCategory {
+                    key: p.id.as_str().into(),
+                    label: p.name.as_str().into(),
+                    status: p
+                        .author
+                        .map(|a| format!("by {a}"))
+                        .unwrap_or_default()
+                        .into(),
+                }),
+        );
+        let settings = app.global::<SettingsData>();
+        settings.set_pack_selected(self.icons.selected(category).unwrap_or_default().into());
+        settings.set_pack_choices(ModelRc::from(Rc::new(VecModel::from(choices))));
+    }
+
+    /// Selects a pack (`""`: Hearth default), saves it, and applies console icons at once.
+    fn choose_pack(&mut self, key: &str, id: &str) {
+        let Some(category) = PackCategory::ALL.into_iter().find(|c| c.key() == key) else {
+            return;
+        };
+        let pack = (!id.is_empty()).then_some(id);
+        if let Err(err) = config::save_pack(&self.config_file, category, pack) {
+            tracing::warn!("saving the pack choice failed: {err}");
+            self.toast(&format!("Couldn't save the choice: {err}"));
+        }
+        tracing::info!(
+            category = key,
+            pack = pack.unwrap_or("Hearth default"),
+            "pack selected"
+        );
+        self.icons.select(category, pack);
+        if let Some(app) = self.app.upgrade() {
+            app.global::<SettingsData>().set_pack_selected(id.into());
+        }
+        self.fill_display_items();
+        self.refresh_tiles();
+    }
+
     fn refresh_settings(&self) {
         let Some(app) = self.app.upgrade() else {
             return;

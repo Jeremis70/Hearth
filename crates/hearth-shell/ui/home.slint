@@ -7,10 +7,89 @@ import { TopBar } from "components/top_bar.slint";
 import { HButton } from "components/button.slint";
 import { Widget } from "components/widget.slint";
 import { HintBar } from "components/hint_bar.slint";
-import { OptionsMenu } from "components/menu.slint";
+import { OptionsMenu, MenuItem } from "components/menu.slint";
+import { PropertiesPanel } from "components/properties.slint";
 import { ConfirmDialog } from "components/dialog.slint";
 
 export enum HomeZone { topbar, row, hero, widgets }
+
+// One background layer for a tile: the sharp hero across the top at its own aspect ratio,
+// fading into the pre-blurred hero (stretched over the whole screen, behind the widgets).
+// Without art, the tile's placeholder gradient.
+component Backdrop inherits Rectangle {
+    in property <HomeTile> tile;
+    property <length> hero-height: tile.hero.width > 0
+        ? min(root.height, root.width * tile.hero.height / tile.hero.width) : 0;
+
+    if tile.hero.width == 0 && tile.hero-blur.width == 0: Rectangle {
+        background: @linear-gradient(150deg, tile.art-a 0%, tile.art-b 70%, Theme.bg-base 100%);
+    }
+    if tile.hero-blur.width > 0: Image {
+        width: root.width;
+        height: root.height;
+        source: tile.hero-blur;
+        image-fit: cover;
+    }
+    // Darkens the blur so widgets and text stay readable on any art.
+    if tile.hero-blur.width > 0: Rectangle {
+        background: Theme.hero-vignette;
+    }
+    if tile.hero.width > 0: Image {
+        y: 0;
+        width: root.width;
+        height: hero-height;
+        source: tile.hero;
+        image-fit: cover;
+    }
+    // Softens the edge between the sharp hero and the blur below it.
+    if tile.hero.width > 0: Rectangle {
+        y: hero-height - self.height;
+        height: hero-height * 0.45;
+        background: @linear-gradient(180deg, transparent 0%, Theme.hero-vignette 100%);
+    }
+}
+
+// The console icon (24 px) or its monogram, then the name: beside the focused tile.
+component TileLabel inherits HorizontalLayout {
+    in property <HomeTile> tile;
+    spacing: Theme.sp-12;
+    alignment: start;
+    if tile.kind == TileKind.game && tile.console-icon.width > 0 && tile.console-icon-tint: Image {
+        source: tile.console-icon;
+        width: 24px * Theme.scale;
+        height: self.width;
+        y: (parent.height - self.height) / 2;
+        colorize: Theme.text-primary;
+    }
+    if tile.kind == TileKind.game && tile.console-icon.width > 0 && !tile.console-icon-tint: Image {
+        source: tile.console-icon;
+        width: 24px * Theme.scale;
+        height: self.width;
+        y: (parent.height - self.height) / 2;
+    }
+    if tile.kind == TileKind.game && tile.console-icon.width == 0: Rectangle {
+        width: monogram.preferred-width + 2 * Theme.sp-8;
+        height: 24px * Theme.scale;
+        y: (parent.height - self.height) / 2;
+        border-radius: Theme.radius-sm;
+        border-width: 2px * Theme.scale;
+        border-color: Theme.text-secondary;
+        monogram := Text {
+            text: tile.monogram;
+            font-size: 14px * Theme.scale;
+            font-weight: Theme.semibold;
+            color: Theme.text-primary;
+        }
+    }
+    Text {
+        text: tile.title;
+        vertical-alignment: center;
+        font-size: Theme.body-lg;
+        font-weight: Theme.medium;
+        color: Theme.text-primary;
+        overflow: elide;
+    }
+}
 
 // Home screen (README §4): top bar, tile row, hero zone for the current tile, widget row.
 export component Home inherits Rectangle {
@@ -26,23 +105,51 @@ export component Home inherits Rectangle {
     property <int> tab: 0;            // 0 Games, 1 Media
     property <HomeTile> current: tiles[index];
     property <bool> current-is-game: current.kind == TileKind.game;
-    property <int> hero-count: current-is-game ? 2 : 1;
+    // Hero buttons: Play [⋯], or Resume, Close and [⋯] for the running game.
+    property <int> hero-count: !current-is-game ? 1 : current.running ? 3 : 2;
     property <int> widget-count: 4;
 
-    // Options menu and Close game confirmation for the current tile.
+    // Options menu, Properties and the Close game confirmation for the current tile.
     property <bool> menu-open: false;
     property <int> menu-index: 0;
-    property <[string]> menu-items: current.running ? ["Resume", "Controls", "Close game"] : ["Play"];
+    property <[MenuItem]> menu-items: [
+        current.running ? { key: "close", label: "Close game", danger: true } : { key: "play", label: "Play" },
+        { key: "controls", label: "Controls for this game" },
+        { key: "favorite", label: "Favorite", checked: current.favorite },
+        { key: "properties", label: "Properties" },
+    ];
+    property <bool> properties-open: false;
     property <bool> confirm-open: false;
     property <int> confirm-index: 0;
 
-    // Tile row geometry; the row scrolls just enough to keep the current tile inside the
-    // title-safe area.
+    // Tile row geometry (README §4, fixed focus anchor): the focused tile stays at safe-x and
+    // the row slides by one tile per press, until the last tile is fully visible; from there
+    // focus moves the rest of the way. The row never ends before the right safe edge.
     property <length> step: Theme.tile + Theme.tile-gap;
     property <length> row-top: Theme.topbar-height + Theme.sp-24;
-    property <length> current-right: Theme.safe-x + index * step + Theme.tile-focused;
-    property <length> row-offset: max(0, current-right - (root.width - Theme.safe-x));
-    property <length> hero-top: row-top + Theme.tile-focused + Theme.sp-96;
+    property <length> row-width: max(0, tiles.length - 1) * step + Theme.tile-focused;
+    property <length> max-offset: max(0, row-width - (root.width - 2 * Theme.safe-x));
+    property <length> row-offset: min(index * step, max-offset);
+    property <length> focused-x: Theme.safe-x + index * step - row-offset;
+    // Beside the focused tile, in the band below the smaller tiles; under it when the
+    // focused tile is too close to the right edge.
+    property <length> label-x: focused-x + Theme.tile-focused + Theme.tile-gap;
+    property <bool> label-beside: root.width - Theme.safe-x - label-x >= 320px * Theme.scale;
+    property <length> hero-top: row-top + Theme.tile-focused + Theme.sp-64;
+
+    // Background layers crossfade (`slow`) whenever the current tile's art changes.
+    property <string> backdrop-key: current.id + ":" + current.hero.width + ":" + current.hero-blur.width;
+    property <bool> show-a: true;
+    property <HomeTile> backdrop-a;
+    property <HomeTile> backdrop-b;
+    changed backdrop-key => {
+        if show-a {
+            backdrop-b = current;
+        } else {
+            backdrop-a = current;
+        }
+        show-a = !show-a;
+    }
 
     // Focus starts on the first tile: the running game if there is one (Rust puts it first),
     // else the most recently played.
@@ -53,6 +160,7 @@ export component Home inherits Rectangle {
         hero-index = 0;
         widget-index = 0;
         menu-open = false;
+        properties-open = false;
         confirm-open = false;
     }
 
@@ -89,19 +197,35 @@ export component Home inherits Rectangle {
         }
     }
 
+    function ask-close() {
+        confirm-open = true;
+        confirm-index = 0;
+    }
+
     function handle-menu(action: UiAction) -> bool {
         if action == UiAction.up { menu-index = max(0, menu-index - 1); return true; }
         if action == UiAction.down { menu-index = min(menu-items.length - 1, menu-index + 1); return true; }
-        if action == UiAction.back || action == UiAction.options { menu-open = false; return true; }
-        if action == UiAction.accept {
+        if action == UiAction.back || action == UiAction.options || action == UiAction.left {
             menu-open = false;
-            if menu-items[menu-index] == "Close game" {
-                confirm-open = true;
-                confirm-index = 0;
-            } else if menu-items[menu-index] == "Controls" {
-                Session.open-controls();
-            } else {
+            return true;
+        }
+        if action == UiAction.accept {
+            let key = menu-items[menu-index].key;
+            if key == "favorite" {
+                // Stays open so the check mark visibly flips.
+                HomeData.toggle-favorite(current.id);
+                return true;
+            }
+            menu-open = false;
+            if key == "close" {
+                ask-close();
+            } else if key == "play" {
                 activate-current();
+            } else if key == "controls" {
+                HomeData.open-game-controls(current.id);
+            } else if key == "properties" {
+                HomeData.request-properties(current.id);
+                properties-open = true;
             }
             return true;
         }
@@ -124,6 +248,12 @@ export component Home inherits Rectangle {
     public function handle(action: UiAction) -> bool {
         if confirm-open {
             return handle-confirm(action);
+        }
+        if properties-open {
+            if action == UiAction.back || action == UiAction.accept || action == UiAction.options {
+                properties-open = false;
+            }
+            return true;
         }
         if menu-open {
             return handle-menu(action);
@@ -164,7 +294,13 @@ export component Home inherits Rectangle {
             if action == UiAction.up || action == UiAction.back { zone = HomeZone.row; return true; }
             if action == UiAction.down { zone = HomeZone.widgets; return true; }
             if action == UiAction.accept {
-                if hero-index == 0 { activate-current(); } else { open-menu(); }
+                if hero-index == 0 {
+                    activate-current();
+                } else if hero-index == hero-count - 1 {
+                    open-menu();
+                } else {
+                    ask-close();
+                }
                 return true;
             }
             if action == UiAction.options { open-menu(); return true; }
@@ -182,11 +318,15 @@ export component Home inherits Rectangle {
     background: Theme.bg-base;
     clip: true;
 
-    // Hero art: one layer per tile, crossfading to the current one (`slow`).
-    // TODO(M4): real art, pre-blurred on a worker thread behind the widgets.
-    for tile[i] in tiles: Rectangle {
-        background: @linear-gradient(150deg, tile.art-a 0%, tile.art-b 70%, Theme.bg-base 100%);
-        opacity: i == index && tab == 0 ? 1 : 0;
+    // Background: the current tile's art, crossfading between two layers.
+    Backdrop {
+        tile: backdrop-a;
+        opacity: show-a && tab == 0 ? 1 : 0;
+        animate opacity { duration: Theme.slow; easing: ease-in-out; }
+    }
+    Backdrop {
+        tile: backdrop-b;
+        opacity: !show-a && tab == 0 ? 1 : 0;
         animate opacity { duration: Theme.slow; easing: ease-in-out; }
     }
     // Plain warm glow for the Media tab.
@@ -225,27 +365,28 @@ export component Home inherits Rectangle {
         animate opacity { duration: Theme.base; easing: ease-out; }
 
         // Tile row
-        Rectangle {
-            x: -row-offset;
+        for tile[i] in tiles: Tile {
+            x: Theme.safe-x + i * step + (i > index ? Theme.tile-focused - Theme.tile : 0) - row-offset;
             animate x { duration: Theme.base; easing: ease-out; }
-            for tile[i] in tiles: Tile {
-                x: Theme.safe-x + i * step + (i > index ? Theme.tile-focused - Theme.tile : 0);
-                animate x { duration: Theme.base; easing: ease-out; }
-                y: row-top;
-                data: tile;
-                current: i == index;
-                focused: i == index && zone == HomeZone.row;
-            }
-            Text {
-                x: Theme.safe-x + index * step;
-                y: row-top + Theme.tile-focused + Theme.sp-12;
-                width: Theme.tile-focused * 2;
-                text: current.title;
-                font-size: Theme.caption;
-                font-weight: Theme.semibold;
-                color: Theme.text-primary;
-                overflow: elide;
-            }
+            y: row-top;
+            data: tile;
+            current: i == index;
+            focused: i == index && zone == HomeZone.row;
+        }
+        if label-beside: TileLabel {
+            x: label-x;
+            animate x { duration: Theme.base; easing: ease-out; }
+            y: row-top + Theme.tile-focused - self.height;
+            width: root.width - Theme.safe-x - label-x;
+            height: Theme.sp-32;
+            tile: current;
+        }
+        if !label-beside: TileLabel {
+            x: max(Theme.safe-x, focused-x + Theme.tile-focused - self.preferred-width);
+            y: row-top + Theme.tile-focused + Theme.sp-12;
+            width: min(self.preferred-width, root.width - 2 * Theme.safe-x);
+            height: Theme.sp-32;
+            tile: current;
         }
 
         // Hero zone
@@ -257,32 +398,25 @@ export component Home inherits Rectangle {
             spacing: Theme.sp-16;
             alignment: start;
 
-            Text {
+            // The game's logo when cached, else its title.
+            if current.logo.width > 0: Image {
+                height: 140px * Theme.scale;
+                width: min(640px * Theme.scale, self.height * current.logo.width / current.logo.height);
+                source: current.logo;
+                image-fit: contain;
+                horizontal-alignment: left;
+            }
+            if current.logo.width == 0: Text {
                 text: current.title;
                 font-size: Theme.display;
                 font-weight: Theme.semibold;
                 color: Theme.text-primary;
             }
-            HorizontalLayout {
-                spacing: Theme.sp-12;
-                alignment: start;
-                if current.badge != "": Rectangle {
-                    width: badge.preferred-width + 2 * Theme.sp-12;
-                    border-radius: self.height / 2;
-                    background: Theme.accent-soft;
-                    badge := Text {
-                        text: current.badge;
-                        font-size: Theme.caption;
-                        font-weight: Theme.semibold;
-                        color: Theme.accent;
-                    }
-                }
-                Text {
-                    text: current.subtitle;
-                    vertical-alignment: center;
-                    font-size: Theme.body;
-                    color: Theme.text-secondary;
-                }
+            // Console · playtime · last played.
+            Text {
+                text: current.badge != "" ? current.badge + " · " + current.subtitle : current.subtitle;
+                font-size: Theme.body;
+                color: Theme.text-secondary;
             }
             HorizontalLayout {
                 padding-top: Theme.sp-16;
@@ -295,10 +429,14 @@ export component Home inherits Rectangle {
                     label: current.running ? "Resume" : current-is-game ? "Play" : "Open";
                     focused: zone == HomeZone.hero && hero-index == 0;
                 }
+                if current.running: HButton {
+                    label: "Close";
+                    focused: zone == HomeZone.hero && hero-index == 1;
+                }
                 if current-is-game: HButton {
                     has-icon: true;
                     icon: Icons.ellipsis;
-                    focused: zone == HomeZone.hero && hero-index == 1;
+                    focused: zone == HomeZone.hero && hero-index == hero-count - 1;
                 }
             }
         }
@@ -380,11 +518,17 @@ export component Home inherits Rectangle {
         ];
     }
 
+    // To the right of the focused tile; to its left when it sits at the end of the row.
     if menu-open: OptionsMenu {
-        x: Theme.safe-x + (hero-index == 1 && zone == HomeZone.hero ? Theme.sp-96 * 2 : 0);
-        y: hero-top + Theme.display + Theme.sp-96 * 1.6;
+        x: root.width - Theme.safe-x - label-x >= self.width ? label-x
+            : focused-x - Theme.tile-gap - self.width;
+        y: row-top;
         items: menu-items;
         index: menu-index;
+    }
+
+    if properties-open: PropertiesPanel {
+        data: HomeData.properties;
     }
 
     if confirm-open: ConfirmDialog {

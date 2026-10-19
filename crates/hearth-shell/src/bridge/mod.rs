@@ -1,5 +1,6 @@
 //! Glue between platform/core services and the Slint UI.
 
+pub mod art;
 pub mod compositor;
 pub mod controls_page;
 pub mod input;

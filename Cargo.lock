@@ -1893,6 +1893,7 @@ dependencies = [
  "clap",
  "hearth-core",
  "hearth-platform",
+ "image",
  "nix",
  "raw-window-handle",
  "serde",

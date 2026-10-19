@@ -1,12 +1,22 @@
 import { Theme } from "../theme.slint";
+import { Icons } from "../icons.slint";
 import { FocusRing } from "focus.slint";
 
-// Options menu for a tile (Play / Resume / Close game). The owner handles navigation.
+// One menu entry. `checked` shows a check mark (toggles such as Favorite).
+export struct MenuItem {
+    key: string,
+    label: string,
+    checked: bool,
+    danger: bool,
+}
+
+// Options menu for a tile (Play or Close game, Controls, Favorite, Properties). The owner
+// handles navigation.
 export component OptionsMenu inherits Rectangle {
-    in property <[string]> items;
+    in property <[MenuItem]> items;
     in property <int> index;
 
-    width: 420px * Theme.scale;
+    width: 460px * Theme.scale;
     height: layout.preferred-height;
     border-radius: Theme.radius-lg;
     background: Theme.surface-raised;
@@ -20,13 +30,25 @@ export component OptionsMenu inherits Rectangle {
             height: Theme.row-height * 0.8;
             border-radius: Theme.radius-md;
             background: i == index ? Theme.surface : transparent;
-            Text {
-                x: Theme.sp-24;
-                text: item;
-                vertical-alignment: center;
-                font-size: Theme.body-lg;
-                font-weight: Theme.medium;
-                color: item == "Close game" ? Theme.danger : Theme.text-primary;
+            HorizontalLayout {
+                padding-left: Theme.sp-24;
+                padding-right: Theme.sp-24;
+                spacing: Theme.sp-16;
+                Text {
+                    text: item.label;
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                    font-size: Theme.body-lg;
+                    font-weight: Theme.medium;
+                    color: item.danger ? Theme.danger : Theme.text-primary;
+                }
+                if item.checked: Image {
+                    source: Icons.check;
+                    width: Theme.icon-size * 0.8;
+                    height: self.width;
+                    y: (parent.height - self.height) / 2;
+                    colorize: Theme.accent;
+                }
             }
             FocusRing {
                 shown: i == index;

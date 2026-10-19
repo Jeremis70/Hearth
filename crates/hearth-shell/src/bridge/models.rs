@@ -9,12 +9,13 @@ use hearth_core::library::LibraryEntry;
 use hearth_core::model::GameId;
 use hearth_core::systems::Systems;
 use hearth_platform::network::{NetworkBackend, WifiNetwork};
-use slint::{Color, ComponentHandle, ModelRc, SharedString, VecModel};
+use slint::{Color, ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
+use super::art::{ArtMap, ConsoleIcons};
 use crate::{AppWindow, HomeData, HomeTile, SettingsCategory, SettingsData, TileKind, WifiRow};
 
-/// Placeholder art gradients, picked per game from a hash of its id.
-/// TODO(M4): SteamGridDB art.
+/// Placeholder art gradients, picked per game from a hash of its id, shown until (or
+/// instead of) real art.
 const ART: [(u32, u32); 8] = [
     (0x3B5B3A, 0x1A2218),
     (0x2E6F6A, 0x13242B),
@@ -70,6 +71,25 @@ pub fn format_session_total(played: Duration) -> String {
     }
 }
 
+/// "1.4 GB", "12.0 MB", "512 KB" (powers of 1024, like file managers).
+pub fn format_size(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["KB", "MB", "GB", "TB"];
+    if bytes < 1024 {
+        return format!("{bytes} B");
+    }
+    let mut value = bytes as f64 / 1024.0;
+    let mut unit = 0;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{value:.0} {}", UNITS[unit])
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
 /// "last played today / yesterday / 3 days ago", from Unix seconds.
 pub fn format_last_played(last_played: Option<i64>, now: i64) -> Option<String> {
     let days = (now - last_played?).max(0) / 86_400;
@@ -88,12 +108,16 @@ pub fn home_tiles(
     systems: &Systems,
     running: Option<&GameId>,
     now: i64,
+    art: &ArtMap,
+    icons: &mut ConsoleIcons,
 ) -> Vec<HomeTile> {
     let mut ordered: Vec<&LibraryEntry> = entries.iter().collect();
     // Stable sort keeps the library's recent-first order for everything else.
     ordered.sort_by_key(|e| Some(&e.game.id) != running);
     let games = ordered.into_iter().map(|e| {
         let (art_a, art_b) = art_for(&e.game.id);
+        let tile_art = art.get(&e.game.id).cloned().unwrap_or_default();
+        let icon = icons.icon(e.game.system.as_str(), systems);
         let badge = systems
             .get(&e.game.system)
             .map_or_else(|| e.game.system.to_string(), |s| s.short.clone());
@@ -110,6 +134,14 @@ pub fn home_tiles(
             art_a,
             art_b,
             running: Some(&e.game.id) == running,
+            favorite: e.favorite,
+            art: tile_art.grid,
+            hero: tile_art.hero,
+            hero_blur: tile_art.hero_blur,
+            logo: tile_art.logo,
+            console_icon: icon.image,
+            console_icon_tint: icon.tint,
+            monogram: icon.monogram.into(),
         }
     });
     let fixed = [
@@ -144,15 +176,30 @@ pub fn home_tiles(
         kind,
         art_a: rgb(art),
         art_b: rgb(0x0C0B0A),
-        running: false,
+        ..HomeTile::default()
     });
     games.chain(fixed).collect()
 }
 
-/// Replaces the Home tile row.
+/// Updates the Home tile row: row by row when the same tiles are there in the same order (so
+/// Home keeps its tile elements and their animations), else replaced.
 pub fn set_tiles(app: &AppWindow, tiles: Vec<HomeTile>) {
-    app.global::<HomeData>()
-        .set_tiles(ModelRc::from(Rc::new(VecModel::from(tiles))));
+    let home = app.global::<HomeData>();
+    let current = home.get_tiles();
+    let same_ids = current.row_count() == tiles.len()
+        && current
+            .iter()
+            .zip(&tiles)
+            .all(|(old, new)| old.id == new.id);
+    if same_ids {
+        for (i, tile) in tiles.into_iter().enumerate() {
+            if current.row_data(i).as_ref() != Some(&tile) {
+                current.set_row_data(i, tile);
+            }
+        }
+    } else {
+        home.set_tiles(ModelRc::from(Rc::new(VecModel::from(tiles))));
+    }
 }
 
 /// Settings categories with fake status values (network status comes from the backend).
@@ -162,6 +209,7 @@ fn settings_categories(network_status: &str) -> Vec<SettingsCategory> {
         ("folders", "Game folders", "2 folders"),
         ("emulators", "Emulators", "5 detected"),
         ("controllers", "Controllers", "1 connected"),
+        ("display", "Display & sound", ""),
         (
             "system",
             "System",
@@ -195,7 +243,10 @@ fn wifi_row(n: &WifiNetwork) -> WifiRow {
 
 /// Installs the static models and wires callbacks for not-yet-implemented actions.
 pub fn install(app: &AppWindow) {
-    set_tiles(app, home_tiles(&[], &Systems::default(), None, 0));
+    app.global::<HomeData>()
+        .set_tiles(ModelRc::from(Rc::new(VecModel::from(
+            Vec::<HomeTile>::new(),
+        ))));
     let home = app.global::<HomeData>();
     home.on_activated(|what, id| {
         tracing::info!(%what, %id, "not implemented in M0");
@@ -266,7 +317,20 @@ mod tests {
             entry("c", "Banjo", None, 0),
         ];
         let running = GameId::new("b");
-        let tiles = home_tiles(&entries, &systems, Some(&running), 1_000 + 86_400);
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("no-packs-here");
+        let mut icons = ConsoleIcons::new(hearth_core::packs::Resolver::new(
+            &dir,
+            &dir,
+            &hearth_core::config::Config::default(),
+        ));
+        let tiles = home_tiles(
+            &entries,
+            &systems,
+            Some(&running),
+            1_000 + 86_400,
+            &ArtMap::new(),
+            &mut icons,
+        );
         let titles: Vec<_> = tiles.iter().map(|t| t.title.to_string()).collect();
         assert_eq!(
             titles,
@@ -285,6 +349,9 @@ mod tests {
         assert_eq!(tiles[1].subtitle, "1 h played · last played yesterday");
         assert_eq!(tiles[2].subtitle, "Not played yet");
         assert_eq!(tiles[3].kind, TileKind::Library);
+        // No icon files anywhere: the monogram.
+        assert_eq!(tiles[0].monogram, "N64");
+        assert_eq!(tiles[0].art.size().width, 0);
     }
 
     #[test]
@@ -315,6 +382,9 @@ mod tests {
             format_session_total(Duration::from_secs(61 * 60)),
             "played 1 h 01 min"
         );
+        assert_eq!(format_size(900), "900 B");
+        assert_eq!(format_size(512 * 1024), "512 KB");
+        assert_eq!(format_size(1_468_006_400), "1.4 GB");
         assert_eq!(format_last_played(None, 0), None);
         assert_eq!(
             format_last_played(Some(100), 200).as_deref(),

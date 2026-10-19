@@ -24,6 +24,7 @@ hearth-platform.workspace = true
 nix.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
+image.workspace = true
 clap.workspace = true
 slint.workspace = true
 raw-window-handle.workspace = true

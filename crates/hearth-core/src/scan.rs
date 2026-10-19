@@ -9,6 +9,12 @@ use crate::model::{Game, GameId};
 use crate::systems::Systems;
 use crate::title::clean_title;
 
+/// Whether `root` can be scanned at all (exists and is a readable folder). A missing or
+/// unmounted root must not be mistaken for an empty one: that would drop every game.
+pub fn root_is_available(root: &Path) -> bool {
+    std::fs::read_dir(root).is_ok()
+}
+
 /// Scans `root` for games of every known system, sorted by title.
 ///
 /// A missing root or system folder isn't an error: it just has no games.
@@ -125,5 +131,7 @@ mod tests {
         let dir = tempdir();
         let games = scan_roms(&dir.path().join("nope"), &Systems::builtin().unwrap());
         assert!(games.is_empty());
+        assert!(!root_is_available(&dir.path().join("nope")));
+        assert!(root_is_available(dir.path()));
     }
 }

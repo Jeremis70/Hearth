@@ -56,8 +56,8 @@ pub struct AssetRef {
     pub extension: String,
 }
 
-/// Errors talking to a provider. All of them are worth retrying later: the network was down,
-/// the service failed, or the key was refused (and may be fixed).
+/// Errors talking to a provider. Most are worth retrying later (the network was down, the
+/// service failed, the key was refused and may be fixed); see [`ProviderError::is_permanent`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ProviderError {
     /// No connection, DNS failure, timeout.
@@ -74,6 +74,15 @@ pub enum ProviderError {
     /// The answer wasn't what the API documents.
     #[error("unexpected answer: {0}")]
     Invalid(String),
+}
+
+impl ProviderError {
+    /// A request the service will refuse every time (HTTP 4xx other than 401, 403, 408 and
+    /// 429): retrying it can't help.
+    pub fn is_permanent(&self) -> bool {
+        matches!(self, Self::Http { status, .. }
+            if (400..500).contains(status) && ![401, 403, 408, 429].contains(status))
+    }
 }
 
 /// A source of game artwork. Blocking: called from the art worker thread only.

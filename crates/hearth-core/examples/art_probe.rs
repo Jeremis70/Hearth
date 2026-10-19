@@ -45,9 +45,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         println!("match: {} {}", hit.id, hit.name);
         for kind in ArtKind::ALL {
-            match provider.best_asset(hit.id, kind)? {
-                Some(asset) => println!("  {}: {}", kind.name(), asset.url),
-                None => println!("  {}: none", kind.name()),
+            match provider.best_asset(hit.id, kind) {
+                Ok(Some(asset)) => println!("  {}: {}", kind.name(), asset.url),
+                Ok(None) => println!("  {}: none", kind.name()),
+                Err(err) => println!("  {}: error: {err}", kind.name()),
             }
         }
         return Ok(());

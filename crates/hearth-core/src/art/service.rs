@@ -316,8 +316,14 @@ impl Worker {
         // download later only re-downloads what's missing.
         let mut assets = Vec::new();
         for kind in kinds {
-            if let Some(asset) = provider.best_asset(sgdb_id, kind)? {
-                assets.push((kind, asset));
+            match provider.best_asset(sgdb_id, kind) {
+                Ok(Some(asset)) => assets.push((kind, asset)),
+                Ok(None) => {}
+                // One kind the service always refuses mustn't hold back the others.
+                Err(err) if err.is_permanent() => {
+                    tracing::warn!(%key, kind = kind.name(), "skipping this kind of art: {err}");
+                }
+                Err(err) => return Err(err.into()),
             }
         }
         let mut all_kinds: Vec<ArtKind> = match self.library.art_status(key)? {
@@ -691,5 +697,73 @@ mod tests {
         assert_eq!(library.art_status(&tp).unwrap(), None);
         assert!(s.cache.dir(&oot).exists());
         assert!(library.art_status(&oot).unwrap().is_some());
+    }
+
+    /// Refuses every logo request like a bad query would (HTTP 400).
+    struct NoLogos(Arc<MockMetadataProvider>);
+
+    impl MetadataProvider for NoLogos {
+        fn search(
+            &self,
+            name: &str,
+        ) -> Result<Vec<crate::art::provider::CatalogGame>, ProviderError> {
+            self.0.search(name)
+        }
+        fn best_asset(
+            &self,
+            id: u64,
+            kind: ArtKind,
+        ) -> Result<Option<crate::art::provider::AssetRef>, ProviderError> {
+            if kind == ArtKind::Logo {
+                return Err(ProviderError::Http {
+                    status: 400,
+                    what: "/logos/game".into(),
+                });
+            }
+            self.0.best_asset(id, kind)
+        }
+        fn download(
+            &self,
+            asset: &crate::art::provider::AssetRef,
+        ) -> Result<Vec<u8>, ProviderError> {
+            self.0.download(asset)
+        }
+    }
+
+    #[test]
+    fn a_kind_refused_for_good_is_skipped_not_queued() {
+        let s = setup();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let sink = events.clone();
+        let mut worker = Worker {
+            cache: s.cache.clone(),
+            library: Library::open(&s.db).unwrap(),
+            provider: Some(Box::new(NoLogos(catalog()))),
+            events: Box::new(move |e| sink.lock().unwrap().push(e)),
+            games: HashMap::new(),
+            warned_no_key: false,
+        };
+        worker.load(s.games.clone());
+        let events = events.lock().unwrap().clone();
+        let (tp, _) = last_art(&events, "tp");
+        assert!(tp.grid.is_some() && tp.hero.is_some());
+        assert_eq!(tp.logo, None);
+        assert!(worker.library.art_queue().unwrap().is_empty());
+
+        assert!(
+            !ProviderError::Http {
+                status: 401,
+                what: String::new()
+            }
+            .is_permanent()
+        );
+        assert!(
+            !ProviderError::Http {
+                status: 503,
+                what: String::new()
+            }
+            .is_permanent()
+        );
+        assert!(!ProviderError::Network(String::new()).is_permanent());
     }
 }

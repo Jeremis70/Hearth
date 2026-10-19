@@ -24,7 +24,7 @@ We only write our own component when no existing one does what we need. Summary 
 | Wi-Fi / Ethernet | **NetworkManager** via `nmrs` | Settings screens |
 | Power (suspend/reboot/off) | **logind** via `logind-zbus` | Buttons |
 | Steam library discovery | `steamlocate` | Steam `LibrarySource` + `Runtime` |
-| Uniform grid art | **SteamGridDB** via `steamgriddb_api` | Cache |
+| Uniform grid art | **SteamGridDB** API v2 (via `ureq`) | `MetadataProvider`, cache |
 | UI toolkit | **Slint** (winit backend) | All screens |
 | Dev-time input without InputPlumber | `gilrs` | Small input adapter |
 
@@ -89,14 +89,13 @@ hearth/
 |---|---|---|
 | `slint`, `slint-build` | 1.18 | UI, `.slint` compiled at build time |
 | `gilrs` | 0.11 | Controller input on the dev laptop / non-InputPlumber systems |
-| `zbus` | 5.19 | D-Bus client for InputPlumber, blocking API (no tokio). Not 6.0: it needs rustc 1.89 and the workspace targets 1.88 |
+| `zbus` | 6.0 | D-Bus client for InputPlumber, blocking API (no tokio). 6.0 needs rustc 1.89, which is the workspace's `rust-version` |
 | `nmrs` | 3.5 | NetworkManager: list/connect Wi-Fi, device state, change monitoring (async, tokio) |
 | `logind-zbus` | 5.3 | Suspend / reboot / power off |
 | `x11rb` | 0.14 | Setting gamescope X11 properties |
 | `tokio` | 1.x | Runtime for the services thread (nmrs/zbus) |
 | `steamlocate` | 2.1 | Find Steam install, libraries, installed apps |
-| `steamgriddb_api` | 0.3 | Uniform grid art (free API key) |
-| `ureq` | 3.x | Simple blocking HTTP (Steam Web API, art) |
+| `ureq` | 3.x | Simple blocking HTTP (Steam Web API, SteamGridDB art; its v2 API is a few GETs, so no client crate) |
 | `rusqlite` (feature `bundled`) | 0.40 | Library cache, playtime, favorites |
 | `walkdir` | 2.5 | Folder scanning |
 | `notify` | 8.x stable (9 is RC) | Watch game folders |
@@ -140,7 +139,7 @@ pub trait InputBackend: Send {
 Hearth's first write, else gilrs, with the reason logged). Verified API, quirks and polkit
 behaviour: `docs/spikes/inputplumber.md`.
 
-**InputPlumber backend (appliance)** (`hearth-platform::input::inputplumber`, zbus 5 blocking,
+**InputPlumber backend (appliance)** (`hearth-platform::input::inputplumber`, zbus 6 blocking,
 own threads). InputPlumber exposes one composite device per physical controller
 (`org.shadowblip.Input.CompositeDevice`) with an `InterceptMode` property (0 None, 1 Pass,
 2 Always). Intercepted input arrives as `InputEvent(name, value)` signals (`ui_accept`,

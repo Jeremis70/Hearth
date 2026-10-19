@@ -253,6 +253,7 @@ mod tests {
             },
             last_played: last,
             playtime: Duration::from_secs(mins * 60),
+            favorite: false,
         }
     }
 

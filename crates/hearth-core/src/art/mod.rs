@@ -4,9 +4,11 @@
 pub mod cache;
 pub mod identity;
 pub mod provider;
+pub mod service;
 pub mod steamgriddb;
 
 pub use cache::{ArtCache, GameArt};
 pub use identity::{ArtKey, Identity, identify};
 pub use provider::{ArtKind, MetadataProvider, MockMetadataProvider, ProviderError};
+pub use service::{ArtEvent, ArtService, remove_orphaned_art};
 pub use steamgriddb::SteamGridDb;

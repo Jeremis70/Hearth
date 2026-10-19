@@ -19,9 +19,15 @@ export component OptionsMenu inherits Rectangle {
     width: 460px * Theme.scale;
     height: layout.preferred-height;
     border-radius: Theme.radius-lg;
-    background: Theme.surface-raised;
+    // Opaque: it opens over the tile row and the label beside the focused tile.
+    background: Theme.bg-base;
     drop-shadow-blur: Theme.sp-32;
     drop-shadow-color: #00000080;
+
+    Rectangle {
+        border-radius: Theme.radius-lg;
+        background: Theme.surface-raised;
+    }
 
     layout := VerticalLayout {
         padding: Theme.sp-12;

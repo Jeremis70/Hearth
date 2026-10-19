@@ -1,6 +1,6 @@
 # Hearth status
 
-Last updated: 2026-10-18. Read this first, then `AGENTS.md` (rules, commands),
+Last updated: 2026-10-19. Read this first, then `AGENTS.md` (rules, commands),
 `.github/instructions/rust.instructions.md` and `docs/plan.md` (architecture).
 
 ## 0. Where we are, and how we work
@@ -13,8 +13,28 @@ Last updated: 2026-10-18. Read this first, then `AGENTS.md` (rules, commands),
 - The Capture button (a notice only for now).
 - InputPlumber input (`docs/spikes/inputplumber.md`): menus hidden from games, Guide over D-Bus,
   live remapping through profiles, the virtual Elite pad for every emulator.
+- Art and Home round (2026-10-19): per-game static art from SteamGridDB, the new Home row,
+  the Options menu with Favorite and Properties, asset packs for console icons (sounds: names
+  only).
 
-Latest commits, newest first (things going away, 2026-10-18):
+Art and Home round, 2026-10-19, newest first:
+- `89d85b9`: opaque Options menu.
+- `6d7351a`: design docs: game artwork (§6), asset packs and logical names (§7), Home row.
+- `505c38d`: `art_probe` example (what SteamGridDB would match, read-only).
+- `55496c1`: Home redesign: art on tiles and background, sliding row, icon + name beside the
+  focused tile, logo in the hero zone, Options menu, Properties, Display & sound pack picker,
+  `--mock-network`.
+- `85389e0`: an unreachable games root keeps the library (and art) as it was.
+- `ebc8332`: library migration under the write lock (library and art threads open it at once).
+- `ed7657f`: Hearth's own console glyphs (`assets/icons/consoles/`).
+- `d8fcd4c`: asset packs and the per-file fallback resolver (`hearth-core::packs`).
+- `c5559a2`, `6d1a1a0`: art worker, `art`/`art_queue` tables, favorites column.
+- `0627c40`: identification, SteamGridDB provider (ureq), art cache, pre-blurred hero.
+- `4eb3206`: ROM header reader shared by controls keys and art (`rom_header.rs`).
+- `81750ce`: `<config>/hearth.toml` (SteamGridDB key, pack choices).
+- `039ca31`: plan updated for zbus 6 / rust 1.89 and SteamGridDB over ureq.
+
+Before that (things going away, 2026-10-18):
 - `980df42`: controller notices (battery, connect), freeze when the game's controller goes,
   ghost devices stripped again on reconnect.
 - `f4f5704`: emulators see only the virtual pad (SDL allowlist, RetroArch `sdl2` driver and
@@ -81,6 +101,16 @@ The working tree is clean.
    `DISPLAY=:1 cargo run -p hearth-platform --example gamescope_probe -- windows|props`.
 
 **Next / open:**
+- Art round, not verified yet (no SteamGridDB key in Claude's environment):
+  - a real fetch: OoT and TP grid/hero/logo after a first run, then the same art offline from
+    the cache. Check by hand with
+    `HEARTH_HOME=./.dev-data cargo run -p hearth-core --example art_probe -- --rom n64 <rom>`;
+  - Options menu and Favorite with the controller (done through the dev socket only).
+- Art round follow-ups:
+  - "Refresh artwork", "Change artwork", "Wrong game?" (shown disabled in Properties);
+  - a NetworkManager connectivity signal instead of the 60 s queue check;
+  - the seam between the sharp and the blurred hero is softened by a gradient, not blended;
+  - UI sounds (playback) next round; the `ps5-sounds` pack has no `ambient_loop`.
 - Not tested by the user yet (all done through the dev socket or unit tests). Ask how these went:
   - button test with real presses (held highlights, trigger bars, stick dots, PS short/long);
   - menu navigation with the stick and D-pad now that gilrs runs unfiltered;
@@ -102,7 +132,7 @@ The working tree is clean.
     icons aren't in the repo, the card uses Lucide's gamepad.
 - Later milestones (`docs/plan.md`):
   - Capture: panel and hold-to-screenshot, see `docs/design/overlay.md` §10.
-  - ES-DE import, Steam, overlay dock actions, Home row redesign.
+  - ES-DE import, Steam, overlay dock actions, library grid, Uninstall.
 
 ## 1. What exists
 
@@ -234,6 +264,25 @@ The working tree is clean.
 - `cargo run -p hearth-platform --example pad_probe -- 10` lists pads and raw events
   (read-only).
 
+**Art, Home and packs** (art round)
+- `hearth-core::art`: `identity.rs` (art key `<system>/<serial>` or `<system>/name-<fnv64 of the
+  cleaned title>`, search names, match selection), `provider.rs` (`MetadataProvider`,
+  `MockMetadataProvider`), `steamgriddb.rs`, `cache.rs` (paths, local overrides, blurred hero),
+  `service.rs` (the `hearth-art` worker, `remove_orphaned_art`).
+- SQLite (`library.rs`, `user_version` 1): `games.favorite`, `games.art_key`, `art` (match or
+  `no_match`, kinds found), `art_queue` (network/HTTP errors only, backoff 5 min doubling to 6 h;
+  everything queued is retried at startup).
+- Art is deleted only for games removed by a scan whose system folder still exists.
+- Shell: `bridge/art.rs` decodes on the art worker into `SharedPixelBuffer`s; tiles are updated
+  in place (`models::set_tiles`). Console icons: `ConsoleIcons` over `packs::Resolver`.
+- `--mock-network`: an always-offline provider (cache only, games go to the queue).
+- Packs: `.dev-data/packs/my-console-icons` and `.dev-data/packs/ps5-sounds` (the user's files,
+  moved out of `assets/`; unmapped sounds in `sounds/unused/`). `hearth.toml` currently selects
+  `my-console-icons`.
+- Dev games root with dummies for the end-of-row case: `--games-dir ./.dev-data/games` (links to
+  the two real ROMs plus 15 empty `Dummy … (USA).z64`). Running with it and then with `~/Games`
+  removes the dummies from the library again.
+
 ## 2. Known issues and untested areas
 
 - Untested by hand: everything in §0 "Next / open", plus:
@@ -251,8 +300,9 @@ The working tree is clean.
 - Performance: fullscreen nested gamescope runs at about 40 fps on Balanced and about 60 on
   Performance (the nested chain on an i5-1145G7, not Hearth).
 - Cosmetic: at startup the tile row animates from 1280×720 to fullscreen.
-- Not done: Home row redesign, Favorite/Uninstall/Properties, overlay dock actions other than
-  Controls, ES-DE import, Steam.
+- Not done: Uninstall, overlay dock actions other than Controls, ES-DE import, Steam.
+- A games root that is missing at startup now leaves the library untouched (before, every game
+  and its history was dropped).
 - InputPlumber: physical Elite/Series paddle and Share names in profiles are unverified (no such
   pad here). Other controllers than the DualSense untested. On a box whose user isn't in
   `wheel`/`inputplumber`, polkit refuses the writes and auto falls back to gilrs.
@@ -281,7 +331,9 @@ The working tree is clean.
   - library: `.dev-data/data/library.sqlite3`.
 - **FPS counter:** `HEARTH_RETROARCH_ARGS="--appendconfig=data/dev/retroarch-fps.cfg"`.
 - **Checks:** `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
-  `cargo test --workspace` (core 83, platform 35, shell 13 tests).
+  `cargo test --workspace` (core 123, platform 35, shell 15 tests).
+- **Artwork:** set `HEARTH_STEAMGRIDDB_KEY` or `[art] steamgriddb_key` in
+  `.dev-data/config/hearth.toml` (gitignored). Without it: placeholders and one log line.
 
 ## 4. Gotchas
 

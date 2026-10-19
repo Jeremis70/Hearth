@@ -120,6 +120,7 @@ pub struct DataDirs {
     retroarch: PathBuf,
     dolphin: PathBuf,
     runtime: PathBuf,
+    packs: PathBuf,
 }
 
 impl DataDirs {
@@ -142,6 +143,7 @@ impl DataDirs {
                     retroarch: dirs.data_dir().join("retroarch"),
                     dolphin: dirs.data_dir().join("dolphin"),
                     runtime: dirs.data_dir().join("runtime"),
+                    packs: dirs.data_dir().join("packs"),
                 })
             }
         }
@@ -155,6 +157,7 @@ impl DataDirs {
             retroarch: root.join("retroarch"),
             dolphin: root.join("dolphin"),
             runtime: root.join("runtime"),
+            packs: root.join("packs"),
         }
     }
 
@@ -206,6 +209,22 @@ impl DataDirs {
         &self.runtime
     }
 
+    /// Installed asset packs, one folder each (`<packs>/<id>/`). Not created: it only
+    /// exists once someone installs a pack.
+    pub fn packs(&self) -> &Path {
+        &self.packs
+    }
+
+    /// Hearth's settings file.
+    pub fn config_file(&self) -> PathBuf {
+        self.config.join("hearth.toml")
+    }
+
+    /// Cached game artwork, one folder per game key.
+    pub fn art_cache(&self) -> PathBuf {
+        self.cache.join("art")
+    }
+
     /// The library database file.
     pub fn library_db(&self) -> PathBuf {
         self.data.join("library.sqlite3")
@@ -224,6 +243,12 @@ mod tests {
         assert_eq!(dirs.cache(), Path::new("./.dev-data/cache"));
         assert_eq!(dirs.retroarch(), Path::new("./.dev-data/retroarch"));
         assert_eq!(dirs.dolphin(), Path::new("./.dev-data/dolphin"));
+        assert_eq!(dirs.packs(), Path::new("./.dev-data/packs"));
+        assert_eq!(dirs.art_cache(), Path::new("./.dev-data/cache/art"));
+        assert_eq!(
+            dirs.config_file(),
+            Path::new("./.dev-data/config/hearth.toml")
+        );
         assert_eq!(
             dirs.library_db(),
             Path::new("./.dev-data/data/library.sqlite3")

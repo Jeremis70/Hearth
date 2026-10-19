@@ -4,12 +4,11 @@
 //! Every write is a polkit `auth_admin` action in InputPlumber; members of `wheel` or
 //! `inputplumber` are allowed without a prompt by its shipped rules. Reads are open to anyone.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
-use zbus::blocking::Connection;
-use zbus::blocking::fdo::ObjectManagerProxy;
-use zbus::zvariant::{OwnedObjectPath, OwnedValue};
+use zbus::fdo::ObjectManagerProxy;
+use zbus::{Connection, OwnedObjectPath, OwnedVariant};
 
 use crate::input::{Connection as PadConnection, PadInfo, Power};
 
@@ -27,8 +26,7 @@ pub const MIN_VERSION: (u32, u32) = (0, 69);
 #[zbus::proxy(
     interface = "org.shadowblip.InputManager",
     default_service = "org.shadowblip.InputPlumber",
-    default_path = "/org/shadowblip/InputPlumber/Manager",
-    gen_async = false
+    default_path = "/org/shadowblip/InputPlumber/Manager"
 )]
 trait Manager {
     #[zbus(property)]
@@ -43,8 +41,7 @@ trait Manager {
 
 #[zbus::proxy(
     interface = "org.shadowblip.Input.CompositeDevice",
-    default_service = "org.shadowblip.InputPlumber",
-    gen_async = false
+    default_service = "org.shadowblip.InputPlumber"
 )]
 trait CompositeDevice {
     fn load_profile_path(&self, path: &str) -> zbus::Result<()>;
@@ -81,8 +78,7 @@ trait CompositeDevice {
 
 #[zbus::proxy(
     interface = "org.shadowblip.Input.Source.UdevDevice",
-    default_service = "org.shadowblip.InputPlumber",
-    gen_async = false
+    default_service = "org.shadowblip.InputPlumber"
 )]
 trait UdevDevice {
     #[zbus(property)]
@@ -156,10 +152,10 @@ pub struct Client {
 impl Client {
     /// Connects to the system bus and checks that the daemon runs and is recent enough.
     pub fn connect() -> Result<Self, ClientError> {
-        let conn = Connection::system()?;
-        let dbus = zbus::blocking::fdo::DBusProxy::new(&conn)?;
-        let name = zbus::names::BusName::try_from(SERVICE).map_err(zbus::Error::from)?;
-        if !dbus.name_has_owner(name)? {
+        let conn = zbus::block_on(Connection::system())?;
+        let dbus = zbus::block_on(zbus::fdo::DBusProxy::new(&conn))?;
+        let name = zbus::names::BusName::try_from(SERVICE)?;
+        if !zbus::block_on(dbus.name_has_owner(name))? {
             return Err(ClientError::NotRunning);
         }
         let client = Self { conn };
@@ -176,54 +172,58 @@ impl Client {
     }
 
     fn manager(&self) -> Result<ManagerProxy<'_>, ClientError> {
-        Ok(ManagerProxy::new(&self.conn)?)
+        Ok(zbus::block_on(ManagerProxy::new(&self.conn))?)
     }
 
     fn device(&self, path: &str) -> Result<CompositeDeviceProxy<'_>, ClientError> {
-        Ok(CompositeDeviceProxy::builder(&self.conn)
-            .path(path.to_owned())?
-            // Properties change behind our back (Guide switches Pass to Always without a
-            // PropertiesChanged signal), so always read them fresh.
-            .cache_properties(zbus::proxy::CacheProperties::No)
-            .build()?)
+        Ok(zbus::block_on(
+            CompositeDeviceProxy::builder(&self.conn)
+                .path(path.to_owned())
+                // Properties change behind our back (Guide switches Pass to Always without a
+                // PropertiesChanged signal), so always read them fresh.
+                .cache_properties(zbus::proxy::CacheProperties::No)
+                .build(),
+        )?)
     }
 
     /// The daemon's version ("0.82.0").
     pub fn version(&self) -> Result<String, ClientError> {
-        Ok(self.manager()?.version()?)
+        Ok(zbus::block_on(self.manager()?.version())?)
     }
 
     /// Whether InputPlumber manages every supported controller, not only built-in ones.
     pub fn manage_all(&self) -> Result<bool, ClientError> {
-        Ok(self.manager()?.manage_all_devices()?)
+        Ok(zbus::block_on(self.manager()?.manage_all_devices())?)
     }
 
     /// See [`Client::manage_all`]. Turning it off releases external controllers (their raw
     /// devices come back). Held in the daemon's memory only.
     pub fn set_manage_all(&self, on: bool) -> Result<(), ClientError> {
-        Ok(self.manager()?.set_manage_all_devices(on)?)
+        Ok(zbus::block_on(self.manager()?.set_manage_all_devices(on))?)
     }
 
     /// Object paths of every composite device.
     pub fn composite_devices(&self) -> Result<Vec<String>, ClientError> {
         let objects = ObjectManagerProxy::builder(&self.conn)
-            .destination(SERVICE)?
-            .path(ROOT)?
-            .build()?
-            .get_managed_objects()?;
+            .destination(SERVICE)
+            .path(ROOT)
+            .build();
+        let objects = zbus::block_on(async { objects.await?.get_managed_objects().await })?;
         Ok(composite_paths(&objects))
     }
 
     /// A composite device's intercept mode (`None` for values Hearth doesn't use).
     pub fn intercept_mode(&self, device: &str) -> Result<Option<InterceptMode>, ClientError> {
-        Ok(InterceptMode::from_raw(
-            self.device(device)?.intercept_mode()?,
-        ))
+        Ok(InterceptMode::from_raw(zbus::block_on(
+            self.device(device)?.intercept_mode(),
+        )?))
     }
 
     /// Sets who receives a composite device's input.
     pub fn set_intercept_mode(&self, device: &str, mode: InterceptMode) -> Result<(), ClientError> {
-        Ok(self.device(device)?.set_intercept_mode(mode as u32)?)
+        Ok(zbus::block_on(
+            self.device(device)?.set_intercept_mode(mode as u32),
+        )?)
     }
 
     /// Loads a profile file. The daemon (root, its own working directory) opens it, so the path
@@ -231,19 +231,22 @@ impl Client {
     pub fn load_profile(&self, device: &str, profile: &Path) -> Result<(), ClientError> {
         let profile = std::path::absolute(profile)
             .map_err(|err| ClientError::DBus(format!("{}: {err}", profile.display())))?;
-        Ok(self
-            .device(device)?
-            .load_profile_path(&profile.to_string_lossy())?)
+        Ok(zbus::block_on(
+            self.device(device)?
+                .load_profile_path(&profile.to_string_lossy()),
+        )?)
     }
 
     /// The path of the profile a composite device has loaded.
     pub fn profile_path(&self, device: &str) -> Result<String, ClientError> {
-        Ok(self.device(device)?.profile_path()?)
+        Ok(zbus::block_on(self.device(device)?.profile_path())?)
     }
 
     /// Replaces a composite device's virtual devices (`"xbox-elite"`, `"keyboard"`, …).
     pub fn set_targets(&self, device: &str, targets: &[&str]) -> Result<(), ClientError> {
-        Ok(self.device(device)?.set_target_devices(targets)?)
+        Ok(zbus::block_on(
+            self.device(device)?.set_target_devices(targets),
+        )?)
     }
 
     /// The inputs a composite device produces ("Gamepad:Button:South", …). Empty for a device
@@ -251,17 +254,17 @@ impl Client {
     /// nodes in a composite device of their own next to the real one (a race when it takes
     /// the controller).
     pub fn capabilities(&self, device: &str) -> Result<Vec<String>, ClientError> {
-        Ok(self.device(device)?.capabilities()?)
+        Ok(zbus::block_on(self.device(device)?.capabilities())?)
     }
 
     /// The virtual devices a composite device feeds (object paths).
     pub fn targets(&self, device: &str) -> Result<Vec<String>, ClientError> {
-        Ok(self.device(device)?.target_devices()?)
+        Ok(zbus::block_on(self.device(device)?.target_devices())?)
     }
 
     /// The D-Bus target objects that emit a composite device's intercepted input.
     pub fn dbus_targets(&self, device: &str) -> Result<Vec<String>, ClientError> {
-        Ok(self.device(device)?.dbus_devices()?)
+        Ok(zbus::block_on(self.device(device)?.dbus_devices())?)
     }
 
     /// Hands a composite device back: input to its virtual devices, default profile.
@@ -275,25 +278,27 @@ impl Client {
     pub fn source_pad(&self, device: &str) -> Result<PadInfo, ClientError> {
         let composite = self.device(device)?;
         let mut sources = Vec::new();
-        for dev_path in composite.source_device_paths()? {
+        for dev_path in zbus::block_on(composite.source_device_paths())? {
             let Some(name) = source_object(&dev_path) else {
                 continue;
             };
-            let udev = UdevDeviceProxy::builder(&self.conn)
-                .path(name)?
-                .cache_properties(zbus::proxy::CacheProperties::No)
-                .build()?;
+            let udev = zbus::block_on(
+                UdevDeviceProxy::builder(&self.conn)
+                    .path(name)
+                    .cache_properties(zbus::proxy::CacheProperties::No)
+                    .build(),
+            )?;
             sources.push(SourceInfo {
                 dev_path,
-                name: udev.name().unwrap_or_default(),
-                vendor: udev.id_vendor().unwrap_or_default(),
-                product: udev.id_product().unwrap_or_default(),
-                bus: udev.id_bustype().unwrap_or_default(),
+                name: zbus::block_on(udev.name()).unwrap_or_default(),
+                vendor: zbus::block_on(udev.id_vendor()).unwrap_or_default(),
+                product: zbus::block_on(udev.id_product()).unwrap_or_default(),
+                bus: zbus::block_on(udev.id_bustype()).unwrap_or_default(),
             });
         }
-        let fallback_name = composite.name().unwrap_or_default();
+        let fallback_name = zbus::block_on(composite.name()).unwrap_or_default();
         let mut pad = pad_info(&sources, &fallback_name);
-        pad.id = match composite.persistent_id() {
+        pad.id = match zbus::block_on(composite.persistent_id()) {
             Ok(id) if !id.is_empty() => format!("inputplumber:{id}"),
             _ => format!("inputplumber:{device}"),
         };
@@ -383,7 +388,7 @@ fn power_from(status: &str, capacity: Option<u8>) -> Power {
 fn composite_paths(
     objects: &HashMap<
         OwnedObjectPath,
-        HashMap<zbus::names::OwnedInterfaceName, HashMap<String, OwnedValue>>,
+        BTreeMap<zbus::names::OwnedInterfaceName, HashMap<String, OwnedVariant>>,
     >,
 ) -> Vec<String> {
     let mut paths: Vec<String> = objects

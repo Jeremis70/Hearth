@@ -12,7 +12,9 @@
 pub mod client;
 
 use std::collections::{BTreeSet, HashMap};
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -20,9 +22,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use zbus::MatchRule;
-use zbus::blocking::MessageIterator;
+use zbus::MessageStream;
+use zbus::export::futures_core::Stream;
 use zbus::message::Type as MessageType;
-use zbus::zvariant::{OwnedObjectPath, OwnedValue};
+use zbus::{OwnedObjectPath, OwnedVariant};
 
 use self::client::{Client, ClientError, InterceptMode, SERVICE};
 use super::pad_state::{PadEvent, PadState};
@@ -73,6 +76,8 @@ const DEVICES_REFRESH: Duration = Duration::from_secs(10);
 const DEVICES_SETTLE: Duration = Duration::from_millis(300);
 /// How long InputPlumber may be gone before it counts as stopped rather than restarting.
 const RESTART_WAIT: Duration = Duration::from_secs(8);
+const SIGNAL_QUEUE: NonZeroUsize = NonZeroUsize::new(64).unwrap();
+const OWNER_QUEUE: NonZeroUsize = NonZeroUsize::new(8).unwrap();
 
 /// Controller input via InputPlumber, on its own thread.
 #[derive(Debug)]
@@ -216,26 +221,39 @@ enum Msg {
 /// Every signal under the daemon's objects (input events, devices coming and going), and its
 /// bus name changing owner. By path rather than by sender, so a restarted daemon (a new unique
 /// name) still matches.
-fn subscribe(client: &Client) -> Result<(MessageIterator, MessageIterator), zbus::Error> {
+fn subscribe(client: &Client) -> Result<(MessageStream, MessageStream), zbus::Error> {
     let objects = MatchRule::builder()
         .msg_type(MessageType::Signal)
-        .path_namespace("/org/shadowblip/InputPlumber")?
-        .build();
+        .path_namespace("/org/shadowblip/InputPlumber")
+        .build()?;
     let owner = MatchRule::builder()
         .msg_type(MessageType::Signal)
-        .sender("org.freedesktop.DBus")?
-        .interface("org.freedesktop.DBus")?
-        .member("NameOwnerChanged")?
-        .arg(0, SERVICE)?
-        .build();
+        .sender("org.freedesktop.DBus")
+        .interface("org.freedesktop.DBus")
+        .member("NameOwnerChanged")
+        .arg(0, SERVICE)
+        .build()?;
     Ok((
-        MessageIterator::for_match_rule(objects, client.connection(), Some(64))?,
-        MessageIterator::for_match_rule(owner, client.connection(), Some(8))?,
+        zbus::block_on(MessageStream::for_match_rule(
+            objects,
+            client.connection(),
+            Some(SIGNAL_QUEUE),
+        ))?,
+        zbus::block_on(MessageStream::for_match_rule(
+            owner,
+            client.connection(),
+            Some(OWNER_QUEUE),
+        ))?,
     ))
 }
 
-fn forward_owner_changes(changes: MessageIterator, tx: &Sender<Msg>) {
-    for message in changes.flatten() {
+fn forward_owner_changes(mut changes: MessageStream, tx: &Sender<Msg>) {
+    while let Some(message) = zbus::block_on(std::future::poll_fn(|cx| {
+        Pin::new(&mut changes).poll_next(cx)
+    })) {
+        let Ok(message) = message else {
+            continue;
+        };
         let Ok((name, _old, new)) = message.body().deserialize::<(String, String, String)>() else {
             continue;
         };
@@ -245,8 +263,10 @@ fn forward_owner_changes(changes: MessageIterator, tx: &Sender<Msg>) {
     }
 }
 
-fn forward_signals(signals: MessageIterator, tx: &Sender<Msg>) {
-    for message in signals {
+fn forward_signals(mut signals: MessageStream, tx: &Sender<Msg>) {
+    while let Some(message) = zbus::block_on(std::future::poll_fn(|cx| {
+        Pin::new(&mut signals).poll_next(cx)
+    })) {
         let Ok(message) = message else {
             continue;
         };
@@ -295,7 +315,7 @@ fn forward_signals(signals: MessageIterator, tx: &Sender<Msg>) {
 }
 
 /// The interfaces (with their properties) in an `InterfacesAdded` signal.
-type AddedInterfaces = HashMap<String, HashMap<String, OwnedValue>>;
+type AddedInterfaces = HashMap<String, HashMap<String, OwnedVariant>>;
 
 /// Whether an object path is a composite device (`…/CompositeDevice3`).
 fn is_composite_path(path: &str) -> bool {

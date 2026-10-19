@@ -10,6 +10,7 @@ pub mod library;
 pub mod model;
 pub mod paths;
 pub mod profiles;
+pub mod rom_header;
 pub mod runtime;
 pub mod scan;
 pub mod session;

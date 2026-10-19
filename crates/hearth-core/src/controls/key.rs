@@ -4,11 +4,11 @@
 //! keeps its controls wherever it lives. Without a readable serial, the cleaned title is used
 //! (`gc/title-the-legend-of-zelda`).
 
-use std::fs::File;
-use std::io::{self, Read, Seek, SeekFrom};
+use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::model::SystemId;
+use crate::rom_header;
 
 /// Which per-game controls files apply to a game.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,96 +87,22 @@ fn slug(title: &str) -> String {
     out.trim_end_matches('-').to_owned()
 }
 
-fn read_at(file: &mut File, offset: u64, buf: &mut [u8]) -> io::Result<()> {
-    file.seek(SeekFrom::Start(offset))?;
-    file.read_exact(buf)
-}
-
 fn read_serial(system: &SystemId, rom: &Path) -> io::Result<Option<String>> {
-    match system.as_str() {
-        "gc" | "wii" => disc_id(rom),
-        "n64" => n64_code(rom),
-        _ => Ok(None),
-    }
-}
-
-/// GameCube/Wii disc ID (6 characters) from ISO/GCM (also NKit), RVZ/WIA, CISO or WBFS.
-fn disc_id(rom: &Path) -> io::Result<Option<String>> {
-    let mut file = File::open(rom)?;
-    let mut magic = [0u8; 4];
-    read_at(&mut file, 0, &mut magic)?;
-    let offset = match &magic {
-        b"RVZ\x01" | b"WIA\x01" => 0x58,
-        b"CISO" => 0x8000,
-        b"WBFS" => 0x200,
-        _ => 0,
-    };
-    let mut id = [0u8; 6];
-    read_at(&mut file, offset, &mut id)?;
-    Ok(valid_serial(&id))
-}
-
-/// N64 game code (4 characters at 0x3B), in any of the three byte orders.
-fn n64_code(rom: &Path) -> io::Result<Option<String>> {
-    let mut header = [0u8; 0x40];
-    read_at(&mut File::open(rom)?, 0, &mut header)?;
-    match header[..4] {
-        [0x80, 0x37, 0x12, 0x40] => {}
-        // .v64: 16-bit words byte-swapped.
-        [0x37, 0x80, 0x40, 0x12] => header
-            .as_chunks_mut::<2>()
-            .0
-            .iter_mut()
-            .for_each(|w| w.swap(0, 1)),
-        // .n64: 32-bit words little-endian.
-        [0x40, 0x12, 0x37, 0x80] => header
-            .as_chunks_mut::<4>()
-            .0
-            .iter_mut()
-            .for_each(|w| w.reverse()),
-        _ => return Ok(None),
-    }
-    Ok(valid_serial(&header[0x3B..0x3F]))
-}
-
-fn valid_serial(bytes: &[u8]) -> Option<String> {
-    bytes
-        .iter()
-        .all(u8::is_ascii_alphanumeric)
-        .then(|| String::from_utf8_lossy(bytes).into_owned())
+    Ok(rom_header::read(system, rom)?.serial)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rom_header::tests::n64_rom;
     use crate::testdir::tempdir;
-
-    fn n64_rom(order: &str) -> Vec<u8> {
-        let mut rom = vec![0u8; 0x40];
-        rom[..4].copy_from_slice(&[0x80, 0x37, 0x12, 0x40]);
-        rom[0x3B..0x3F].copy_from_slice(b"CZLE");
-        match order {
-            "v64" => rom
-                .as_chunks_mut::<2>()
-                .0
-                .iter_mut()
-                .for_each(|w| w.swap(0, 1)),
-            "n64" => rom
-                .as_chunks_mut::<4>()
-                .0
-                .iter_mut()
-                .for_each(|w| w.reverse()),
-            _ => {}
-        }
-        rom
-    }
 
     #[test]
     fn n64_code_in_every_byte_order() {
         let dir = tempdir();
         for order in ["z64", "v64", "n64"] {
             let path = dir.path().join(format!("oot.{order}"));
-            std::fs::write(&path, n64_rom(order)).unwrap();
+            std::fs::write(&path, n64_rom(order, b"CZLE", "ZELDA")).unwrap();
             let key = GameKey::for_rom(&SystemId::new("n64"), &path, "OoT");
             assert_eq!(key.as_string(), "n64/CZLE", "{order}");
         }

@@ -9,6 +9,7 @@ pub mod config;
 pub mod controls;
 pub mod library;
 pub mod model;
+pub mod packs;
 pub mod paths;
 pub mod profiles;
 pub mod rom_header;

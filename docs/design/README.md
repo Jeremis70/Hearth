@@ -118,21 +118,26 @@ Respect a future "Reduce motion" setting: all durations multiply by a `Theme.mot
 ┌ top bar: [Games] [Media]                      search  settings  🎮 85%  5:26 PM ┐
 │ tile row: ▢ ▢ [■ focused] ▢ ▢ ▢ ▢ ▢ … Library  Media  Settings                 │
 │                                                                                 │
-│ hero zone (focused game):  TITLE (display)                                      │
-│                            [GameCube] · 12 h played · last played yesterday     │
-│                            [ ▶ Play ]  [ ⋯ ]                                    │
+│ hero zone (focused game):  LOGO (or TITLE in display)                           │
+│                            GameCube · 12 h played · last played yesterday       │
+│                            [ ▶ Play ]  [ ⋯ ]   (running: Resume · Close · ⋯)    │
 │                                                                                 │
 │ widget row: Running now · Storage · Controllers · Recently added media          │
 └──────────────────────────────────────────────────────────── Ⓐ Select  ☰ Options ┘
 ```
 
-- Background: focused game's art, pre-blurred variant behind widgets, `hero-vignette` on top, crossfade `slow`.
+- Background: the focused game's hero. The sharp hero spans the top of the screen at its own aspect ratio (behind the top bar, row and hero zone) and fades into the pre-blurred, downscaled hero stretched behind the widgets, darkened with `hero-vignette`. Two layers crossfade (`slow`) when the focused game or its art changes. Games without art show their placeholder gradient.
+- Tiles show the game's square grid art; until it arrives (or without any), a gradient with the title.
+- Hero zone: the game's logo (max 140 px tall, 640 px wide) instead of the title when one is cached; the metadata line is plain text ("N64 · 59 min played · last played today").
 - Tile row: recently played across all consoles (most recent first), then fixed tiles Game Library, Media, Settings. Running game gets a `success` dot.
 - **Fixed focus anchor (sliding window):** the focused tile always sits at the same x position (the first slot, at `safe-x`). Pressing Right/Left slides the whole row by one tile (`base` timing) instead of moving focus across the screen. Exception: near the end of the row, the row stops sliding when its last tile is fully visible, and focus moves the rest of the way. Never leave empty space to the right of the last tile.
 - **Label tucked beside the focused tile:** because the focused tile (`tile-focused`, 192) is taller than the others (`tile`, 128), the 64 px band below the following tiles is free. The focused item's name (`body-lg`) and console icon (24 px) sit there: left edge at focused tile's right edge + `tile-gap`, vertically aligned with the focused tile's bottom. Tiles carry no console badge themselves.
-- **Console icons:** original, simple monochrome glyphs in Lucide's style (2 px stroke), one per console family, in `assets/icons/consoles/`. Never use console makers' logos or trademarks; when no icon exists, use a short text monogram ("N64", "GC") in a `radius-sm` outline.
+- **Console icons:** come from the selected console-icon pack (§7), else Hearth's original monochrome glyphs in Lucide's style (2 px stroke, tinted `text-primary`) in `assets/icons/consoles/`. Hearth's own glyphs never use console makers' logos or trademarks; when no icon exists, a short text monogram ("N64", "GC") in a `radius-sm` outline. Pack icons are drawn as they are (they may be in colour).
+- When the focused tile is too close to the right edge for its label (less than 320 px), the label goes under the tile, right-aligned to it.
 - The hero zone is missing from `home.md` because the screenshot focused a system tile; it is the core of the PS5 feel and must be included.
-- Navigation: Left/Right in the tile row; Down → Play/⋯ buttons → widget row; Up from row → top bar; L1/R1 switch Games/Media; Options on a tile opens the game menu (Close game, Favorite, Uninstall, Properties).
+- Navigation: Left/Right in the tile row; Down → Play/⋯ buttons → widget row; Up from row → top bar; L1/R1 switch Games/Media; Options on a tile (or ⋯) opens the game menu.
+- **Game menu:** opens to the right of the focused tile (to its left at the end of the row): Play or Close game (whichever applies), Controls for this game, Favorite (toggle with a check mark; the menu stays open), Properties. Back, Options or Left closes it. Uninstall comes later.
+- **Properties:** a modal card with title, console, file path, size and the SteamGridDB match; "Change artwork" and "Wrong game?" are shown disabled ("Coming later"). Back closes it.
 - Focus starts on the most recent game, or on the running game if one exists.
 
 ### Media tab and Search (from `search.md`)
@@ -149,6 +154,7 @@ Portrait cover grid (`grid-cover`), filter chips under the top bar (All · Favor
 
 - Top level: centered list (1320 px wide), `row-height` rows with Lucide icon, label, and a **right-aligned status value** (Network: "Wi-Fi · Home-5G", Storage: "450 GB free", Controllers: "2 connected").
 - Categories: Network, Game folders, Emulators, Controllers, Display & sound, Storage, System.
+- Display & sound: "Console icons" and "UI sounds", each showing the selected pack and opening a list of "Hearth default" plus the installed packs with files for it (name, "by <author>"); a check marks the selection. Choosing saves it in `hearth.toml`; icons change at once.
 - Entering a category slides in a two-pane page from the right (`slow`): sub-items list on the left, details/actions on the right. Back returns.
 
 ### In-game overlay (from `overlay.md`)
@@ -175,9 +181,52 @@ Portrait cover grid (`grid-cover`), filter chips under the top bar (All · Favor
 
 `Tile`, `Card` (square / wide / portrait variants), `TopBar`, `TabStrip`, `Chip`, `Button` (primary / secondary / danger), `ListRow` (icon, label, value), `Widget`, `DockButton`, `SectionHeader`, `HintBar` (controller-aware glyphs), `OnScreenKeyboard`, `FolderPicker`, `ConfirmDialog`, `Toast`.
 
-## 6. Assets and licenses
+## 6. Game artwork
+
+- Per game, once: identify (ROM header first: GameCube game id + internal name, N64 game code + internal name; else the file name cleaned of No-Intro/Redump tags), search SteamGridDB, keep the match (its id is stored permanently), then fetch the top-voted static, safe (`nsfw`, `humor`, `epilepsy` off) grid (square, else closest to square), hero, logo and icon.
+- Cache: `<cache>/art/<art key>/` (`~/.cache/hearth/art/`, or `$HEARTH_HOME/cache/art/`), where the art key is `<system>/<serial>` or `<system>/name-<hash of the cleaned title>`. Never re-fetched unless files are missing (or a later "Refresh artwork").
+- Local files next to the ROM always win: `<rom stem>.png` (grid), `<rom stem>-hero.png`, `<rom stem>-logo.png`.
+- No match is remembered and not retried; network or HTTP errors put the game in a retry queue (startup, then with backoff while running).
+- API key: `HEARTH_STEAMGRIDDB_KEY`, else `[art] steamgriddb_key` in `hearth.toml`. Without one, only local and cached art is shown.
+
+## 7. Asset packs
+
+A pack replaces some of Hearth's console icons or UI sounds. It is a folder:
+
+```
+<packs>/<id>/                  # $HEARTH_HOME/packs/ in development, ~/.local/share/hearth/packs/ installed
+  pack.toml                    # optional
+  icons/consoles/<system>.svg  # or .png
+  sounds/<name>.ogg            # or .wav, .flac, .mp3
+```
+
+`pack.toml` (every field optional; the name defaults to the folder name):
+
+```toml
+name = "My console icons"
+author = "Someone"
+license = "CC-BY-4.0"
+notes = "Anything else"
+```
+
+Assets are looked up by **logical name**, in the pack selected for that category, then in Hearth's bundled defaults (`assets/`, same layout). Each file falls back on its own, so a partial pack works. A category is offered for a pack only when the pack has its folder.
+
+| Category | Logical names | Files |
+|---|---|---|
+| Console icons | `consoles/<system id>`: `gc`, `n64`, `wii`, `wiiu`, `psx`, `ps2`, `ps3`, … (ES-DE system ids) | `icons/consoles/<system>.svg\|.png` |
+| UI sounds | `sounds/move`, `sounds/accept`, `sounds/back`, `sounds/overlay_open`, `sounds/overlay_close`, `sounds/edge_bump`, `sounds/ambient_loop` | `sounds/<name>.ogg\|.wav\|.flac\|.mp3` |
+
+Hearth ships no sounds yet: a missing sound is logged once and stays silent. Playback arrives in a later round. The selection lives in `hearth.toml`:
+
+```toml
+[packs]
+console_icons = "my-console-icons"   # missing: Hearth default
+ui_sounds = "ps5-sounds"
+```
+
+## 8. Assets and licenses
 
 - Font: Manrope, SIL Open Font License, in `assets/fonts/` with its license file.
-- Icons: Lucide (ISC), in `assets/icons/` as SVG.
+- Icons: Lucide (ISC), in `assets/icons/` as SVG. Console glyphs in `assets/icons/consoles/` are Hearth's own.
 - Button glyphs: Kenney Input Prompts (CC0), in `assets/glyphs/`.
 - PS5 screenshots stay in `docs/reference/` (gitignored) and are never shipped.

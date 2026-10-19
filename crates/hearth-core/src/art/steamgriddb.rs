@@ -12,8 +12,6 @@ use ureq::Agent;
 use super::provider::{ArtKind, AssetRef, CatalogGame, MetadataProvider, ProviderError};
 
 const API: &str = "https://www.steamgriddb.com/api/v2";
-/// Formats the `image` crate decodes here (icons are often `.ico`, which it doesn't).
-const MIMES: &str = "image/png,image/jpeg,image/webp";
 /// Square grids, our tile shape.
 const SQUARE_GRIDS: &str = "512x512,1024x1024";
 /// Larger images aren't art anyone uploads on purpose.
@@ -116,7 +114,7 @@ impl SteamGridDb {
         let mut path = format!(
             "/{collection}/game/{id}?types=static&nsfw=false&humor=false&epilepsy=false\
              &mimes={}",
-            encode(MIMES)
+            encode(mimes(kind))
         );
         if let Some(dimensions) = dimensions {
             path.push_str(&format!("&dimensions={}", encode(dimensions)));
@@ -174,6 +172,17 @@ impl MetadataProvider for SteamGridDb {
             .limit(MAX_DOWNLOAD)
             .read_to_vec()
             .map_err(|err| ProviderError::Network(err.to_string()))
+    }
+}
+
+/// The formats to ask for: ones the `image` crate decodes here, among those the API accepts
+/// for each kind (any other value is an HTTP 400). Logos are PNG or WebP only; icons are PNG
+/// or `.ico`, which isn't decoded here.
+fn mimes(kind: ArtKind) -> &'static str {
+    match kind {
+        ArtKind::Grid | ArtKind::Hero => "image/png,image/jpeg,image/webp",
+        ArtKind::Logo => "image/png,image/webp",
+        ArtKind::Icon => "image/png",
     }
 }
 
@@ -284,6 +293,13 @@ mod tests {
             encode("The Legend of Zelda: Ocarina & Co/é"),
             "The%20Legend%20of%20Zelda%3A%20Ocarina%20%26%20Co%2F%C3%A9"
         );
+    }
+
+    #[test]
+    fn each_kind_asks_only_for_formats_the_api_accepts_for_it() {
+        assert!(!mimes(ArtKind::Logo).contains("jpeg"));
+        assert_eq!(mimes(ArtKind::Icon), "image/png");
+        assert!(mimes(ArtKind::Grid).contains("jpeg"));
     }
 
     #[test]

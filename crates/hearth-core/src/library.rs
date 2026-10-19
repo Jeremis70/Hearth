@@ -89,7 +89,7 @@ pub struct Library {
 impl Library {
     /// Opens (creating if needed) the database at `path`.
     pub fn open(path: &Path) -> Result<Self, LibraryError> {
-        let conn = Connection::open(path)?;
+        let mut conn = Connection::open(path)?;
         conn.busy_timeout(Duration::from_secs(5))?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS games (
@@ -102,11 +102,13 @@ impl Library {
             );",
         )?;
         // Schema version 0: games only; 1: favorites, art keys, art result and queue tables.
-        let version: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        // The version is read under the write lock, so two threads opening the database at
+        // once (library and art worker) don't both migrate.
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let version: i32 = tx.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if version < 1 {
-            conn.execute_batch(
-                "BEGIN;
-                 ALTER TABLE games ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0;
+            tx.execute_batch(
+                "ALTER TABLE games ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0;
                  ALTER TABLE games ADD COLUMN art_key TEXT;
                  CREATE TABLE IF NOT EXISTS art (
                      art_key TEXT PRIMARY KEY,
@@ -122,10 +124,10 @@ impl Library {
                      next_try INTEGER NOT NULL,
                      last_error TEXT NOT NULL
                  );
-                 PRAGMA user_version = 1;
-                 COMMIT;",
+                 PRAGMA user_version = 1;",
             )?;
         }
+        tx.commit()?;
         Ok(Self { conn })
     }
 
@@ -539,5 +541,28 @@ mod tests {
         assert_eq!(art_retry_delay(1), Duration::from_secs(300));
         assert_eq!(art_retry_delay(3), Duration::from_secs(1_200));
         assert_eq!(art_retry_delay(40), Duration::from_secs(6 * 3_600));
+    }
+
+    #[test]
+    fn opening_from_two_threads_at_once_migrates_once() {
+        let dir = tempdir();
+        let path = dir.path().join("l.sqlite3");
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE games (id TEXT PRIMARY KEY, title TEXT NOT NULL,
+                     system TEXT NOT NULL, path TEXT NOT NULL, last_played INTEGER,
+                     playtime_secs INTEGER NOT NULL DEFAULT 0);",
+            )
+            .unwrap();
+        let threads: Vec<_> = (0..4)
+            .map(|_| {
+                let path = path.clone();
+                std::thread::spawn(move || Library::open(&path).map(|_| ()))
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap().unwrap();
+        }
     }
 }

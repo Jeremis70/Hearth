@@ -47,8 +47,9 @@ enum Command {
     Library(Vec<Game>),
 }
 
-/// Handle to the art worker thread; dropping it stops the thread after its current job.
-#[derive(Debug)]
+/// Handle to the art worker thread; once every clone is dropped, the thread stops after its
+/// current job.
+#[derive(Debug, Clone)]
 pub struct ArtService {
     tx: Sender<Command>,
 }
@@ -231,10 +232,12 @@ impl Worker {
 
     fn run(&mut self, jobs: Vec<(ArtKey, Job)>) {
         let mut offline: Option<String> = None;
+        let mut queued = 0usize;
         for (key, job) in jobs {
             // Once the network is down, don't wait on it for every game: queue the rest.
             if let Some(error) = &offline {
                 self.queue(&key, error);
+                queued += 1;
                 continue;
             }
             match self.fetch(&key, job) {
@@ -247,8 +250,11 @@ impl Worker {
                 Err(FetchError::Provider(err)) => {
                     let error = err.to_string();
                     self.queue(&key, &error);
+                    queued += 1;
                     if matches!(err, ProviderError::Network(_)) {
                         offline = Some(error);
+                    } else {
+                        tracing::info!(%key, "artwork failed, will retry: {error}");
                     }
                 }
                 Err(err @ (FetchError::Library(_) | FetchError::Unknown)) => {
@@ -256,16 +262,17 @@ impl Worker {
                 }
             }
         }
+        if let Some(error) = offline {
+            tracing::info!(
+                games = queued,
+                "no network for artwork ({error}); queued, will retry"
+            );
+        }
     }
 
     fn queue(&self, key: &ArtKey, error: &str) {
-        match self.library.queue_art(key, error, unix_now()) {
-            Ok(entry) => tracing::info!(
-                %key,
-                attempts = entry.attempts,
-                "artwork needs the network, will retry: {error}"
-            ),
-            Err(err) => tracing::warn!("can't queue the art for {key}: {err}"),
+        if let Err(err) = self.library.queue_art(key, error, unix_now()) {
+            tracing::warn!("can't queue the art for {key}: {err}");
         }
     }
 

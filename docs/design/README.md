@@ -7,7 +7,7 @@ Source specs (analysis of PS5 reference screenshots, kept for layout ideas only)
 | `home.md` | Top bar, horizontal app row with enlarged focused tile, status pills, widget grid | **Home** |
 | `overlay.md` | Dimmed full-screen overlay: card carousel + bottom dock of round shortcuts | **In-game overlay** (Home short press) |
 | `search.md` | Search bar above horizontal rows of square and wide cards, L1/R1 tabs | **Media tab** layout + **global Search** |
-| `settings.md` | Centered single-column list of categories with icon, label, focus frame | **Settings** top level |
+| `settings.md` | Centered single-column list of categories with icon, label, focus frame | **Settings** category list (left pane) |
 
 **This file wins over the individual specs when they disagree.** The specs describe Sony's screens; this file describes Hearth.
 
@@ -127,9 +127,9 @@ Respect a future "Reduce motion" setting: all durations multiply by a `Theme.mot
 └────────────────────────────────────────────────────────────── Ⓐ Select  ☰ Options ┘
 ```
 
-- **Row contents:** a Welcome cell first (Hearth glyph, label "Home"), then the games (running game first, then most recently played), then Game Library last. Media and Settings are in the top bar, not in the row. Running game gets a `success` dot.
+- **Row contents:** a Welcome cell first (Hearth glyph, label "Welcome"), then the games (running game first, then most recently played), then Game Library last. Media and Settings are in the top bar, not in the row. Running game gets a `success` dot.
 - **Focus anchor (second slot):** the anchor is `safe-x + tile + tile-gap`; `row-offset = max(0, index − 1) × (tile + tile-gap)`.
-  - At startup the row starts at `safe-x` (Welcome under the "Games" tab) with focus on the first game, right next to it.
+  - A cold start focuses Welcome (at `safe-x`, under the "Games" tab). Coming back from a running game (Guide long press, Go to Home) or after it ends focuses that game, right next to Welcome. Guide short with nothing running goes Home with Welcome focused, from any screen.
   - Welcome focused (index 0) sits at `safe-x`; the row doesn't move.
   - From index 1 on, the focused cell stays at the anchor all the way to the last cell. The previous cell stays fully visible on its left, and older cells run off the screen edge (never clipped at `safe-x`). Empty space after the last cell is fine.
   - Left/Right slide the row by one cell (`base`).
@@ -145,7 +145,7 @@ Respect a future "Reduce motion" setting: all durations multiply by a `Theme.mot
   - Under it: console · last played (`body`, `text-secondary`). Then Play + ⋯ (Resume + Close + ⋯ while running).
   - On the same line, right-aligned at the safe edge: the playtime pill (`button-height`, `surface`, clock icon + "Played 12 h").
   - No widgets under games.
-- **Welcome focused:** `bg-base` + `bg-glow`, a greeting by time of day ("Good morning" 5–12 h, "Good afternoon" 12–18 h, "Good evening" otherwise) in `display` where the logo goes, and the status widgets (Running now, Storage, Controllers, Recently added media) below it. The widgets appear only on Welcome.
+- **Welcome focused:** `bg-base` + `bg-glow`, a greeting by time of day ("Good morning" 5–12 h, "Good afternoon" 12–18 h, "Good evening" otherwise) in `display` where the logo goes, and the status widgets (Running now, Storage, Controllers, Recently added media) below it. The widgets appear only on Welcome. Controllers is real: "1 connected" and "DualSense · 85 %" ("Checking…" for the first seconds while the input backend finds the pads).
 - **Game Library focused:** title, description and an Open button.
 - **Down (the PS5's game down):**
   - Down from the row (or Accept on Welcome) slides the page up (`slow`).
@@ -154,6 +154,8 @@ Respect a future "Reduce motion" setting: all durations multiply by a `Theme.mot
   - Up or Back restores the row.
 - Navigation: Left/Right in the row; Up from the row → top bar; L1/R1 switch Games/Media; Options on a game cell (or ⋯) opens the game menu.
 - **Game menu:** opens to the right of the focused cell, or under the buttons when opened from them. Items: Play or Close game (whichever applies), Controls for this game, Favorite (toggle with a check mark; the menu stays open), Properties. Back, Options or Left closes it. Uninstall comes later.
+- **Starting a game while another runs** (Play on Home, Options → Play, later the Library): a `ConfirmDialog` "Close <running game>?", "Unsaved progress will be lost.", [Close and play <new game>] (danger) and [Cancel] (focused). Confirm closes the running game the usual way (a frozen game is continued first so it can quit), waits for its session to end, then launches the new one. Cancel or Back leaves everything as it was.
+- **Problems Hearth works around** (e.g. `hearth.toml` unreadable): a one-line notice at the bottom center, warning icon + "Couldn't read hearth.toml (line 3) · Using default settings", for 20 s. It never quotes the file (it may hold the API key).
 - **Properties:** a modal card with title, console, file path, size and the SteamGridDB match; "Change artwork" and "Wrong game?" are shown disabled ("Coming later"). Back closes it.
 
 ### Media tab and Search (from `search.md`)
@@ -168,10 +170,27 @@ Portrait cover grid (`grid-cover`), filter chips under the top bar (All · Favor
 
 ### Settings (from `settings.md`)
 
-- Top level: centered list (1320 px wide), `row-height` rows with Lucide icon, label, and a **right-aligned status value** (Network: "Wi-Fi · Home-5G", Storage: "450 GB free", Controllers: "2 connected").
+```
+Settings
+┌ categories (520) ─────┐     ┌ right pane ──────────────────────────────────┐
+│ ◉ Network             │     │ Connected controllers                         │
+│   Wi-Fi · Home-5G     │     │ 🎮 DualSense          Bluetooth · 🔋 85 %  ›  │
+│ ▣ Controllers   focus │     │ Controls                                      │
+│   1 connected         │     │ ⚙ Nintendo 64                    Default  ›  │
+│ 🔊 Display & sound    │     │ ⚙ Nintendo GameCube              Default  ›  │
+└───────────────────────┘     └───────────────────────────────────────────────┘
+```
+
+- Settings opens straight into two panes; there is no separate top-level page. Left: the category list (icon, label, status as a second line: "Wi-Fi · Home-5G", "1 connected", "Hearth 0.1.0"), 520 px, rows `row-height` + 16. Right: the highlighted category's content, starting 48 px after the list.
+- Focus starts in the list, on the category visited last while Hearth runs (else the first). The right pane follows the list as focus moves: the old content fades out and the new one fades in (`fast` in all), so two lists are never drawn over each other.
+- Right or Accept moves focus into the right pane (the category keeps a `accent-soft` fill); Left at its edge or Back returns to the list; Back from the list leaves Settings.
+- **Deeper pages open in the right pane.** A narrow one (a controller's page) replaces the category content. A wide one (a console's controls drawing, the button test) needs the width: the list collapses (`base`) into an icon rail (icons only, the current category marked, not focusable), the "Settings" title and hints fade, and the page fills the rest, scaled to it. Back returns to where it was opened from and the list expands again. There is only ever one category list (the rail is the same list, collapsed).
 - Categories: Network, Game folders, Emulators, Controllers, Display & sound, Storage, System.
+- **Controllers:**
+  - "Connected controllers": one row per physical controller from the input backend: controller glyph, name ("DualSense", "Xbox controller"…), connection (USB/Bluetooth), battery (icon + %, charging icon while charging). Empty: "No controller connected". Rows appear and go as controllers connect and disconnect; battery levels refresh every few seconds.
+  - A controller's row opens its page (right pane): glyph, name, connection and battery, then its actions: "Button test" now; player number and Identify later.
+  - "Controls": one row per console with controls ("Default" / "Customized"), opening that console's controls page (wide). These are shared by everyone, not tied to one controller.
 - Display & sound: "Console icons" and "UI sounds", each showing the selected pack and opening a list of "Hearth default" plus the installed packs with files for it (name, "by <author>"); a check marks the selection. Choosing saves it in `hearth.toml`; icons change at once.
-- Entering a category slides in a two-pane page from the right (`slow`): sub-items list on the left, details/actions on the right. Back returns.
 
 ### In-game overlay (from `overlay.md`)
 
@@ -201,6 +220,8 @@ Portrait cover grid (`grid-cover`), filter chips under the top bar (All · Favor
 
 - Per game, once: identify (ROM header first: GameCube game id + internal name, N64 game code + internal name; else the file name cleaned of No-Intro/Redump tags), search SteamGridDB, keep the match (its id is stored permanently), then fetch the top-voted static, safe (`nsfw`, `humor`, `epilepsy` off) grid (square, else closest to square), hero, logo and icon.
 - Cache: `<cache>/art/<art key>/` (`~/.cache/hearth/art/`, or `$HEARTH_HOME/cache/art/`), where the art key is `<system>/<serial>` or `<system>/name-<hash of the cleaned title>`. Never re-fetched unless files are missing (or a later "Refresh artwork").
+- Display copies: Home never decodes the originals. Next to them, `sized/<class>/{hero,logo,grid}.qoi` are made for the screen's class (its height rounded up to 720/1080/1440/2160): hero as tall as the screen, logo inside 2× the 640×260 box, grid 2× `tile-focused`, all scaled with the class and never enlarged. Made on first use (already-cached art included), remade when the original is newer or the screen class changes (the class is remembered in `<data>/display-class`). Originals stay for "Change artwork" and other screens.
+- Loading order: the focused cell's hero and logo, the grids in view, the neighbours' heroes and logos, then the rest, on up to 3 threads.
 - Local files next to the ROM always win: `<rom stem>.png` (grid), `<rom stem>-hero.png`, `<rom stem>-logo.png`.
 - No match is remembered and not retried; network or HTTP errors put the game in a retry queue (startup, then with backoff while running).
 - API key: `HEARTH_STEAMGRIDDB_KEY`, else `[art] steamgriddb_key` in `hearth.toml`. Without one, only local and cached art is shown.

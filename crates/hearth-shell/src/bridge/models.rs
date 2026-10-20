@@ -169,7 +169,7 @@ pub fn home_tiles(
     });
     let welcome = HomeTile {
         id: "welcome".into(),
-        title: "Home".into(),
+        title: "Welcome".into(),
         kind: TileKind::Welcome,
         art_a: rgb(0x3A2A1E),
         art_b: rgb(0x0C0B0A),
@@ -342,7 +342,10 @@ mod tests {
             &mut icons,
         );
         let titles: Vec<_> = tiles.iter().map(|t| t.title.to_string()).collect();
-        assert_eq!(titles, ["Home", "Mario", "Zelda", "Banjo", "Game Library"]);
+        assert_eq!(
+            titles,
+            ["Welcome", "Mario", "Zelda", "Banjo", "Game Library"]
+        );
         assert_eq!(tiles[0].kind, TileKind::Welcome);
         assert!(tiles[1].running);
         assert!(!tiles[2].running);

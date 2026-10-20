@@ -156,8 +156,6 @@ pub struct Controller {
     input: InputControl,
     library_db: PathBuf,
     entries: Vec<LibraryEntry>,
-    /// The library has been loaded once.
-    library_loaded: bool,
     /// Decoded art per game, filled in by the art worker.
     art: ArtMap,
     icons: ConsoleIcons,
@@ -360,7 +358,6 @@ pub fn install(setup: Setup) {
         input: setup.input,
         library_db: setup.library_db,
         entries: Vec::new(),
-        library_loaded: false,
         art: ArtMap::new(),
         icons: setup.icons,
         config_file: setup.config_file,
@@ -860,7 +857,7 @@ impl Controller {
         let in_gamescope = self.compositor.controls_focus();
         tracing::debug!(long, mode = ?self.mode, in_gamescope, "guide button");
         match self.mode {
-            Mode::Shell => self.show_home(),
+            Mode::Shell => self.show_home(self.active.is_some()),
             Mode::Launching => {
                 if long {
                     self.close_game();
@@ -1198,7 +1195,7 @@ impl Controller {
         }
         let title = self.title();
         self.refresh();
-        self.show_home();
+        self.show_home(true);
         self.toast(&format!(
             "Couldn't switch to {title}; it is still running. Resume it from Home"
         ));
@@ -1261,12 +1258,13 @@ impl Controller {
             active.state = SessionState::InBackground;
         }
         self.refresh();
-        self.show_home();
+        self.show_home(true);
     }
 
-    fn show_home(&self) {
+    /// Shows Home over any screen, focused on the first game (`focus_game`) or Welcome.
+    fn show_home(&self, focus_game: bool) {
         if let Some(app) = self.app.upgrade() {
-            app.invoke_go_home();
+            app.invoke_go_home(focus_game);
         }
     }
 
@@ -1314,7 +1312,7 @@ impl Controller {
         self.hide_overlay();
         let _ = self.compositor.focus(&[SHELL_APP_ID]);
         self.set_mode(Mode::Shell);
-        self.show_home();
+        self.show_home(true);
         self.toast(&format!("Closing {title}…"));
         let runtime = self.runtime.clone();
         let spawned = thread::Builder::new()
@@ -1360,7 +1358,7 @@ impl Controller {
         let _ = self.compositor.focus(&[SHELL_APP_ID]);
         self.set_mode(Mode::Shell);
         self.refresh();
-        self.show_home();
+        self.show_home(true);
         let message = if success || closed_by_us {
             format!("{title}: {}", models::format_session_total(played))
         } else {
@@ -1390,15 +1388,8 @@ impl Controller {
     // --- UI ----------------------------------------------------------------------------
 
     fn set_entries(&mut self, entries: Vec<LibraryEntry>) {
-        let first_load = !self.library_loaded;
-        self.library_loaded = true;
         self.entries = entries;
         self.refresh();
-        // The row now has its games: put focus on the first one (Home starts on Welcome
-        // while the library loads).
-        if first_load && let Some(app) = self.app.upgrade() {
-            app.invoke_go_home();
-        }
     }
 
     /// New art for a game, from the art worker.

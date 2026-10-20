@@ -43,10 +43,11 @@ export component AppWindow inherits Window {
     changed width => { update-scale(); }
     changed height => { update-scale(); }
 
-    // Shows Home with focus on the first tile (the running game, if any).
-    public function go-home() {
+    // Shows Home, closing whatever screen is open. Focus goes to the first game (`focus-game`:
+    // the running game, or the one that just ended) or to Welcome.
+    public function go-home(focus-game: bool) {
         screen = Screen.home;
-        home.reset();
+        home.reset(focus-game);
     }
 
     // Shows the controls page (ControlsData filled by Rust), returning to the current screen.

@@ -174,11 +174,11 @@ export component Home inherits Rectangle {
         show-a = !show-a;
     }
 
-    // Focus starts on the first game: the running one if there is one (Rust puts it first),
-    // else the most recently played; Welcome when there are no games.
-    public function reset() {
+    // Focus on Welcome, or with `focus-game` on the first game (the running one: Rust puts it
+    // first) when there is one.
+    public function reset(focus-game: bool) {
         zone = HomeZone.row;
-        index = tiles.length > 2 ? 1 : 0;
+        index = focus-game && tiles.length > 2 ? 1 : 0;
         tab = 0;
         hero-index = 0;
         widget-index = 0;

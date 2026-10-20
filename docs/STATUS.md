@@ -1,6 +1,6 @@
 # Hearth status
 
-Last updated: 2026-10-19. Read this first, then `AGENTS.md` (rules, commands),
+Last updated: 2026-10-20. Read this first, then `AGENTS.md` (rules, commands),
 `.github/instructions/rust.instructions.md` and `docs/plan.md` (architecture).
 
 ## 0. Where we are, and how we work
@@ -16,6 +16,15 @@ Last updated: 2026-10-19. Read this first, then `AGENTS.md` (rules, commands),
 - Art and Home round (2026-10-19): per-game static art from SteamGridDB, the new Home row,
   the Options menu with Favorite and Properties, asset packs for console icons (sounds: names
   only).
+
+Round A.2 (PS5-style Home), 2026-10-20, newest first:
+- `cc107e3`: design README, Home section rewritten.
+- `d5e90a4`: Home layout: second-slot anchor, label beside every cell, full-bleed hero,
+  640×260 logo box, playtime pill, Welcome with greeting and widgets, Down state.
+- `3b4587b`: row = Welcome, games, Game Library (Media and Settings only in the top bar);
+  greeting from the clock; focus on the first game after the first library load.
+- `a462eb6`: Hearth glyph (`assets/icons/hearth.svg`) and Lucide's clock.
+- `b7b5f8b`: heroes fetched at 3840×1240 when available, else the largest.
 
 Art and Home round, 2026-10-19, newest first:
 - `89d85b9`: opaque Options menu.
@@ -101,11 +110,15 @@ The working tree is clean.
    `DISPLAY=:1 cargo run -p hearth-platform --example gamescope_probe -- windows|props`.
 
 **Next / open:**
-- Art round, not verified yet (no SteamGridDB key in Claude's environment):
-  - a real fetch: OoT and TP grid/hero/logo after a first run, then the same art offline from
-    the cache. Check by hand with
-    `HEARTH_HOME=./.dev-data cargo run -p hearth-core --example art_probe -- --rom n64 <rom>`;
-  - Options menu and Favorite with the controller (done through the dev socket only).
+- Real art verified 2026-10-20: OoT and TP matched (SteamGridDB 21202 and 34645), grid,
+  hero 3840×1240, logo and icon cached; a `--mock-network` restart showed them from the cache
+  with no provider call. Wi-Fi itself was never turned off (not allowed here).
+- Art shows a few seconds after startup in debug builds: 4K heroes and large logos are decoded
+  one game at a time on the art worker. Ideas: decode the focused game first, keep smaller
+  decoded copies in the cache.
+- Not tried with the controller yet: the Down state, Options menu and Favorite (dev socket only).
+- `hearth.toml` must quote the key (`steamgriddb_key = "…"`); an unquoted value makes the
+  whole file invalid and Hearth ignores it (warning in the log).
 - Art round follow-ups:
   - "Refresh artwork", "Change artwork", "Wrong game?" (shown disabled in Properties);
   - a NetworkManager connectivity signal instead of the 60 s queue check;

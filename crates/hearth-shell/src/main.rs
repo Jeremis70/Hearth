@@ -401,7 +401,11 @@ fn spawn_signal_thread(set: SigSet) -> anyhow::Result<()> {
 }
 
 fn update_clock(app: &AppWindow) {
-    let now = chrono::Local::now().format("%-I:%M %p").to_string();
-    app.global::<Status>().set_clock(now.as_str().into());
+    use chrono::Timelike;
+    let local = chrono::Local::now();
+    let now = local.format("%-I:%M %p").to_string();
+    let status = app.global::<Status>();
+    status.set_clock(now.as_str().into());
+    status.set_greeting(bridge::models::greeting(local.hour()).into());
     bridge::session::tick(&now);
 }

@@ -1,13 +1,16 @@
 // Data the Rust side provides, and callbacks it handles. Kept in globals so screens don't
 // need properties threaded through AppWindow.
 
-export enum TileKind { game, library, media, settings }
+// Home row cells: Welcome (first), games, Game Library (last).
+export enum TileKind { welcome, game, library }
 
 export struct HomeTile {
     id: string,
     title: string,
     badge: string,      // console short name, games only
     subtitle: string,   // "12 h played · last played yesterday" or a description
+    last-played: string, // "last played yesterday"; empty if never played
+    played: string,     // playtime pill: "Played 12 h", "Not played yet"
     kind: TileKind,
     art-a: color,       // placeholder art gradient
     art-b: color,
@@ -79,6 +82,7 @@ export global SettingsData {
 
 export global Status {
     in property <string> clock;
+    in property <string> greeting;  // "Good evening", for the Welcome cell
     in property <string> controller-battery;
     in property <string> toast;     // empty: hidden
 }

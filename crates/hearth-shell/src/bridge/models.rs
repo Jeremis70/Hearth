@@ -101,8 +101,28 @@ pub fn format_last_played(last_played: Option<i64>, now: i64) -> Option<String> 
     })
 }
 
-/// Library games (running game first, then most recently played) followed by the fixed
-/// Library, Media and Settings tiles.
+/// "Played 12 h", "Played 35 min", or "Not played yet": the playtime pill on Home.
+pub fn format_played(playtime: Duration) -> String {
+    let minutes = playtime.as_secs() / 60;
+    match minutes {
+        0 if playtime.is_zero() => "Not played yet".to_owned(),
+        0 => "Played < 1 min".to_owned(),
+        1..60 => format!("Played {minutes} min"),
+        _ => format!("Played {} h", minutes / 60),
+    }
+}
+
+/// The greeting on the Welcome cell for a local hour (0–23).
+pub fn greeting(hour: u32) -> &'static str {
+    match hour {
+        5..12 => "Good morning",
+        12..18 => "Good afternoon",
+        _ => "Good evening",
+    }
+}
+
+/// The Home row: the Welcome cell, the library's games (running game first, then most
+/// recently played), then the Game Library cell. Media and Settings live in the top bar.
 pub fn home_tiles(
     entries: &[LibraryEntry],
     systems: &Systems,
@@ -122,14 +142,17 @@ pub fn home_tiles(
             .get(&e.game.system)
             .map_or_else(|| e.game.system.to_string(), |s| s.short.clone());
         let mut subtitle = format_playtime(e.playtime);
-        if let Some(last) = format_last_played(e.last_played, now) {
-            subtitle = format!("{subtitle} · {last}");
+        let last_played = format_last_played(e.last_played, now).unwrap_or_default();
+        if !last_played.is_empty() {
+            subtitle = format!("{subtitle} · {last_played}");
         }
         HomeTile {
             id: e.game.id.as_str().into(),
             title: e.game.title.as_str().into(),
             badge: badge.into(),
             subtitle: subtitle.into(),
+            last_played: last_played.into(),
+            played: format_played(e.playtime).into(),
             kind: TileKind::Game,
             art_a,
             art_b,
@@ -144,41 +167,28 @@ pub fn home_tiles(
             monogram: icon.monogram.into(),
         }
     });
-    let fixed = [
-        (
-            "library",
-            "Game Library",
-            "Every game, every console",
-            TileKind::Library,
-            0x4A3626,
-        ),
-        (
-            "media",
-            "Media",
-            "Your movies, shows and music",
-            TileKind::Media,
-            0x2E3440,
-        ),
-        (
-            "settings",
-            "Settings",
-            "Network, game folders, emulators, controllers",
-            TileKind::Settings,
-            0x36302A,
-        ),
-    ]
-    .into_iter()
-    .map(|(id, title, subtitle, kind, art)| HomeTile {
-        id: id.into(),
-        title: title.into(),
-        badge: SharedString::new(),
-        subtitle: subtitle.into(),
-        kind,
-        art_a: rgb(art),
+    let welcome = HomeTile {
+        id: "welcome".into(),
+        title: "Home".into(),
+        kind: TileKind::Welcome,
+        art_a: rgb(0x3A2A1E),
         art_b: rgb(0x0C0B0A),
         ..HomeTile::default()
-    });
-    games.chain(fixed).collect()
+    };
+    let library = HomeTile {
+        id: "library".into(),
+        title: "Game Library".into(),
+        badge: SharedString::new(),
+        subtitle: "Every game, every console".into(),
+        kind: TileKind::Library,
+        art_a: rgb(0x4A3626),
+        art_b: rgb(0x0C0B0A),
+        ..HomeTile::default()
+    };
+    std::iter::once(welcome)
+        .chain(games)
+        .chain(std::iter::once(library))
+        .collect()
 }
 
 /// Updates the Home tile row: row by row when the same tiles are there in the same order (so
@@ -309,7 +319,7 @@ mod tests {
     }
 
     #[test]
-    fn running_game_first_then_library_order_then_fixed() {
+    fn welcome_then_running_game_then_library_order_then_game_library() {
         let systems = Systems::builtin().unwrap();
         let entries = [
             entry("a", "Zelda", Some(1_000), 90),
@@ -332,26 +342,19 @@ mod tests {
             &mut icons,
         );
         let titles: Vec<_> = tiles.iter().map(|t| t.title.to_string()).collect();
-        assert_eq!(
-            titles,
-            [
-                "Mario",
-                "Zelda",
-                "Banjo",
-                "Game Library",
-                "Media",
-                "Settings"
-            ]
-        );
-        assert!(tiles[0].running);
-        assert!(!tiles[1].running);
-        assert_eq!(tiles[1].badge, "N64");
-        assert_eq!(tiles[1].subtitle, "1 h played · last played yesterday");
-        assert_eq!(tiles[2].subtitle, "Not played yet");
-        assert_eq!(tiles[3].kind, TileKind::Library);
+        assert_eq!(titles, ["Home", "Mario", "Zelda", "Banjo", "Game Library"]);
+        assert_eq!(tiles[0].kind, TileKind::Welcome);
+        assert!(tiles[1].running);
+        assert!(!tiles[2].running);
+        assert_eq!(tiles[2].badge, "N64");
+        assert_eq!(tiles[2].last_played, "last played yesterday");
+        assert_eq!(tiles[2].played, "Played 1 h");
+        assert_eq!(tiles[3].played, "Not played yet");
+        assert_eq!(tiles[3].last_played, "");
+        assert_eq!(tiles[4].kind, TileKind::Library);
         // No icon files anywhere: the monogram.
-        assert_eq!(tiles[0].monogram, "N64");
-        assert_eq!(tiles[0].art.size().width, 0);
+        assert_eq!(tiles[1].monogram, "N64");
+        assert_eq!(tiles[1].art.size().width, 0);
     }
 
     #[test]
@@ -382,6 +385,13 @@ mod tests {
             format_session_total(Duration::from_secs(61 * 60)),
             "played 1 h 01 min"
         );
+        assert_eq!(format_played(Duration::from_secs(150 * 60)), "Played 2 h");
+        assert_eq!(format_played(Duration::from_secs(35 * 60)), "Played 35 min");
+        assert_eq!(format_played(Duration::ZERO), "Not played yet");
+        assert_eq!(greeting(4), "Good evening");
+        assert_eq!(greeting(5), "Good morning");
+        assert_eq!(greeting(12), "Good afternoon");
+        assert_eq!(greeting(18), "Good evening");
         assert_eq!(format_size(900), "900 B");
         assert_eq!(format_size(512 * 1024), "512 KB");
         assert_eq!(format_size(1_468_006_400), "1.4 GB");

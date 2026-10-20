@@ -155,7 +155,8 @@ export component Home inherits Rectangle {
     // else the most recently played.
     public function reset() {
         zone = HomeZone.row;
-        index = 0;
+        // The first game (the running one, else the most recent); Welcome without games.
+        index = tiles.length > 2 ? 1 : 0;
         tab = 0;
         hero-index = 0;
         widget-index = 0;
@@ -173,10 +174,6 @@ export component Home inherits Rectangle {
             }
         } else if current.kind == TileKind.library {
             open-placeholder("Game Library", "The library grid with console filters arrives in M4.");
-        } else if current.kind == TileKind.media {
-            open-placeholder("Media", "Movies, shows and music arrive in a later milestone.");
-        } else {
-            open-settings();
         }
     }
 

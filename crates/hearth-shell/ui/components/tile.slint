@@ -45,8 +45,7 @@ export component Tile inherits Rectangle {
         if data.kind != TileKind.game: Image {
             width: root.width * 0.36;
             height: self.width;
-            source: data.kind == TileKind.library ? Icons.library
-                : data.kind == TileKind.media ? Icons.clapperboard : Icons.settings;
+            source: data.kind == TileKind.library ? Icons.library : Icons.hearth;
             colorize: Theme.text-primary;
         }
     }

@@ -156,6 +156,8 @@ pub struct Controller {
     input: InputControl,
     library_db: PathBuf,
     entries: Vec<LibraryEntry>,
+    /// The library has been loaded once.
+    library_loaded: bool,
     /// Decoded art per game, filled in by the art worker.
     art: ArtMap,
     icons: ConsoleIcons,
@@ -358,6 +360,7 @@ pub fn install(setup: Setup) {
         input: setup.input,
         library_db: setup.library_db,
         entries: Vec::new(),
+        library_loaded: false,
         art: ArtMap::new(),
         icons: setup.icons,
         config_file: setup.config_file,
@@ -1387,8 +1390,15 @@ impl Controller {
     // --- UI ----------------------------------------------------------------------------
 
     fn set_entries(&mut self, entries: Vec<LibraryEntry>) {
+        let first_load = !self.library_loaded;
+        self.library_loaded = true;
         self.entries = entries;
         self.refresh();
+        // The row now has its games: put focus on the first one (Home starts on Welcome
+        // while the library loads).
+        if first_load && let Some(app) = self.app.upgrade() {
+            app.invoke_go_home();
+        }
     }
 
     /// New art for a game, from the art worker.

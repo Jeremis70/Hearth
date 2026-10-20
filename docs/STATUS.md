@@ -1,6 +1,6 @@
 # Hearth status
 
-Last updated: 2026-10-20. Read this first, then `AGENTS.md` (rules, commands),
+Last updated: 2026-10-20 (round A.3). Read this first, then `AGENTS.md` (rules, commands),
 `.github/instructions/rust.instructions.md` and `docs/plan.md` (architecture).
 
 ## 0. Where we are, and how we work
@@ -16,6 +16,36 @@ Last updated: 2026-10-20. Read this first, then `AGENTS.md` (rules, commands),
 - Art and Home round (2026-10-19): per-game static art from SteamGridDB, the new Home row,
   the Options menu with Favorite and Properties, asset packs for console icons (sounds: names
   only).
+
+Round A.3 (Home fixes, game switching, faster art, Settings), 2026-10-20, newest first:
+- `64fd194`: design README: two-pane Settings, switch dialog, display art, notices.
+- `9b7dcdf`: controllers show "Checking…" for the first 5 s (InputPlumber takes the pad ~3.5 s
+  after launch; before, it read "None connected").
+- `327bf8b`: Settings opens on two panes (no top-level page). Category list with status as a
+  second line, right pane fades between categories, wide pages (console controls, button test)
+  beside an icon rail. Controllers: real pads (name, USB/Bluetooth, battery), a controller page
+  with Button test, console rows under "Controls". Welcome widget and top bar battery are real.
+- `e408e18`: switch dialog ("Close <running>?" → Close and play / Cancel, Cancel focused).
+- `ca44cb3`: `hearth.toml` parse errors: notice with the line, defaults kept, values never
+  printed (parser messages are redacted).
+- `0bd7f02`: art decode pool (3 threads, focused cell first), Home reports focus.
+- `8e7d5d3`: display-sized QOI copies of art per screen class (`art/display.rs`).
+- `473eb4c`: image decoders at opt-level 3 in debug builds.
+- `f12408b`: `HEARTH_GS_RELEASE=1` for `run-gamescope.sh`.
+- `9ab13e0`: startup timing log (`startup: … on screen ms=…`).
+- `70d9cf6`: cold start on Welcome (label "Welcome"); Guide short with nothing running → Welcome.
+
+Startup timing (window shown → on screen, 2 real games with cached art, 3 runs each):
+
+| Build | Before: first game's hero | Before: row art | After: hero | After: row art |
+|---|---|---|---|---|
+| debug | 4.8–5.5 s | 7.8–8.7 s | 0.37–0.39 s | 0–0.38 s |
+| release | 61–73 ms | 246–269 ms | in the first frame | in the first frame |
+
+Most of the debug gain is the image decoders' opt-level; the rest of the debug time is the
+first frame that draws the hero (~340 ms, unoptimised Slint/femtovg; making femtovg or
+i-slint-core opt-level 3 didn't change it). Only 2 games here: the pool and the small copies
+matter more with a bigger library.
 
 Round A.2 (PS5-style Home), 2026-10-20, newest first:
 - `cc107e3`: design README, Home section rewritten.
@@ -100,9 +130,11 @@ The working tree is clean.
 3. Chain the follow-up commands with `&&` after the check, so nothing runs against someone
    else's instance.
 4. Navigation:
-   - Settings → Controllers: `right right right right accept`, then `down down down accept`.
-   - In that pane: `right` enters it, then `down` ×0/1/2 for Test buttons / N64 / GameCube, and
-     `accept`.
+   - Settings from Welcome: `up right right right accept` (focus lands on the last category
+     visited, the first one at startup). Controllers: `down down down`, then `right`.
+   - In that pane: `down` ×0/1/2 for the DualSense / N64 / GameCube and `accept`; on the
+     controller page `accept` is Button test (`home_long` ends it).
+   - Home starts on Welcome: `right` is the first game.
    - The Sticks & options tab is `next_tab`.
    - Launching TP: `accept` on Home, about 25 s to boot.
 5. Screenshots: `GAMESCOPE_WAYLAND_DISPLAY=gamescope-0 gamescopectl screenshot $PWD/<file>.png`.
@@ -113,12 +145,14 @@ The working tree is clean.
 - Real art verified 2026-10-20: OoT and TP matched (SteamGridDB 21202 and 34645), grid,
   hero 3840×1240, logo and icon cached; a `--mock-network` restart showed them from the cache
   with no provider call. Wi-Fi itself was never turned off (not allowed here).
-- Art shows a few seconds after startup in debug builds: 4K heroes and large logos are decoded
-  one game at a time on the art worker. Ideas: decode the focused game first, keep smaller
-  decoded copies in the cache.
+- Day-to-day run: `HEARTH_GS_RELEASE=1 HEARTH_GS_FULLSCREEN=1 scripts/run-gamescope.sh`.
+- Not tried with the controller yet (round A.3, dev socket only): two-pane Settings, the
+  controller page, the switch dialog, unplugging a pad while its page is open.
+- Running at another size changes the display class (`.dev-data/data/display-class`) and remakes
+  the art copies once (seen: 720p run, then 1080p again).
 - Not tried with the controller yet: the Down state, Options menu and Favorite (dev socket only).
 - `hearth.toml` must quote the key (`steamgriddb_key = "…"`); an unquoted value makes the
-  whole file invalid and Hearth ignores it (warning in the log).
+  whole file invalid: Hearth runs on defaults and shows "Couldn't read hearth.toml (line N)".
 - Art round follow-ups:
   - "Refresh artwork", "Change artwork", "Wrong game?" (shown disabled in Properties);
   - a NetworkManager connectivity signal instead of the 60 s queue check;
@@ -225,7 +259,9 @@ The working tree is clean.
 
 **Controls UI** (`ui/controls/`, `bridge/controls_page.rs`, `src/callouts.rs`,
 `src/controller_layout.rs`)
-- Settings → Controllers lists connected pads, Test buttons, and one row per console.
+- Settings → Controllers lists connected pads (each opens its page with Button test) and one row
+  per console; console pages and the button test open inside Settings beside the icon rail
+  (`ControlsScreen` with `embedded`, scaled to its width).
 - The game-scoped page opens from the overlay dock (Controls) and Home → Options → Controls.
 - **Drawing:** `assets/controllers/generic.svg` is generated by `scripts/controller-svg.py`
   from the lambdalighthouse gamepad. The source sits in `assets/controllers/source/`,
@@ -286,8 +322,9 @@ The working tree is clean.
   `no_match`, kinds found), `art_queue` (network/HTTP errors only, backoff 5 min doubling to 6 h;
   everything queued is retried at startup).
 - Art is deleted only for games removed by a scan whose system folder still exists.
-- Shell: `bridge/art.rs` decodes on the art worker into `SharedPixelBuffer`s; tiles are updated
-  in place (`models::set_tiles`). Console icons: `ConsoleIcons` over `packs::Resolver`.
+- Shell: `bridge/art.rs` `ArtLoader` makes/decodes display copies on 3 threads into
+  `SharedPixelBuffer`s, most visible first; tiles are updated in place (`models::set_tiles`).
+  Console icons: `ConsoleIcons` over `packs::Resolver`. `bridge/startup.rs` logs startup timing.
 - `--mock-network`: an always-offline provider (cache only, games go to the queue).
 - Packs: `.dev-data/packs/my-console-icons` and `.dev-data/packs/ps5-sounds` (the user's files,
   moved out of `assets/`; unmapped sounds in `sounds/unused/`). `hearth.toml` currently selects
@@ -330,7 +367,7 @@ The working tree is clean.
   - quit Steam first.
 - **Desktop, no overlay:** `HEARTH_HOME=./.dev-data cargo run -p hearth-shell -- --windowed`.
 - **Real thing:** `scripts/run-gamescope.sh` (options: `HEARTH_GS_SIZE`,
-  `HEARTH_GS_FULLSCREEN=1`, `HEARTH_GS_ARGS`).
+  `HEARTH_GS_FULLSCREEN=1`, `HEARTH_GS_ARGS`, `HEARTH_GS_RELEASE=1`).
 - **Dev socket actions:** up, down, left, right, accept, back, prev_tab, next_tab, options,
   home_short, home_long, capture.
 - **Keyboard:**
@@ -344,7 +381,7 @@ The working tree is clean.
   - library: `.dev-data/data/library.sqlite3`.
 - **FPS counter:** `HEARTH_RETROARCH_ARGS="--appendconfig=data/dev/retroarch-fps.cfg"`.
 - **Checks:** `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
-  `cargo test --workspace` (core 123, platform 35, shell 15 tests).
+  `cargo test --workspace` (core 132, platform 35, shell 20 tests).
 - **Artwork:** set `HEARTH_STEAMGRIDDB_KEY` or `[art] steamgriddb_key` in
   `.dev-data/config/hearth.toml` (gitignored). Without it: placeholders and one log line.
 

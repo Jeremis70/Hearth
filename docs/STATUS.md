@@ -17,6 +17,30 @@ Last updated: 2026-10-20 (round A.3). Read this first, then `AGENTS.md` (rules, 
   the Options menu with Favorite and Properties, asset packs for console icons (sounds: names
   only).
 
+Round A.3 follow-up (controls page), 2026-10-20:
+- Controls diagram on one canvas: drawing, highlights, lines, dots and callouts all in page
+  units of the 1920×1080 layout, scaled by one factor `u` and centered (`Diagram` in
+  `ui/controls/screen.slint`). Lines had drifted beside the rail because they used
+  `Theme.scale` while boxes used the page's own scale. Slint's `Path` fits its viewbox into
+  `size − stroke`, so the paths are grown and shifted by the stroke width.
+- Lag cause: the 18 highlight SVGs (each the size of the whole drawing) were re-rasterized by
+  Slint whenever one became visible. Same at the commit before A.3 (not a regression).
+  `src/diagram.rs` now rasterizes the drawing and cropped highlights once per scale with resvg
+  on a worker (6 s after start); callout placement is memoized (`callouts::place_generic`).
+  Measured with `HEARTH_FRAME_STATS=1` (per-input lines at `hearth_shell=debug`):
+
+  | | Before (release) | After (release) | Before (debug) | After (debug) |
+  |---|---|---|---|---|
+  | focus move, input→screen | ~50 ms (35 ms frames) | 17–20 ms (1 frame) | ~360 ms | ~24 ms |
+  | open a controls page | ~70 ms | ~45–63 ms | ~460 ms | ~80 ms |
+
+  Debug also gets opt-level 3 for resvg and the text/render crates (`Cargo.toml`).
+- Button test: L2/R2 highlights follow the pressure (0–100 %, no animation, no step).
+- The rail collapse animates on the way in (it was eaten by the slow first frame).
+- Dialogs: switch "Close <running>?" / "<new> will start. Unsaved progress will be lost." /
+  [Close and play] [Cancel]; Close game: "Unsaved progress will be lost."; fixed 720 width.
+- Not checked live: trigger pressure (needs real presses), stick dots while moving.
+
 Round A.3 (Home fixes, game switching, faster art, Settings), 2026-10-20, newest first:
 - `64fd194`: design README: two-pane Settings, switch dialog, display art, notices.
 - `9b7dcdf`: controllers show "Checking…" for the first 5 s (InputPlumber takes the pad ~3.5 s
@@ -146,6 +170,7 @@ The working tree is clean.
   hero 3840×1240, logo and icon cached; a `--mock-network` restart showed them from the cache
   with no provider call. Wi-Fi itself was never turned off (not allowed here).
 - Day-to-day run: `HEARTH_GS_RELEASE=1 HEARTH_GS_FULLSCREEN=1 scripts/run-gamescope.sh`.
+- Frame and input timings: `HEARTH_FRAME_STATS=1` (once a second at info).
 - Not tried with the controller yet (round A.3, dev socket only): two-pane Settings, the
   controller page, the switch dialog, unplugging a pad while its page is open.
 - Running at another size changes the display class (`.dev-data/data/display-class`) and remakes
@@ -381,7 +406,7 @@ The working tree is clean.
   - library: `.dev-data/data/library.sqlite3`.
 - **FPS counter:** `HEARTH_RETROARCH_ARGS="--appendconfig=data/dev/retroarch-fps.cfg"`.
 - **Checks:** `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
-  `cargo test --workspace` (core 132, platform 35, shell 20 tests).
+  `cargo test --workspace` (core 132, platform 35, shell 22 tests).
 - **Artwork:** set `HEARTH_STEAMGRIDDB_KEY` or `[art] steamgriddb_key` in
   `.dev-data/config/hearth.toml` (gitignored). Without it: placeholders and one log line.
 

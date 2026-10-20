@@ -176,6 +176,10 @@ pub struct Controller {
     packs_dir: PathBuf,
     active: Option<ActiveSession>,
     closing: bool,
+    /// The game the switch dialog offers to start (waiting for the user).
+    switch_to: Option<GameId>,
+    /// The game to start once the running one has ended (the user confirmed the switch).
+    launch_after_close: Option<GameId>,
     mode: Mode,
     events: Sender<RuntimeEvent>,
     next_app_id: AppId,
@@ -283,6 +287,7 @@ pub fn install(setup: Setup) {
         });
         session.on_resume(|| defer(Controller::resume_game));
         session.on_close_game(|| defer(Controller::close_game));
+        session.on_confirm_switch(|| defer(Controller::confirm_switch));
         session.on_home_button(|long| defer(move |c| c.home_button(long)));
         session.on_open_controls(|| defer(|c| c.open_game_controls(MAIN)));
         let home = app.global::<HomeData>();
@@ -392,6 +397,8 @@ pub fn install(setup: Setup) {
         packs_dir: setup.packs_dir,
         active: None,
         closing: false,
+        switch_to: None,
+        launch_after_close: None,
         mode: Mode::Shell,
         events,
         next_app_id: FIRST_GAME_APP_ID,
@@ -933,8 +940,7 @@ impl Controller {
             if &active.game.id == id {
                 self.resume_game();
             } else {
-                let title = active.game.title.clone();
-                self.toast(&format!("Close {title} first"));
+                self.ask_switch(id);
             }
             return;
         }
@@ -1060,6 +1066,38 @@ impl Controller {
             }
         }
         self.refresh();
+    }
+
+    /// Opens "Close <running>?" with "Close and play <id>"; see [`Self::confirm_switch`].
+    fn ask_switch(&mut self, id: &GameId) {
+        let (Some(app), Some(active)) = (self.app.upgrade(), &self.active) else {
+            return;
+        };
+        let Some(next) = self.entries.iter().find(|e| &e.game.id == id) else {
+            tracing::warn!(%id, "switch: unknown game");
+            return;
+        };
+        tracing::info!(running = %active.game.id, next = %id, "asking to switch games");
+        let session = app.global::<Session>();
+        session.set_switch_from(active.game.title.as_str().into());
+        session.set_switch_to(next.game.title.as_str().into());
+        session.set_switch_open(true);
+        self.switch_to = Some(id.clone());
+    }
+
+    /// The user confirmed the switch: the running game closes the usual way (thawed first if
+    /// frozen) and the new one starts once its session has ended.
+    fn confirm_switch(&mut self) {
+        let Some(id) = self.switch_to.take() else {
+            return;
+        };
+        if self.active.is_none() {
+            self.launch(&id);
+            return;
+        }
+        tracing::info!(next = %id, "closing the running game to start another");
+        self.launch_after_close = Some(id);
+        self.close_game();
     }
 
     /// Resolves and translates `game`'s controls for the controller as it is now.
@@ -1399,6 +1437,9 @@ impl Controller {
             format!("{title} stopped unexpectedly")
         };
         self.toast(&message);
+        if let Some(next) = self.launch_after_close.take() {
+            self.launch(&next);
+        }
 
         // Save playtime and reload the library off the UI thread.
         let db = self.library_db.clone();

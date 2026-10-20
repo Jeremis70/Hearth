@@ -12,7 +12,9 @@ export component ConfirmDialog inherits Rectangle {
     background: Theme.scrim;
 
     Rectangle {
-        width: 720px * Theme.scale;
+        // At least 720, wider when the buttons need it ("Close and play <long title>").
+        width: min(max(720px * Theme.scale, buttons.preferred-width + 2 * Theme.sp-48),
+            root.width - 2 * Theme.safe-x);
         height: layout.preferred-height;
         border-radius: Theme.radius-lg;
         background: Theme.surface-raised;
@@ -33,7 +35,7 @@ export component ConfirmDialog inherits Rectangle {
                 color: Theme.text-secondary;
                 wrap: word-wrap;
             }
-            HorizontalLayout {
+            buttons := HorizontalLayout {
                 padding-top: Theme.sp-16;
                 spacing: Theme.sp-16;
                 alignment: start;

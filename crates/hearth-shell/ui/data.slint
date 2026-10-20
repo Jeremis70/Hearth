@@ -109,6 +109,12 @@ export global Session {
     in property <string> badge;
     in property <string> played;    // "Playing for 12 min"
     callback launch(/* game id */ string);
+    // Starting a game while another runs: Rust opens the dialog (titles filled in); the UI
+    // closes it, calling confirm-switch() when the user chose "Close and play".
+    in-out property <bool> switch-open;
+    in property <string> switch-from;
+    in property <string> switch-to;
+    callback confirm-switch();
     callback resume();
     callback close-game();
     // The running game's controls page.

@@ -112,33 +112,49 @@ Respect a future "Reduce motion" setting: all durations multiply by a `Theme.mot
 
 ## 4. Screens
 
-### Home (from `home.md`)
+### Home (from `home.md`, laid out like the PS5's game hover / game down screens)
 
 ```
-┌ top bar: [Games] [Media]                      search  settings  🎮 85%  5:26 PM ┐
-│ tile row: ▢ ▢ [■ focused] ▢ ▢ ▢ ▢ ▢ … Library  Media  Settings                 │
-│                                                                                 │
-│ hero zone (focused game):  LOGO (or TITLE in display)                           │
-│                            GameCube · 12 h played · last played yesterday       │
-│                            [ ▶ Play ]  [ ⋯ ]   (running: Resume · Close · ⋯)    │
-│                                                                                 │
-│ widget row: Running now · Storage · Controllers · Recently added media          │
-└──────────────────────────────────────────────────────────── Ⓐ Select  ☰ Options ┘
+┌ [Games] [Media]                                   search  settings  🎮   5:26 PM ┐
+│ ▢⌂  [■ focused]  ▢ ▢ ▢ ▢ ▢ ▢ ▢ ▢ ▢ … ▢📚            hero art, full-bleed →     │
+│        🎮 The Legend of Zelda: Ocarina of Time                                     │
+│                                                                                   │
+│ ┌──────────────┐                                                                  │
+│ │ LOGO 640×260 │  (or TITLE in display, 2 lines max)                              │
+│ └──────────────┘                                                                  │
+│ N64 · last played today                                                           │
+│ [ ▶ Play ] [ ⋯ ]  (running: Resume · Close · ⋯)                  ( 🕒 Played 12 h ) │
+└────────────────────────────────────────────────────────────── Ⓐ Select  ☰ Options ┘
 ```
 
-- Background: the focused game's hero. The sharp hero spans the top of the screen at its own aspect ratio (behind the top bar, row and hero zone) and fades into the pre-blurred, downscaled hero stretched behind the widgets, darkened with `hero-vignette`. Two layers crossfade (`slow`) when the focused game or its art changes. Games without art show their placeholder gradient.
-- Tiles show the game's square grid art; until it arrives (or without any), a gradient with the title.
-- Hero zone: the game's logo (max 140 px tall, 640 px wide) instead of the title when one is cached; the metadata line is plain text ("N64 · 59 min played · last played today").
-- Tile row: recently played across all consoles (most recent first), then fixed tiles Game Library, Media, Settings. Running game gets a `success` dot.
-- **Fixed focus anchor (sliding window):** the focused tile always sits at the same x position (the first slot, at `safe-x`). Pressing Right/Left slides the whole row by one tile (`base` timing) instead of moving focus across the screen. Exception: near the end of the row, the row stops sliding when its last tile is fully visible, and focus moves the rest of the way. Never leave empty space to the right of the last tile.
-- **Label tucked beside the focused tile:** because the focused tile (`tile-focused`, 192) is taller than the others (`tile`, 128), the 64 px band below the following tiles is free. The focused item's name (`body-lg`) and console icon (24 px) sit there: left edge at focused tile's right edge + `tile-gap`, vertically aligned with the focused tile's bottom. Tiles carry no console badge themselves.
-- **Console icons:** come from the selected console-icon pack (§7), else Hearth's original monochrome glyphs in Lucide's style (2 px stroke, tinted `text-primary`) in `assets/icons/consoles/`. Hearth's own glyphs never use console makers' logos or trademarks; when no icon exists, a short text monogram ("N64", "GC") in a `radius-sm` outline. Pack icons are drawn as they are (they may be in colour).
-- When the focused tile is too close to the right edge for its label (less than 320 px), the label goes under the tile, right-aligned to it.
-- The hero zone is missing from `home.md` because the screenshot focused a system tile; it is the core of the PS5 feel and must be included.
-- Navigation: Left/Right in the tile row; Down → Play/⋯ buttons → widget row; Up from row → top bar; L1/R1 switch Games/Media; Options on a tile (or ⋯) opens the game menu.
-- **Game menu:** opens to the right of the focused tile (to its left at the end of the row): Play or Close game (whichever applies), Controls for this game, Favorite (toggle with a check mark; the menu stays open), Properties. Back, Options or Left closes it. Uninstall comes later.
+- **Row contents:** a Welcome cell first (Hearth glyph, label "Home"), then the games (running game first, then most recently played), then Game Library last. Media and Settings are in the top bar, not in the row. Running game gets a `success` dot.
+- **Focus anchor (second slot):** the anchor is `safe-x + tile + tile-gap`; `row-offset = max(0, index − 1) × (tile + tile-gap)`.
+  - At startup the row starts at `safe-x` (Welcome under the "Games" tab) with focus on the first game, right next to it.
+  - Welcome focused (index 0) sits at `safe-x`; the row doesn't move.
+  - From index 1 on, the focused cell stays at the anchor all the way to the last cell. The previous cell stays fully visible on its left, and older cells run off the screen edge (never clipped at `safe-x`). Empty space after the last cell is fine.
+  - Left/Right slide the row by one cell (`base`).
+- **Label beside the focused cell, for every kind of cell:** icon (24 px) then name (`body-lg`), left edge at the focused cell's right edge + `tile-gap`, bottom-aligned with it, in the band left free below the smaller cells. Icons: the console icon for games, the Hearth glyph for Welcome, the library icon for Game Library. Cells carry no console badge.
+- **Console icons:** come from the selected console-icon pack (§7), else Hearth's original monochrome glyphs in Lucide's style (2 px stroke, tinted `text-primary`) in `assets/icons/consoles/`. Hearth's own glyphs never use console makers' logos or trademarks. When no icon exists, a short text monogram ("N64", "GC") in a `radius-sm` outline. Pack icons are drawn as they are (they may be in colour).
+- Cells show the game's square grid art; until it arrives (or without any), a gradient with the title.
+- **Game focused:**
+  - The hero is full-bleed behind the whole screen (cover-fit, centered crop), with the top bar and row drawn over it. Heroes are fetched at 3840×1240 when SteamGridDB has one.
+  - Readability: a left-to-right gradient (black at 88 % at the left edge, 65 % at 27 % of the width, gone by 60 %), a bottom vignette (`hero-vignette`) and a light top vignette for the tabs. Two layers crossfade (`slow`) when the focused cell's hero changes.
+  - The pre-blurred hero stays cached but isn't drawn on Home.
+  - Without a hero: `bg-base` with the `bg-glow` top-left glow.
+  - **Logo:** fits inside 640×260, aspect kept, bottom-left aligned, its bottom at 62 % of the height. Without a logo: the title in `display`, 2 lines at most.
+  - Under it: console · last played (`body`, `text-secondary`). Then Play + ⋯ (Resume + Close + ⋯ while running).
+  - On the same line, right-aligned at the safe edge: the playtime pill (`button-height`, `surface`, clock icon + "Played 12 h").
+  - No widgets under games.
+- **Welcome focused:** `bg-base` + `bg-glow`, a greeting by time of day ("Good morning" 5–12 h, "Good afternoon" 12–18 h, "Good evening" otherwise) in `display` where the logo goes, and the status widgets (Running now, Storage, Controllers, Recently added media) below it. The widgets appear only on Welcome.
+- **Game Library focused:** title, description and an Open button.
+- **Down (the PS5's game down):**
+  - Down from the row (or Accept on Welcome) slides the page up (`slow`).
+  - The tabs and the row fade and slide out. A compact header fades in at the top left (`safe-x`, `safe-y`): the cell's art (64 px, `radius-md`), then its icon and name.
+  - The logo/greeting block, meta line, buttons and pill move up by 260. Focus goes to Play, or to the first widget on Welcome.
+  - Up or Back restores the row.
+- Navigation: Left/Right in the row; Up from the row → top bar; L1/R1 switch Games/Media; Options on a game cell (or ⋯) opens the game menu.
+- **Game menu:** opens to the right of the focused cell, or under the buttons when opened from them. Items: Play or Close game (whichever applies), Controls for this game, Favorite (toggle with a check mark; the menu stays open), Properties. Back, Options or Left closes it. Uninstall comes later.
 - **Properties:** a modal card with title, console, file path, size and the SteamGridDB match; "Change artwork" and "Wrong game?" are shown disabled ("Coming later"). Back closes it.
-- Focus starts on the most recent game, or on the running game if one exists.
 
 ### Media tab and Search (from `search.md`)
 

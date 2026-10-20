@@ -19,7 +19,6 @@ export struct HomeTile {
     // Art; empty images (width 0) mean "not there": placeholders are drawn instead.
     art: image,         // square grid
     hero: image,        // sharp banner for the hero zone
-    hero-blur: image,   // blurred, downscaled hero behind the widgets
     logo: image,        // shown instead of the title
     // Console icon from the selected pack or Hearth's glyphs (tinted), else `monogram`.
     console-icon: image,
@@ -55,6 +54,8 @@ export global HomeData {
     // Actions not implemented yet (play, options, search, widgets) are reported here.
     callback activated(/* what */ string, /* id */ string);
     callback toggle-favorite(/* game id */ string);
+    // The focused cell of the row (art for it is decoded first).
+    callback focus-changed(/* index */ int);
     // A game's own controls page (running or not).
     callback open-game-controls(/* game id */ string);
     // Fills `properties` (synchronously) for a game.

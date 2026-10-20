@@ -160,7 +160,6 @@ pub fn home_tiles(
             favorite: e.favorite,
             art: tile_art.grid,
             hero: tile_art.hero,
-            hero_blur: tile_art.hero_blur,
             logo: tile_art.logo,
             console_icon: icon.image,
             console_icon_tint: icon.tint,

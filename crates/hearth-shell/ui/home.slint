@@ -113,6 +113,7 @@ export component Home inherits Rectangle {
     property <[HomeTile]> tiles: HomeData.tiles;
     property <HomeZone> zone: HomeZone.row;
     property <int> index: 0;          // current cell
+    changed index => { HomeData.focus-changed(index); }
     property <int> top-index: 0;      // 0 Games, 1 Media, 2 Search, 3 Settings
     property <int> hero-index: 0;
     property <int> widget-index: 0;

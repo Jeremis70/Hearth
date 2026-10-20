@@ -12,7 +12,9 @@ use std::time::Duration;
 
 use anyhow::Context;
 use clap::Parser;
-use hearth_core::art::{ArtCache, MetadataProvider, MockMetadataProvider, SteamGridDb};
+use hearth_core::art::{
+    ArtCache, DisplayClass, MetadataProvider, MockMetadataProvider, SteamGridDb,
+};
 use hearth_core::config::{self, Config};
 use hearth_core::packs::Resolver;
 use hearth_core::paths::{self, DataDirs};
@@ -249,6 +251,11 @@ fn main() -> anyhow::Result<()> {
         library_db: dirs.library_db(),
         games_dir,
         art_cache: ArtCache::new(dirs.art_cache()),
+        display_class: std::fs::read_to_string(display_class_file(&dirs))
+            .ok()
+            .and_then(|name| DisplayClass::from_name(&name))
+            .unwrap_or_default(),
+        display_class_file: display_class_file(&dirs),
         art_provider: art_provider(args.mock_network, &config),
         icons,
         config_file: dirs.config_file(),
@@ -294,6 +301,11 @@ fn main() -> anyhow::Result<()> {
         guard.stand_down();
     }
     Ok(())
+}
+
+/// Where the screen class of the last run is remembered (display-sized art).
+fn display_class_file(dirs: &DataDirs) -> std::path::PathBuf {
+    dirs.data().join("display-class")
 }
 
 /// `--print-controls`: no window, nothing written.

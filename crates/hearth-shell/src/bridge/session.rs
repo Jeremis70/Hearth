@@ -20,7 +20,9 @@ use std::sync::mpsc::{self, Sender};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use hearth_core::art::{ArtCache, ArtService, MetadataProvider, remove_orphaned_art};
+use hearth_core::art::{
+    ArtCache, ArtKind, ArtService, DisplayClass, MetadataProvider, remove_orphaned_art,
+};
 use hearth_core::config::{self, PackCategory};
 use hearth_core::controls::edit::{Editor, Scope};
 use hearth_core::controls::{ControllerKind, GameKey, HearthAction, PadInput, Target, defaults};
@@ -38,10 +40,10 @@ use hearth_platform::gamescope::{AppId, Compositor, SHELL_APP_ID};
 use hearth_platform::input::{
     Action, InputControl, InputMode, InputStatus, PadActivity, PadInfo, Power,
 };
-use slint::{ComponentHandle, Model, ModelRc, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel};
 use std::rc::Rc;
 
-use super::art::{self as art_ui, ArtMap, ConsoleIcons, DecodedArt};
+use super::art::{self as art_ui, ArtLoader, ArtMap, ConsoleIcons};
 use super::controls_page::{
     self, ApplyOutcome, EmulatorConfigApplier, InputPlumberApplier, MappingApplier, Page, TestPage,
 };
@@ -156,8 +158,14 @@ pub struct Controller {
     input: InputControl,
     library_db: PathBuf,
     entries: Vec<LibraryEntry>,
-    /// Decoded art per game, filled in by the art worker.
+    /// Decoded art per game, filled in by the art loader.
     art: ArtMap,
+    /// Images the loader has delivered (startup timing).
+    art_delivered: std::collections::HashSet<(GameId, ArtKind)>,
+    art_loader: ArtLoader,
+    /// Where the screen class is remembered, and a new class seen at the last tick.
+    display_class_file: PathBuf,
+    class_candidate: Option<DisplayClass>,
     icons: ConsoleIcons,
     /// Hearth's settings file (pack choices).
     config_file: PathBuf,
@@ -233,6 +241,9 @@ pub struct Setup {
     pub games_dir: PathBuf,
     /// Cached art.
     pub art_cache: ArtCache,
+    /// Screen class remembered from the last run, and its file.
+    pub display_class: DisplayClass,
+    pub display_class_file: PathBuf,
     /// Where art comes from; `None` without an API key.
     pub art_provider: Option<Box<dyn MetadataProvider>>,
     /// Console icons (pack, then Hearth's glyphs).
@@ -268,6 +279,10 @@ pub fn install(setup: Setup) {
         session.on_home_button(|long| defer(move |c| c.home_button(long)));
         session.on_open_controls(|| defer(|c| c.open_game_controls(MAIN)));
         let home = app.global::<HomeData>();
+        home.on_focus_changed(|index| {
+            let index = usize::try_from(index).unwrap_or(0);
+            defer(move |c| c.art_loader.set_focus(index));
+        });
         home.on_toggle_favorite(|id| {
             let id = GameId::new(id.as_str());
             defer(move |c| c.toggle_favorite(&id));
@@ -319,10 +334,12 @@ pub fn install(setup: Setup) {
         );
     }
 
+    let art_loader = art_ui::ArtLoader::start(&setup.art_cache, setup.display_class);
     let art_service = art_ui::start(
         setup.art_cache.clone(),
         setup.library_db.clone(),
         setup.art_provider,
+        art_loader.clone(),
     );
     load_library(LibraryLoad {
         db: setup.library_db.clone(),
@@ -359,6 +376,10 @@ pub fn install(setup: Setup) {
         library_db: setup.library_db,
         entries: Vec::new(),
         art: ArtMap::new(),
+        art_delivered: std::collections::HashSet::new(),
+        art_loader,
+        display_class_file: setup.display_class_file,
+        class_candidate: None,
         icons: setup.icons,
         config_file: setup.config_file,
         packs_dir: setup.packs_dir,
@@ -530,6 +551,7 @@ impl Controller {
         }
         self.sync_controller_type();
         self.sync_capture();
+        self.check_display_class();
         self.refresh_settings();
         self.sync_session_ui();
     }
@@ -1393,11 +1415,46 @@ impl Controller {
         self.refresh();
     }
 
-    /// New art for a game, from the art worker.
-    pub fn set_art(&mut self, game: GameId, art: DecodedArt) {
-        self.art.insert(game, art.into());
+    /// A decoded image (or none any more) for a game, from the art loader.
+    pub fn set_art_image(
+        &mut self,
+        game: &GameId,
+        kind: ArtKind,
+        pixels: Option<SharedPixelBuffer<Rgba8Pixel>>,
+    ) {
+        self.art.entry(game.clone()).or_default().set(kind, pixels);
+        self.art_delivered.insert((game.clone(), kind));
         self.refresh_tiles();
         self.probe_startup();
+    }
+
+    /// The SteamGridDB game a game matched (for Properties), from the art worker.
+    pub fn set_art_match(&mut self, game: &GameId, match_name: Option<String>) {
+        self.art.entry(game.clone()).or_default().match_name = match_name;
+        self.probe_startup();
+    }
+
+    /// Follows the window into another screen class once it has kept its size for a tick:
+    /// display copies are remade for it and remembered for the next start.
+    fn check_display_class(&mut self) {
+        let Some(app) = self.app.upgrade() else {
+            return;
+        };
+        let class = DisplayClass::for_height(app.window().size().height);
+        if class == self.art_loader.class() {
+            self.class_candidate = None;
+            return;
+        }
+        if self.class_candidate != Some(class) {
+            self.class_candidate = Some(class);
+            return;
+        }
+        tracing::info!(class = %class.name(), "screen class changed; remaking display art");
+        self.class_candidate = None;
+        self.art_loader.set_class(class);
+        if let Err(err) = std::fs::write(&self.display_class_file, class.name()) {
+            tracing::warn!("can't remember the screen class: {err}");
+        }
     }
 
     /// Startup timing: the first game's hero, and art for every game in view.
@@ -1413,11 +1470,13 @@ impl Controller {
             super::startup::shown("first game's hero", &app);
         }
         let in_view = &games[..games.len().min(IN_VIEW)];
-        if !in_view.is_empty()
-            && in_view
-                .iter()
-                .all(|t| self.art.contains_key(&GameId::new(t.id.as_str())))
-        {
+        let settled = |t: &HomeTile| {
+            let id = GameId::new(t.id.as_str());
+            self.art.contains_key(&id)
+                && (!self.art_loader.has_source(&id, ArtKind::Grid)
+                    || self.art_delivered.contains(&(id, ArtKind::Grid)))
+        };
+        if !in_view.is_empty() && in_view.iter().all(settled) {
             super::startup::shown("art of the games in view", &app);
         }
     }
@@ -1450,6 +1509,11 @@ impl Controller {
             &self.art,
             &mut self.icons,
         );
+        let order: Vec<Option<GameId>> = tiles
+            .iter()
+            .map(|t| (t.kind == TileKind::Game).then(|| GameId::new(t.id.as_str())))
+            .collect();
+        self.art_loader.set_order(&order);
         models::set_tiles(&app, tiles);
     }
 

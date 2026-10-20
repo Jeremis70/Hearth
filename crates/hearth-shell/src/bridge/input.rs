@@ -75,6 +75,7 @@ fn inject(window: &slint::Window, action: Action) {
         return;
     };
     let text: slint::SharedString = key.into();
+    super::frames::input();
     window.dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
     window.dispatch_event(WindowEvent::KeyReleased { text });
 }

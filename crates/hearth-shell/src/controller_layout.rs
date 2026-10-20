@@ -295,7 +295,6 @@ mod tests {
 
     #[test]
     fn every_input_has_a_highlight_matching_the_drawing() {
-        let slint = include_str!("../ui/controls/highlights.slint");
         for (id, svg) in derived_highlights() {
             let path = format!("{HIGHLIGHTS}/{id}.svg");
             if std::env::var_os("HEARTH_WRITE_ANCHORS").is_some() {
@@ -309,18 +308,18 @@ mod tests {
                 on_disk, svg,
                 "{id}.svg is out of date: HEARTH_WRITE_ANCHORS=1 cargo test -p hearth-shell highlight"
             );
-            assert!(
-                slint.contains(&format!("generic/{id}.svg")),
-                "highlights.slint doesn't use {id}.svg"
-            );
         }
-        // Every Hearth input on the drawing has one.
-        for (_, inputs) in IDS {
-            for input in inputs {
-                assert!(
-                    slint.contains(&format!("\"{input}\"")),
-                    "highlights.slint misses {input}"
-                );
+        // Every Hearth input on the drawing has its highlight in src/diagram.rs.
+        for (id, inputs) in IDS {
+            let on_disk =
+                std::fs::read_to_string(format!("{HIGHLIGHTS}/{id}.svg")).expect("highlight file");
+            for input in inputs.iter() {
+                let svg = crate::diagram::HIGHLIGHTS
+                    .iter()
+                    .find(|(name, _)| name == input)
+                    .map(|(_, svg)| *svg)
+                    .unwrap_or_else(|| panic!("diagram.rs misses {input}"));
+                assert_eq!(svg, on_disk, "diagram.rs uses another file for {input}");
             }
         }
     }

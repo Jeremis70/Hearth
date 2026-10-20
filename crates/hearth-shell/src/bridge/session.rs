@@ -54,6 +54,9 @@ use crate::{
     OverlayWindow, PadNotice, PadRow, Session, SettingsCategory, SettingsData, Status, TileKind,
 };
 
+/// When the controls page's drawing is rasterized ahead of use (the window has its size).
+const DIAGRAM_WARM_UP: Duration = Duration::from_secs(6);
+
 /// How long a problem notice (e.g. hearth.toml unreadable) stays on screen.
 const PROBLEM_TIME: Duration = Duration::from_secs(20);
 
@@ -432,6 +435,11 @@ pub fn install(setup: Setup) {
         c.pad_timer.start(slint::TimerMode::Repeated, PAD_POLL, || {
             with(Controller::poll_pads);
         });
+    });
+    // Prepare the controls pages on workers once the window has its size and the controllers
+    // are known (InputPlumber takes a few seconds), so the first page opens at once.
+    slint::Timer::single_shot(DIAGRAM_WARM_UP, || {
+        with(Controller::warm_up_controls);
     });
 }
 
@@ -1493,7 +1501,12 @@ impl Controller {
         let Some(app) = self.app.upgrade() else {
             return;
         };
-        let class = DisplayClass::for_height(app.window().size().height);
+        let size = app.window().size();
+        #[allow(clippy::cast_precision_loss)]
+        crate::diagram::set_scale(
+            (size.width as f32 / crate::callouts::PAGE_W).min(size.height as f32 / 1080.0),
+        );
+        let class = DisplayClass::for_height(size.height);
         if class == self.art_loader.class() {
             self.class_candidate = None;
             return;
@@ -1613,6 +1626,38 @@ impl Controller {
 
     /// Player 1's extra inputs (touchpad, share, paddles, mute) that the input backend reads:
     /// gilrs can't see the touchpad (a separate device) or the mute button.
+    /// The button test's inputs beyond the drawing: Guide, and the extras the backend reads.
+    fn test_extras(&self) -> Vec<&'static str> {
+        let live = self.input.is_live();
+        std::iter::once("guide")
+            .chain(
+                self.pad_extras()
+                    .into_iter()
+                    .filter(|i| live || *i != PadInput::Touchpad)
+                    .map(PadInput::name),
+            )
+            .collect()
+    }
+
+    /// Prepares the controls pages on worker threads (callout placement, the drawing) so they
+    /// open at once.
+    fn warm_up_controls(&mut self) {
+        self.check_display_class();
+        let page: Vec<&'static str> = self.pad_extras().into_iter().map(PadInput::name).collect();
+        let test = self.test_extras();
+        let spawned = thread::Builder::new()
+            .name("hearth-callouts".into())
+            .spawn(move || {
+                crate::callouts::place_generic(&page);
+                crate::callouts::place_generic(&test);
+            });
+        if let Err(err) = spawned {
+            tracing::warn!("cannot start the callout thread: {err}");
+        }
+        let layout = crate::controller_layout::Layout::generic();
+        crate::diagram::warm_up(crate::callouts::drawing(&layout));
+    }
+
     fn pad_extras(&self) -> Vec<PadInput> {
         let live = self.input.is_live();
         controls::device(&self.activity.pads(), &self.controls_dir)
@@ -1661,6 +1706,7 @@ impl Controller {
         let Some(system) = self.systems.get(&SystemId::new(id)).cloned() else {
             return;
         };
+        let started = Instant::now();
         let key = GameKey::for_rom(&system.id, std::path::Path::new(""), "");
         let editor = match Editor::new(
             &system,
@@ -1686,10 +1732,16 @@ impl Controller {
             self.applier.is_live(),
             self.pad_extras(),
         ));
+        let built = started.elapsed();
         self.with_page_data(MAIN, |page, data| {
             data.set_message("".into());
             page.fill(data);
         });
+        tracing::debug!(
+            built_ms = built.as_millis(),
+            total_ms = started.elapsed().as_millis(),
+            "controls page filled"
+        );
         if let Some(app) = self.app.upgrade() {
             app.invoke_open_controls();
         }
@@ -2055,16 +2107,7 @@ impl Controller {
         self.testing = true;
         let device = controls::device(&self.activity.pads(), &self.controls_dir);
         let live = self.input.is_live();
-        // Guide, and the extras the backend reads.
-        let extras: Vec<&'static str> = std::iter::once("guide")
-            .chain(
-                self.pad_extras()
-                    .into_iter()
-                    .filter(|i| live || *i != PadInput::Touchpad)
-                    .map(PadInput::name),
-            )
-            .collect();
-        let page = TestPage::new(&extras);
+        let page = TestPage::new(&self.test_extras());
         let pad_id = pad_id.to_owned();
         let header = move |pads: Vec<PadInfo>| {
             let pad = pads.iter().find(|p| p.id == pad_id).or(pads.first());

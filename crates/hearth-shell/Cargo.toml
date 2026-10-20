@@ -27,6 +27,7 @@ chrono.workspace = true
 image.workspace = true
 clap.workspace = true
 slint.workspace = true
+resvg.workspace = true
 raw-window-handle.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

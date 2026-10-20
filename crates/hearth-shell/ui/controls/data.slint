@@ -28,6 +28,12 @@ export struct Callout {
     has-dot: bool,      // stick position dot at (dot-x, dot-y), page pixels
     dot-x: float,
     dot-y: float,
+    // The input's highlight, cropped, and its box in page pixels (src/diagram.rs).
+    highlight: image,
+    hx: float,
+    hy: float,
+    hw: float,
+    hh: float,
 }
 
 // One entry of the "what can this button do" menu.
@@ -55,6 +61,7 @@ export global ControlsData {
     in property <string> message;           // short feedback ("Z and R swapped"), empty: none
     in property <string> changed-label;     // what the dot means on this page
     in property <string> reset-message;     // what Reset goes back to
+    in property <image> drawing;            // the controller drawing, rasterized (src/diagram.rs)
     in property <float> draw-x;              // the drawing on the controls page, page pixels
     in property <float> draw-y;
     in property <float> draw-w;

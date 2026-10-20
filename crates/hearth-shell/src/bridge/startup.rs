@@ -46,10 +46,13 @@ pub fn start() {
 
 /// Hooks the window's frames: the first one is "window shown".
 pub fn install(app: &AppWindow) {
-    let result = app.window().set_rendering_notifier(|state, _| {
-        if matches!(state, slint::RenderingState::AfterRendering) {
+    let result = app.window().set_rendering_notifier(|state, _| match state {
+        slint::RenderingState::BeforeRendering => super::frames::before_rendering(),
+        slint::RenderingState::AfterRendering => {
             frame_drawn();
+            super::frames::after_rendering();
         }
+        _ => {}
     });
     if let Err(err) = result {
         tracing::warn!("startup timing unavailable: {err:?}");

@@ -11,11 +11,12 @@ use hearth_core::profiles::input::Capabilities;
 use hearth_core::profiles::{dolphin_input, retroarch_input};
 use hearth_core::systems::{ControlKind, EmulatorKind, System};
 use hearth_platform::input::{Analog, Connection, InputControl, PadInfo, Power};
-use slint::{Model, ModelRc, VecModel};
+use slint::{Image, Model, ModelRc, VecModel};
 
-use crate::callouts::{self, Align, Placed, Point};
+use crate::callouts::{self, Align, Placed, Point, Rect};
 use crate::controller_layout::{Layout, Side};
 use crate::controls::GameInput;
+use crate::diagram::{self, Art, Piece};
 use crate::{Callout, Choice, ControlsData, OptionRow};
 
 /// Pushes a changed mapping to a game that is already running.
@@ -193,7 +194,7 @@ impl Page {
         }
     }
 
-    fn callout(&self, placed: &Placed, current: &Mapping, base: &Mapping) -> Callout {
+    fn callout(&self, placed: &Placed, current: &Mapping, base: &Mapping, art: &Art) -> Callout {
         let input = PadInput::from_name(placed.input).expect("the controls page lists pad inputs");
         let target = current.binds.get(&input).cloned().unwrap_or(Target::None);
         let below = base.binds.get(&input).cloned().unwrap_or(Target::None);
@@ -215,7 +216,7 @@ impl Page {
             hint: hint.into(),
             unassigned,
             changed: target != below,
-            ..geometry(placed)
+            ..geometry(placed, art)
         }
     }
 
@@ -257,12 +258,13 @@ impl Page {
             .into(),
         );
         let extras: Vec<&'static str> = self.extras.iter().map(|i| i.name()).collect();
-        let placed = callouts::place(&self.layout, &extras);
+        let placed = callouts::place_generic(&extras);
         set_geometry(data, &self.layout, &placed);
+        let art = diagram::art(callouts::drawing(&self.layout));
         data.set_callouts(model(
             placed
                 .iter()
-                .map(|p| self.callout(p, &current, &base))
+                .map(|p| self.callout(p, &current, &base, &art))
                 .collect(),
         ));
         data.set_options(model(self.options(&resolved.mapping, &base_mapping)));
@@ -530,8 +532,17 @@ impl Page {
 }
 
 /// A callout's place on the page, with empty text and no live state.
-fn geometry(placed: &Placed) -> Callout {
+fn geometry(placed: &Placed, art: &Art) -> Callout {
     let [line_start, elbow, end] = placed.leader.unwrap_or([Point { x: 0.0, y: 0.0 }; 3]);
+    let highlight = art.highlight(placed.input).cloned().unwrap_or(Piece {
+        image: Image::default(),
+        rect: Rect {
+            x: 0.0,
+            y: 0.0,
+            w: 0.0,
+            h: 0.0,
+        },
+    });
     Callout {
         input: placed.input.into(),
         label: "".into(),
@@ -560,12 +571,18 @@ fn geometry(placed: &Placed) -> Callout {
         has_dot: false,
         dot_x: 0.0,
         dot_y: 0.0,
+        highlight: highlight.image,
+        hx: highlight.rect.x,
+        hy: highlight.rect.y,
+        hw: highlight.rect.w,
+        hh: highlight.rect.h,
     }
 }
 
 /// The drawing's place, the column sizes and where going down from each column lands.
 fn set_geometry(data: &ControlsData<'_>, layout: &Layout, placed: &[Placed]) {
     let draw = callouts::drawing(layout);
+    data.set_drawing(diagram::art(draw).drawing.clone());
     data.set_draw_x(draw.x);
     data.set_draw_y(draw.y);
     data.set_draw_w(draw.w);
@@ -592,17 +609,24 @@ fn set_geometry(data: &ControlsData<'_>, layout: &Layout, placed: &[Placed]) {
 /// The button test: the controls page's drawing and callouts showing each input's live state.
 pub struct TestPage {
     placed: Vec<Placed>,
+    art: Rc<Art>,
     callouts: Rc<VecModel<Callout>>,
 }
 
 impl TestPage {
     /// A test page listing the drawing's inputs and `extras` ("guide", "share", …).
     pub fn new(extras: &[&'static str]) -> Self {
-        let placed = callouts::place(&Layout::generic(), extras);
+        let layout = Layout::generic();
+        let placed = callouts::place_generic(extras);
+        let art = diagram::art(callouts::drawing(&layout));
         let callouts = Rc::new(VecModel::from(
-            placed.iter().map(geometry).collect::<Vec<_>>(),
+            placed.iter().map(|p| geometry(p, &art)).collect::<Vec<_>>(),
         ));
-        Self { placed, callouts }
+        Self {
+            placed,
+            callouts,
+            art,
+        }
     }
 
     /// Fills the page; `controller` is the header line (name, connection, battery).
@@ -618,7 +642,7 @@ impl TestPage {
     /// Shows what is held (`pressed`, Hearth pad position names) and the raw analog values.
     pub fn update(&self, pressed: &[&str], analog: &Analog) {
         for (row, placed) in self.placed.iter().enumerate() {
-            let mut callout = geometry(placed);
+            let mut callout = geometry(placed, &self.art);
             callout.held = pressed.contains(&placed.input);
             let trigger = match placed.input {
                 "l2" => Some(analog.l2),
@@ -644,6 +668,7 @@ impl TestPage {
                 }
             }
             if self.callouts.row_data(row).as_ref() != Some(&callout) {
+                super::frames::count("test-rows", 1);
                 self.callouts.set_row_data(row, callout);
             }
         }

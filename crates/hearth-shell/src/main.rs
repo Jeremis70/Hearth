@@ -4,6 +4,7 @@ mod bridge;
 mod callouts;
 mod controller_layout;
 mod controls;
+mod diagram;
 mod guard;
 
 use std::path::PathBuf;
@@ -147,6 +148,7 @@ fn main() -> anyhow::Result<()> {
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
     let args = Args::parse();
+    bridge::frames::init();
 
     let dirs = DataDirs::from_env().context("resolving data directories")?;
     dirs.create_all()?;

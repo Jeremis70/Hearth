@@ -5,47 +5,51 @@ import { HintBar } from "../components/hint_bar.slint";
 import { FocusRing } from "../components/focus.slint";
 import { ConfirmDialog } from "../components/dialog.slint";
 import { ControlsData, Callout } from "data.slint";
-import { Highlights } from "highlights.slint";
 
 // Small accent dot: this value differs from the layer below.
 component ChangedDot inherits Rectangle {
     in property <bool> shown;
-    width: 12px * Theme.scale;
+    in property <length> u;
+    width: 12 * u;
     height: self.width;
     border-radius: self.width / 2;
     background: shown ? Theme.accent : transparent;
 }
 
 // One callout: glyph + what the input does. `align` 0: text right of the glyph's column
-// (left side, glyph nearest the drawing), 1: glyph first (right side and bottom row).
+// (left side, glyph nearest the drawing), 1: glyph first (right side and bottom row). Sized in
+// page units (`u`) like the rest of the diagram: src/callouts.rs places the lines from these
+// paddings and the glyph's 40-unit width.
 component CalloutBox inherits Rectangle {
     in property <Callout> callout;
     in property <bool> focused;
     in property <int> align;
+    in property <length> u;
     // Button test: the input's name and its live state.
     in property <bool> test-mode;
     property <string> text: test-mode
         ? Glyphs.name(ControllerType.family, callout.input) + callout.label
         : callout.label;
     property <color> text-color: !test-mode && callout.unassigned ? Theme.text-disabled : Theme.text-primary;
-    border-radius: Theme.radius-md;
+    border-radius: 14 * u;
     background: focused ? Theme.surface-raised : transparent;
 
     HorizontalLayout {
         // Below the drawing, glyphs sit closer to the edge where their line starts.
-        padding-left: callout.side == 2 ? 8px * Theme.scale : Theme.sp-16;
-        padding-right: callout.side == 2 ? 8px * Theme.scale : Theme.sp-16;
-        spacing: Theme.sp-12;
+        padding-left: (callout.side == 2 ? 8 : 16) * u;
+        padding-right: (callout.side == 2 ? 8 : 16) * u;
+        spacing: 12 * u;
         alignment: align == 0 ? end : start;
         if align == 0: ChangedDot {
             y: (parent.height - self.height) / 2;
+            u: u;
             shown: !test-mode && callout.changed;
         }
         if align == 0: Text {
             text: root.text;
             vertical-alignment: center;
             horizontal-alignment: right;
-            font-size: Theme.body-lg;
+            font-size: 24 * u;
             font-weight: Theme.medium;
             color: text-color;
             overflow: elide;
@@ -54,32 +58,120 @@ component CalloutBox inherits Rectangle {
             y: (parent.height - self.height) / 2;
             input: callout.input;
             tint: focused ? Theme.accent : Theme.text-primary;
-            size: 40px * Theme.scale;
+            size: 40 * u;
         }
         if align == 1: Text {
             text: root.text;
             vertical-alignment: center;
-            font-size: Theme.body-lg;
+            font-size: 24 * u;
             font-weight: Theme.medium;
             color: text-color;
             overflow: elide;
         }
         if align == 1: ChangedDot {
             y: (parent.height - self.height) / 2;
+            u: u;
             shown: !test-mode && callout.changed;
         }
     }
     // Trigger travel (button test).
     if callout.bar >= 0: Rectangle {
-        x: Theme.sp-16;
-        y: parent.height - self.height - 6px * Theme.scale;
-        width: (parent.width - 2 * Theme.sp-16) * max(0, min(1, callout.bar));
-        height: 4px * Theme.scale;
+        x: 16 * u;
+        y: parent.height - self.height - 6 * u;
+        width: (parent.width - 32 * u) * max(0, min(1, callout.bar));
+        height: 4 * u;
         border-radius: self.height / 2;
         background: Theme.accent;
     }
     FocusRing {
         shown: focused;
+        radius: 14 * u;
+    }
+}
+
+// The Buttons tab's diagram: the drawing, the highlights, the leader lines, the stick dots and
+// the callouts, all in page units of one 1920 × 1080 canvas (src/callouts.rs and
+// src/diagram.rs compute them there) and scaled together by `u`, one page unit. Nothing in it
+// is positioned any other way, so lines always end on their input.
+component Diagram inherits Rectangle {
+    in property <length> u;
+    in property <bool> test-mode;
+    in property <int> focused-index;    // the focused callout (controls page); -1: none
+
+    width: 1920 * u;
+    height: 1080 * u;
+
+    function lit(c: Callout, i: int) -> bool {
+        test-mode ? c.held : i == focused-index
+    }
+    // How strongly an input's highlight shows: on the button test, triggers follow their
+    // pressure (0 at rest to a pressed button's full highlight at 100 %).
+    function strength(c: Callout, i: int) -> float {
+        if test-mode && c.bar >= 0 { return max(0, min(1, c.bar)); }
+        lit(c, i) ? 1 : 0
+    }
+
+    Image {
+        x: ControlsData.draw-x * u;
+        y: ControlsData.draw-y * u;
+        width: ControlsData.draw-w * u;
+        height: ControlsData.draw-h * u;
+        source: ControlsData.drawing;
+        colorize: Theme.text-secondary;
+        image-fit: fill;
+    }
+    // Each input's highlight, cropped to its shape (src/diagram.rs).
+    for c[i] in ControlsData.callouts: Image {
+        x: c.hx * u;
+        y: c.hy * u;
+        width: c.hw * u;
+        height: c.hh * u;
+        source: c.highlight;
+        colorize: Theme.accent;
+        image-fit: fill;
+        opacity: strength(c, i);
+        // The button test shows the controller's state as it is; the controls page glides.
+        animate opacity { duration: test-mode ? 0ms : Theme.fast; easing: ease-out; }
+    }
+    for c[i] in ControlsData.callouts: Path {
+        // A Path fits its viewbox into its size minus the stroke width, shifted by half the
+        // stroke: grow and shift it by as much so page units map exactly onto the canvas.
+        property <length> sw: (lit(c, i) ? 3 : 2) * u;
+        visible: c.has-line;
+        x: -sw / 2;
+        y: -sw / 2;
+        width: root.width + sw;
+        height: root.height + sw;
+        viewbox-x: 0;
+        viewbox-y: 0;
+        viewbox-width: 1920;
+        viewbox-height: 1080;
+        commands: c.has-line ? "M \{c.lx} \{c.ly} L \{c.ex} \{c.ey} L \{c.ax} \{c.ay}" : "";
+        stroke: lit(c, i) ? Theme.accent : Theme.text-disabled;
+        stroke-width: sw;
+    }
+    // Stick positions (button test).
+    for c in ControlsData.callouts: Rectangle {
+        visible: c.has-dot;
+        width: 14 * u;
+        height: self.width;
+        x: c.dot-x * u - self.width / 2;
+        y: c.dot-y * u - self.height / 2;
+        border-radius: self.width / 2;
+        background: Theme.accent;
+        drop-shadow-blur: 8 * u;
+        drop-shadow-color: Theme.focus-glow;
+    }
+    for c[i] in ControlsData.callouts: CalloutBox {
+        x: c.bx * u;
+        y: c.by * u;
+        width: c.bw * u;
+        height: c.bh * u;
+        u: u;
+        callout: c;
+        focused: lit(c, i);
+        test-mode: root.test-mode;
+        align: c.glyph-last ? 0 : 1;
     }
 }
 
@@ -109,11 +201,10 @@ export component ControlsScreen inherits Rectangle {
     property <int> count: ControlsData.callouts.length;
     property <Callout> current: ControlsData.callouts[index];
 
-    // Geometry: callouts come in page pixels at 1920×1080 (src/callouts.rs), × Theme.scale
-    // (less when the page is narrower than the window, inside Settings), centered horizontally
-    // when the page is wider than 16:9.
-    property <length> s: 1px * min(Theme.scale, root.width / 1920px);
-    property <length> ox: (root.width - 1920 * s) / 2;
+    // Page chrome (header, menus, options) follows the theme's scale.
+    property <length> s: 1px * Theme.scale;
+    // The diagram: the 1920 × 1080 page canvas fitted into this page as one unit, centered.
+    property <length> u: 1px * min(root.width / 1920px, root.height / 1080px);
     property <length> content-y: 236 * s;
     property <length> menu-row: 56 * s;
     property <int> menu-visible: 9;
@@ -139,13 +230,6 @@ export component ControlsScreen inherits Rectangle {
     // Whether callout `i` is lit: the focused one, or every held input on the button test.
     function lit(i: int) -> bool {
         test-mode ? ControlsData.callouts[i].held : i == index && !menu-open
-    }
-
-    // Leader line from the callout to its input, in pixels.
-    function leader(c: Callout) -> string {
-        let k = Theme.scale;
-        let x0 = ox / 1px;
-        "M \{x0 + c.lx * k} \{c.ly * k} L \{x0 + c.ex * k} \{c.ey * k} L \{x0 + c.ax * k} \{c.ay * k}"
     }
 
     function first-of(side: int) -> int {
@@ -303,67 +387,13 @@ export component ControlsScreen inherits Rectangle {
     }
 
     // --- Buttons tab --------------------------------------------------------------------
-    Rectangle {
+    Diagram {
         visible: tab == 0;
-
-        Image {
-            x: ox + ControlsData.draw-x * s;
-            y: ControlsData.draw-y * s;
-            width: ControlsData.draw-w * s;
-            height: ControlsData.draw-h * s;
-            source: @image-url("../../../../assets/controllers/generic.svg");
-            colorize: Theme.text-secondary;
-            image-fit: contain;
-        }
-        // The focused input lights up on the drawing in its exact shape: each input's
-        // highlight image covers the whole drawing and fades in when it is focused.
-        for c[i] in ControlsData.callouts: Image {
-            x: ox + ControlsData.draw-x * s;
-            y: ControlsData.draw-y * s;
-            width: ControlsData.draw-w * s;
-            height: ControlsData.draw-h * s;
-            source: Highlights.image(c.input);
-            colorize: Theme.accent;
-            image-fit: contain;
-            opacity: lit(i) ? 1 : 0;
-            animate opacity { duration: Theme.fast; easing: ease-out; }
-        }
-        for c[i] in ControlsData.callouts: Path {
-            visible: c.has-line;
-            x: 0;
-            y: 0;
-            width: root.width;
-            height: root.height;
-            viewbox-x: 0;
-            viewbox-y: 0;
-            viewbox-width: root.width / 1px;
-            viewbox-height: root.height / 1px;
-            commands: c.has-line ? leader(c) : "";
-            stroke: lit(i) ? Theme.accent : Theme.text-disabled;
-            stroke-width: (lit(i) ? 3 : 2) * s;
-        }
-        // Stick positions (button test).
-        for c in ControlsData.callouts: Rectangle {
-            visible: c.has-dot;
-            width: 14 * s;
-            height: self.width;
-            x: ox + c.dot-x * s - self.width / 2;
-            y: c.dot-y * s - self.height / 2;
-            border-radius: self.width / 2;
-            background: Theme.accent;
-            drop-shadow-blur: 8 * s;
-            drop-shadow-color: Theme.focus-glow;
-        }
-        for c[i] in ControlsData.callouts: CalloutBox {
-            x: ox + c.bx * s;
-            y: c.by * s;
-            width: c.bw * s;
-            height: c.bh * s;
-            callout: c;
-            focused: lit(i);
-            test-mode: root.test-mode;
-            align: c.glyph-last ? 0 : 1;
-        }
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        u: root.u;
+        test-mode: root.test-mode;
+        focused-index: menu-open ? -1 : index;
     }
 
     // --- Sticks & options tab -----------------------------------------------------------

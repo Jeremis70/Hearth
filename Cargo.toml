@@ -26,6 +26,7 @@ toml = "1"
 toml_edit = "0.25"
 ureq = { version = "3", features = ["json"] }
 usvg = { version = "0.48", default-features = false }
+resvg = { version = "0.48", default-features = false }
 walkdir = "2.5"
 x11rb = "0.14"
 zbus = "6.0.0"
@@ -60,4 +61,34 @@ opt-level = 3
 [profile.dev.package.image-webp]
 opt-level = 3
 [profile.dev.package.qoi]
+opt-level = 3
+# The controller drawing (resvg) and text layout/rendering in debug builds: unoptimised, a
+# controls page took 290 ms to open and moves lagged; with these, ~80 ms and one frame.
+[profile.dev.package.resvg]
+opt-level = 3
+[profile.dev.package.tiny-skia]
+opt-level = 3
+[profile.dev.package.tiny-skia-path]
+opt-level = 3
+[profile.dev.package.usvg]
+opt-level = 3
+[profile.dev.package.parley]
+opt-level = 3
+[profile.dev.package.harfrust]
+opt-level = 3
+[profile.dev.package.skrifa]
+opt-level = 3
+[profile.dev.package.read-fonts]
+opt-level = 3
+[profile.dev.package.swash]
+opt-level = 3
+[profile.dev.package.zeno]
+opt-level = 3
+[profile.dev.package.fontique]
+opt-level = 3
+[profile.dev.package.femtovg]
+opt-level = 3
+[profile.dev.package.i-slint-renderer-femtovg]
+opt-level = 3
+[profile.dev.package.i-slint-core]
 opt-level = 3

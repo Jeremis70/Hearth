@@ -1896,6 +1896,7 @@ dependencies = [
  "image",
  "nix",
  "raw-window-handle",
+ "resvg",
  "serde",
  "slint",
  "slint-build",

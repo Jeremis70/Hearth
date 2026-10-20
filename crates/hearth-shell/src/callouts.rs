@@ -6,6 +6,8 @@
 //! PS5's controller screen. A small search then swaps rows or moves elbows until no two lines
 //! cross and no line crosses a label (`no_leader_lines_cross` checks the result).
 
+use std::sync::{Mutex, PoisonError};
+
 use crate::controller_layout::{Layout, Side};
 
 /// Page size the geometry is computed for.
@@ -83,6 +85,20 @@ pub fn drawing(layout: &Layout) -> Rect {
         w,
         h: DRAW_H,
     }
+}
+
+/// [`place`] for the generic drawing, remembered per set of `extras`: the search takes a
+/// moment (most of a page's opening time in debug builds) and always gives the same result.
+/// Any thread.
+pub fn place_generic(extras: &[&'static str]) -> Vec<Placed> {
+    static PLACED: Mutex<Vec<(Vec<&'static str>, Vec<Placed>)>> = Mutex::new(Vec::new());
+    let mut known = PLACED.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some((_, placed)) = known.iter().find(|(e, _)| e == extras) {
+        return placed.clone();
+    }
+    let placed = place(&Layout::generic(), extras);
+    known.push((extras.to_vec(), placed.clone()));
+    placed
 }
 
 /// Every callout: the left column top to bottom, then the right column, then the bottom row

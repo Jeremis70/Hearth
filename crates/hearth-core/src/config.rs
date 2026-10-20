@@ -14,6 +14,7 @@
 
 use std::fs;
 use std::io;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -34,13 +35,62 @@ pub enum ConfigError {
         source: io::Error,
     },
     /// The file isn't valid TOML, or has a value of the wrong type.
-    #[error("{path}: {message}")]
+    #[error("{path}{}: {message}", line.map(|l| format!(", line {l}")).unwrap_or_default())]
     Parse {
         /// File.
         path: PathBuf,
-        /// Parser message.
+        /// Line of the problem (1-based), when the parser knows it.
+        line: Option<usize>,
+        /// Parser message, with any quoted file content taken out (it could be the API key).
         message: String,
     },
+}
+
+impl ConfigError {
+    fn parse(path: &Path, text: &str, message: &str, span: Option<Range<usize>>) -> Self {
+        let line = span.map(|span| text[..span.start.min(text.len())].matches('\n').count() + 1);
+        Self::Parse {
+            path: path.to_path_buf(),
+            line,
+            message: redact(message),
+        }
+    }
+
+    /// The line a parse error is on.
+    pub fn line(&self) -> Option<usize> {
+        match self {
+            Self::Parse { line, .. } => *line,
+            Self::Io { .. } => None,
+        }
+    }
+}
+
+/// `message` with everything between backticks or double quotes replaced by "…": parser
+/// messages quote values from the file ("invalid type: integer `123`"), and a value in
+/// `hearth.toml` may be a secret.
+fn redact(message: &str) -> String {
+    let mut out = String::with_capacity(message.len());
+    let mut open: Option<char> = None;
+    for c in message.chars() {
+        match open {
+            Some(quote) if c == quote => {
+                out.push('…');
+                out.push(c);
+                open = None;
+            }
+            Some(_) => {}
+            None => {
+                out.push(c);
+                if c == '`' || c == '"' {
+                    open = Some(c);
+                }
+            }
+        }
+    }
+    if open.is_some() {
+        out.push('…');
+    }
+    out
 }
 
 /// The kinds of asset packs a user can pick one of.
@@ -99,10 +149,8 @@ impl Config {
                 });
             }
         };
-        toml::from_str(&text).map_err(|err| ConfigError::Parse {
-            path: path.to_path_buf(),
-            message: err.message().to_owned(),
-        })
+        toml::from_str(&text)
+            .map_err(|err| ConfigError::parse(path, &text, err.message(), err.span()))
     }
 
     /// The SteamGridDB API key: `env` (the value of [`STEAMGRIDDB_KEY_ENV`]) if set, else the
@@ -148,18 +196,16 @@ pub fn save_pack(
         Err(err) if err.kind() == io::ErrorKind::NotFound => String::new(),
         Err(err) => return Err(io_err(err)),
     };
-    let mut doc: DocumentMut =
-        text.parse()
-            .map_err(|err: toml_edit::TomlError| ConfigError::Parse {
-                path: path.to_path_buf(),
-                message: err.message().to_owned(),
-            })?;
+    let mut doc: DocumentMut = text.parse().map_err(|err: toml_edit::TomlError| {
+        ConfigError::parse(path, &text, err.message(), err.span())
+    })?;
     let packs = doc
         .entry("packs")
         .or_insert_with(|| Item::Table(Table::new()))
         .as_table_mut()
         .ok_or_else(|| ConfigError::Parse {
             path: path.to_path_buf(),
+            line: None,
             message: "[packs] isn't a table".into(),
         })?;
     match pack {
@@ -233,9 +279,41 @@ mod tests {
         let dir = tempdir();
         let path = dir.path().join("hearth.toml");
         fs::write(&path, "[packs]\nconsole_icons = 3\n").unwrap();
-        assert!(matches!(
-            Config::load(&path),
-            Err(ConfigError::Parse { .. })
-        ));
+        let err = Config::load(&path).unwrap_err();
+        assert_eq!(err.line(), Some(2));
+    }
+
+    #[test]
+    fn parse_errors_name_the_line_and_never_the_values() {
+        let dir = tempdir();
+        let path = dir.path().join("hearth.toml");
+        // The classic mistake: the key not quoted.
+        fs::write(&path, "# mine\n[art]\nsteamgriddb_key = abc123secret\n").unwrap();
+        let err = Config::load(&path).unwrap_err();
+        assert_eq!(err.line(), Some(3));
+        assert!(!err.to_string().contains("abc123secret"), "{err}");
+        // Wrong types quote the value in the parser's message.
+        fs::write(&path, "[art]\nsteamgriddb_key = 123456789\n").unwrap();
+        let err = Config::load(&path).unwrap_err();
+        assert_eq!(err.line(), Some(2));
+        assert!(!err.to_string().contains("123456789"), "{err}");
+        // Saving a pack into a broken file fails and leaves it alone.
+        fs::write(&path, "[art]\nsteamgriddb_key = abc123secret\n").unwrap();
+        let err = save_pack(&path, PackCategory::ConsoleIcons, Some("x")).unwrap_err();
+        assert!(!err.to_string().contains("abc123secret"), "{err}");
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "[art]\nsteamgriddb_key = abc123secret\n"
+        );
+    }
+
+    #[test]
+    fn redact_hides_quoted_parts() {
+        assert_eq!(
+            redact("invalid type: integer `12`, expected a string"),
+            "invalid type: integer `…`, expected a string"
+        );
+        assert_eq!(redact("unknown \"abc"), "unknown \"…");
+        assert_eq!(redact("plain"), "plain");
     }
 }

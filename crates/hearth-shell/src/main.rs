@@ -227,10 +227,15 @@ fn main() -> anyhow::Result<()> {
         None => tracing::info!("Dolphin not found: GameCube and Wii games won't launch"),
     }
 
-    let config = Config::load(&dirs.config_file()).unwrap_or_else(|err| {
-        tracing::warn!("ignoring the config file: {err}");
-        Config::default()
-    });
+    // A broken file is left as it is: Hearth runs on defaults and says so on screen. The
+    // error never quotes the file (it may hold the API key).
+    let (config, config_problem) = match Config::load(&dirs.config_file()) {
+        Ok(config) => (config, None),
+        Err(err) => {
+            tracing::warn!("ignoring the config file: {err}");
+            (Config::default(), Some(config_notice(&err)))
+        }
+    };
     let icons = bridge::art::ConsoleIcons::new(Resolver::new(dirs.packs(), assets_dir(), &config));
 
     let input = select_input(args.input, dirs.runtime())?;
@@ -259,6 +264,7 @@ fn main() -> anyhow::Result<()> {
         art_provider: art_provider(args.mock_network, &config),
         icons,
         config_file: dirs.config_file(),
+        config_problem,
         packs_dir: dirs.packs().to_path_buf(),
     });
 
@@ -301,6 +307,17 @@ fn main() -> anyhow::Result<()> {
         guard.stand_down();
     }
     Ok(())
+}
+
+/// The on-screen notice for a config file Hearth couldn't read: title and explanation.
+fn config_notice(err: &config::ConfigError) -> (String, String) {
+    let place = err
+        .line()
+        .map_or_else(String::new, |line| format!(" (line {line})"));
+    (
+        format!("Couldn't read hearth.toml{place}"),
+        "Using default settings".to_owned(),
+    )
 }
 
 /// Where the screen class of the last run is remembered (display-sized art).

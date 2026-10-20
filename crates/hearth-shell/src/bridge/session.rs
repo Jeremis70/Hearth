@@ -54,6 +54,9 @@ use crate::{
     OverlayWindow, PadNotice, Session, SettingsCategory, SettingsData, Status, TileKind,
 };
 
+/// How long a problem notice (e.g. hearth.toml unreadable) stays on screen.
+const PROBLEM_TIME: Duration = Duration::from_secs(20);
+
 /// How long to look for a game's window before giving up.
 const WINDOW_SEARCH: Duration = Duration::from_secs(15);
 const WINDOW_POLL: Duration = Duration::from_millis(250);
@@ -177,6 +180,8 @@ pub struct Controller {
     events: Sender<RuntimeEvent>,
     next_app_id: AppId,
     toast_timer: slint::Timer,
+    /// Hides the problem notice (NoticeCard).
+    problem_timer: slint::Timer,
     notice_timer: slint::Timer,
     /// The running game's Capture buttons (Hearth pad position names).
     game_capture: Vec<&'static str>,
@@ -250,6 +255,8 @@ pub struct Setup {
     pub icons: ConsoleIcons,
     /// Hearth's settings file.
     pub config_file: PathBuf,
+    /// Title and text of a notice about that file (it couldn't be read).
+    pub config_problem: Option<(String, String)>,
     /// Installed asset packs.
     pub packs_dir: PathBuf,
 }
@@ -389,6 +396,7 @@ pub fn install(setup: Setup) {
         events,
         next_app_id: FIRST_GAME_APP_ID,
         toast_timer: slint::Timer::default(),
+        problem_timer: slint::Timer::default(),
         notice_timer: slint::Timer::default(),
         game_capture: Vec::new(),
         focus_timer: slint::Timer::default(),
@@ -407,6 +415,9 @@ pub fn install(setup: Setup) {
     };
     CONTROLLER.with(|cell| *cell.borrow_mut() = Some(controller));
     with(Controller::fill_display_items);
+    if let Some((title, text)) = setup.config_problem {
+        with(|c| c.show_problem(&title, &text));
+    }
     with(|c| {
         c.pad_timer.start(slint::TimerMode::Repeated, PAD_POLL, || {
             with(Controller::poll_pads);
@@ -2059,6 +2070,23 @@ impl Controller {
             .start(slint::TimerMode::SingleShot, TOAST_TIME, move || {
                 if let Some(app) = weak.upgrade() {
                     app.global::<Status>().set_toast("".into());
+                }
+            });
+    }
+
+    /// Shows a problem Hearth worked around, for [`PROBLEM_TIME`].
+    fn show_problem(&self, title: &str, text: &str) {
+        let Some(app) = self.app.upgrade() else {
+            return;
+        };
+        let status = app.global::<Status>();
+        status.set_notice_title(title.into());
+        status.set_notice_text(text.into());
+        let weak = self.app.clone();
+        self.problem_timer
+            .start(slint::TimerMode::SingleShot, PROBLEM_TIME, move || {
+                if let Some(app) = weak.upgrade() {
+                    app.global::<Status>().set_notice_title("".into());
                 }
             });
     }

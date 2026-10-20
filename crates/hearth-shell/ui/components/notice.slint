@@ -1,0 +1,48 @@
+import { Theme } from "../theme.slint";
+import { Status } from "../data.slint";
+import { Icons } from "../icons.slint";
+
+// A problem Hearth worked around (Status.notice-title; empty hides it): warning icon, title and
+// a short explanation on one line, bottom center. Takes no input; the session hides it after a
+// while.
+export component NoticeCard inherits Rectangle {
+    width: content.preferred-width + 2 * Theme.sp-32;
+    height: content.preferred-height + 2 * Theme.sp-16;
+    border-radius: self.height / 2;
+    background: Theme.surface-raised;
+    border-width: 1px;
+    border-color: Theme.warning;
+    drop-shadow-blur: Theme.sp-24;
+    drop-shadow-color: #00000080;
+    opacity: Status.notice-title != "" ? 1 : 0;
+    animate opacity { duration: Theme.base; easing: ease-out; }
+
+    content := HorizontalLayout {
+        x: Theme.sp-32;
+        y: Theme.sp-16;
+        width: self.preferred-width;
+        height: self.preferred-height;
+        spacing: Theme.sp-12;
+        alignment: start;
+        Image {
+            y: (parent.height - self.height) / 2;
+            source: Icons.triangle-alert;
+            colorize: Theme.warning;
+            width: 28px * Theme.scale;
+            height: self.width;
+        }
+        Text {
+            text: Status.notice-title;
+            vertical-alignment: center;
+            font-size: Theme.body;
+            font-weight: Theme.semibold;
+            color: Theme.text-primary;
+        }
+        Text {
+            text: "·  " + Status.notice-text;
+            vertical-alignment: center;
+            font-size: Theme.body;
+            color: Theme.text-secondary;
+        }
+    }
+}

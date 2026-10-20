@@ -11,6 +11,7 @@ import { SettingsScreen } from "settings/settings.slint";
 import { Placeholder } from "placeholder.slint";
 import { OverlayWindow, OverlayPanel } from "overlay/window.slint";
 import { Toast } from "components/toast.slint";
+import { NoticeCard } from "components/notice.slint";
 import { ControllerType } from "components/glyphs.slint";
 import { ControlsScreen } from "controls/screen.slint";
 import { ControlsData, Callout, Choice, OptionRow } from "controls/data.slint";
@@ -142,7 +143,12 @@ export component AppWindow inherits Window {
 
         Toast {
             x: (parent.width - self.width) / 2;
-            y: parent.height - Theme.safe-y - Theme.sp-96 - self.height;
+            y: parent.height - Theme.safe-y - Theme.sp-96 - self.height
+                - (Status.notice-title != "" ? notice.height : 0);
+        }
+        notice := NoticeCard {
+            x: (parent.width - self.width) / 2;
+            y: parent.height - Theme.safe-y - self.height;
         }
         // Controller notices, bottom right, over everything else.
         PadNoticeCard {

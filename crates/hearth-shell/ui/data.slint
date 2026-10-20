@@ -86,6 +86,9 @@ export global Status {
     in property <string> greeting;  // "Good evening", for the Welcome cell
     in property <string> controller-battery;
     in property <string> toast;     // empty: hidden
+    // A problem Hearth worked around (e.g. hearth.toml unreadable); empty title: hidden.
+    in property <string> notice-title;
+    in property <string> notice-text;
 }
 
 // A controller notice (battery low, connected, disconnected): a small card in a corner for a

@@ -12,9 +12,7 @@ export component ConfirmDialog inherits Rectangle {
     background: Theme.scrim;
 
     Rectangle {
-        // At least 720, wider when the buttons need it ("Close and play <long title>").
-        width: min(max(720px * Theme.scale, buttons.preferred-width + 2 * Theme.sp-48),
-            root.width - 2 * Theme.safe-x);
+        width: 720px * Theme.scale;
         height: layout.preferred-height;
         border-radius: Theme.radius-lg;
         background: Theme.surface-raised;
@@ -22,20 +20,25 @@ export component ConfirmDialog inherits Rectangle {
         layout := VerticalLayout {
             padding: Theme.sp-48;
             spacing: Theme.sp-24;
+            // Long game titles wrap, two lines at most.
             Text {
                 text: heading;
                 font-size: Theme.title;
                 font-weight: Theme.semibold;
                 color: Theme.text-primary;
                 wrap: word-wrap;
+                overflow: elide;
+                max-height: 2 * Theme.title * 1.4;
             }
             Text {
                 text: message;
                 font-size: Theme.body;
                 color: Theme.text-secondary;
                 wrap: word-wrap;
+                overflow: elide;
+                max-height: 2 * Theme.body * 1.5;
             }
-            buttons := HorizontalLayout {
+            HorizontalLayout {
                 padding-top: Theme.sp-16;
                 spacing: Theme.sp-16;
                 alignment: start;

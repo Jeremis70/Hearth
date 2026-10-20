@@ -159,8 +159,8 @@ export component AppWindow inherits Window {
             width: parent.width;
             height: parent.height;
             heading: "Close " + Session.switch-from + "?";
-            message: "Unsaved progress will be lost.";
-            confirm-label: "Close and play " + Session.switch-to;
+            message: Session.switch-to + " will start. Unsaved progress will be lost.";
+            confirm-label: "Close and play";
             index: switch-index;
         }
 

@@ -537,7 +537,7 @@ export component Home inherits Rectangle {
             }
         }
 
-        // Status widgets: Welcome only. TODO(M3/M4): real storage, controllers, media.
+        // Status widgets: Welcome only. TODO(M3/M4): real storage and media.
         if welcome: widget-row := HorizontalLayout {
             property <length> widget-width: (self.width - 3 * Theme.sp-24) / widget-count;
             x: Theme.safe-x;
@@ -566,8 +566,8 @@ export component Home inherits Rectangle {
                 width: widget-row.widget-width;
                 icon: Icons.gamepad;
                 label: "Controllers";
-                value: "1 connected";
-                detail: "Wireless controller · 85%";
+                value: Status.pads-value;
+                detail: Status.pads-detail;
                 focused: zone == HomeZone.widgets && widget-index == 2;
             }
             Widget {

@@ -217,7 +217,7 @@ fn settings_categories(network_status: &str) -> Vec<SettingsCategory> {
         ("network", "Network", network_status),
         ("folders", "Game folders", "2 folders"),
         ("emulators", "Emulators", "5 detected"),
-        ("controllers", "Controllers", "1 connected"),
+        ("controllers", "Controllers", "None connected"),
         ("display", "Display & sound", ""),
         (
             "system",
@@ -270,6 +270,17 @@ pub fn install(app: &AppWindow) {
     });
 }
 
+/// Sets the status line of one Settings category.
+pub fn set_category_status(app: &AppWindow, key: &str, status: &str) {
+    let categories = app.global::<SettingsData>().get_categories();
+    for (i, mut category) in categories.iter().enumerate() {
+        if category.key == key && category.status != status {
+            category.status = status.into();
+            categories.set_row_data(i, category);
+        }
+    }
+}
+
 /// Fetches Wi-Fi networks on a worker thread and updates the settings models.
 pub fn load_network(app: &AppWindow, backend: impl NetworkBackend + 'static) {
     let weak = app.as_weak();
@@ -287,9 +298,7 @@ pub fn load_network(app: &AppWindow, backend: impl NetworkBackend + 'static) {
                 let settings = app.global::<SettingsData>();
                 let rows: Vec<_> = networks.iter().map(wifi_row).collect();
                 settings.set_wifi(ModelRc::from(Rc::new(VecModel::from(rows))));
-                settings.set_categories(ModelRc::from(Rc::new(VecModel::from(
-                    settings_categories(&network_status(&networks)),
-                ))));
+                set_category_status(&app, "network", &network_status(&networks));
             });
         });
     if let Err(err) = spawned {

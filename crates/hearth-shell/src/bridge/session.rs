@@ -51,7 +51,7 @@ use super::models;
 use crate::controls;
 use crate::{
     AppWindow, ControllerType, ControlsData, GameProperties, HomeData, HomeTile, OverlayPanel,
-    OverlayWindow, PadNotice, Session, SettingsCategory, SettingsData, Status, TileKind,
+    OverlayWindow, PadNotice, PadRow, Session, SettingsCategory, SettingsData, Status, TileKind,
 };
 
 /// How long a problem notice (e.g. hearth.toml unreadable) stays on screen.
@@ -200,6 +200,8 @@ pub struct Controller {
     service_lost: Option<(Instant, bool)>,
     /// Controllers as last seen, to notice them coming and going.
     known_pads: Vec<PadInfo>,
+    /// The pads have been put in the UI once.
+    pads_shown: bool,
     /// No controller notices before this (startup, controller service changes).
     pads_settle: Instant,
     /// The controller driving the running game (player 1 when it started).
@@ -414,6 +416,7 @@ pub fn install(setup: Setup) {
         test_timer: slint::Timer::default(),
         service_lost: None,
         known_pads: Vec::new(),
+        pads_shown: false,
         pads_settle: Instant::now() + PAD_SETTLE,
         game_pad: None,
         battery_warned: std::collections::HashMap::new(),
@@ -523,17 +526,6 @@ fn battery_warning(percent: u8, warned: &mut Vec<u8>) -> Option<u8> {
         .filter(|level| !warned.contains(level))?;
     warned.extend(BATTERY_WARNINGS.iter().filter(|l| **l >= level));
     Some(level)
-}
-
-/// What the Settings page calls a controller family.
-fn kind_name(kind: ControllerKind) -> &'static str {
-    match kind {
-        ControllerKind::DualSense => "PlayStation (DualSense)",
-        ControllerKind::DualShock4 => "PlayStation (DualShock 4)",
-        ControllerKind::Xbox => "Xbox",
-        ControllerKind::SwitchPro => "Nintendo Switch Pro",
-        ControllerKind::Generic => "Generic",
-    }
 }
 
 /// `ControllerType.family` in `ui/components/glyphs.slint`.
@@ -717,6 +709,12 @@ impl Controller {
     fn poll_pads(&mut self) {
         let pads = self.activity.pads();
         let now = Instant::now();
+        // Connects and disconnects reach the input backend's list at once, battery levels
+        // every few seconds: the UI follows whenever the list changes.
+        if pads != self.known_pads || !self.pads_shown {
+            self.pads_shown = true;
+            self.refresh_pads(&pads);
+        }
         if self.service_lost.is_some() || now < self.pads_settle {
             self.known_pads = pads;
             return;
@@ -1650,8 +1648,8 @@ impl Controller {
 
     /// Settings → Controllers: the button test or a console's page.
     fn settings_controller_item(&mut self, key: &str) {
-        if key == "test" {
-            self.start_button_test();
+        if let Some(pad) = key.strip_prefix("test:") {
+            self.start_button_test(pad);
             return;
         }
         let Some(id) = key.strip_prefix("system:") else {
@@ -1988,42 +1986,62 @@ impl Controller {
         self.refresh_tiles();
     }
 
+    /// The console rows of Settings → Controllers ("Customized" changes as controls are
+    /// edited).
     fn refresh_settings(&self) {
         let Some(app) = self.app.upgrade() else {
             return;
         };
-        let settings = app.global::<SettingsData>();
-        let info: Vec<SettingsCategory> = self
-            .activity
-            .pads()
+        let items: Vec<SettingsCategory> = self
+            .systems
             .iter()
-            .map(|pad| SettingsCategory {
-                key: "".into(),
-                label: pad.os_name.as_str().into(),
-                status: kind_name(ControllerKind::from_ids(pad.vendor_id, pad.product_id)).into(),
+            .filter(|s| !s.controls.is_empty())
+            .map(|system| {
+                let customized =
+                    hearth_core::controls::layers::system_file(system, &self.controls_dir)
+                        .is_file();
+                SettingsCategory {
+                    key: format!("system:{}", system.id).into(),
+                    label: system.name.as_str().into(),
+                    status: if customized { "Customized" } else { "Default" }.into(),
+                }
             })
             .collect();
-        let mut items = vec![SettingsCategory {
-            key: "test".into(),
-            label: "Test buttons".into(),
-            status: "".into(),
-        }];
-        for system in self.systems.iter().filter(|s| !s.controls.is_empty()) {
-            let customized =
-                hearth_core::controls::layers::system_file(system, &self.controls_dir).is_file();
-            items.push(SettingsCategory {
-                key: format!("system:{}", system.id).into(),
-                label: format!("{} controls", system.name).into(),
-                status: if customized { "Customized" } else { "Default" }.into(),
-            });
+        let settings = app.global::<SettingsData>();
+        let current = settings.get_controller_items();
+        if current.row_count() != items.len() || current.iter().zip(&items).any(|(a, b)| a != *b) {
+            settings.set_controller_items(ModelRc::from(Rc::new(VecModel::from(items))));
         }
-        if settings.get_controller_info().row_count() != info.len() || info.is_empty() {
-            settings.set_controller_info(ModelRc::from(Rc::new(VecModel::from(info))));
-        }
-        settings.set_controller_items(ModelRc::from(Rc::new(VecModel::from(items))));
     }
 
-    fn start_button_test(&mut self) {
+    /// The connected controllers everywhere they show: Settings → Controllers and its status
+    /// line, the Welcome widget, the top bar.
+    fn refresh_pads(&self, pads: &[PadInfo]) {
+        let Some(app) = self.app.upgrade() else {
+            return;
+        };
+        let rows: Vec<PadRow> = pads.iter().map(super::pads::row).collect();
+        let settings = app.global::<SettingsData>();
+        let current = settings.get_pads();
+        if current.row_count() == rows.len() {
+            for (i, row) in rows.into_iter().enumerate() {
+                if current.row_data(i).as_ref() != Some(&row) {
+                    current.set_row_data(i, row);
+                }
+            }
+        } else {
+            settings.set_pads(ModelRc::from(Rc::new(VecModel::from(rows))));
+        }
+        let summary = super::pads::summary(pads);
+        models::set_category_status(&app, "controllers", &summary.count);
+        let status = app.global::<Status>();
+        status.set_pads_value(summary.count.into());
+        status.set_pads_detail(summary.detail.into());
+        status.set_controller_battery(summary.battery.into());
+    }
+
+    /// The button test, for the pad with id `pad_id` (its name and battery in the header).
+    fn start_button_test(&mut self, pad_id: &str) {
         let Some(app) = self.app.upgrade() else {
             return;
         };
@@ -2040,8 +2058,13 @@ impl Controller {
             )
             .collect();
         let page = TestPage::new(&extras);
-        let name = device.sdl_name.clone();
-        let line = controls_page::controller_line(&name, self.activity.pads().first());
+        let pad_id = pad_id.to_owned();
+        let header = move |pads: Vec<PadInfo>| {
+            let pad = pads.iter().find(|p| p.id == pad_id).or(pads.first());
+            let name = pad.map_or_else(|| device.sdl_name.clone(), super::pads::display_name);
+            controls_page::controller_line(&name, pad)
+        };
+        let line = header(self.activity.pads());
         let data = app.global::<ControlsData>();
         page.fill(&data, &line);
         // With InputPlumber, menus get presses only. Raw values come from the virtual pad,
@@ -2077,7 +2100,7 @@ impl Controller {
             };
             page.update(&pressed, &analog);
             let data = app.global::<ControlsData>();
-            let line = controls_page::controller_line(&name, activity.pads().first());
+            let line = header(activity.pads());
             if data.get_scope_line() != line.as_str() {
                 data.set_scope_line(line.into());
             }

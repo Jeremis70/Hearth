@@ -2,48 +2,11 @@ import { Theme } from "../theme.slint";
 import { Icons } from "../icons.slint";
 import { UiAction } from "../input.slint";
 import { SettingsData, SettingsCategory } from "../data.slint";
-import { ListRow } from "../components/list_row.slint";
 import { HintBar } from "../components/hint_bar.slint";
+import { ControlsScreen } from "../controls/screen.slint";
 import { NetworkPane } from "network.slint";
-import { ControllersPane } from "controllers.slint";
+import { ControllersPane, PadPage } from "controllers.slint";
 import { DisplayPane } from "display.slint";
-
-// Glides behind the focused row of a list.
-component FocusFrame inherits Rectangle {
-    in property <int> index;
-    in property <bool> shown;
-    y: index * (Theme.row-height + Theme.row-gap);
-    animate y { duration: Theme.fast; easing: ease-out; }
-    height: Theme.row-height;
-    border-radius: Theme.radius-md;
-    background: Theme.surface-raised;
-    border-width: Theme.focus-ring-width;
-    border-color: Theme.focus-ring;
-    drop-shadow-blur: Theme.focus-glow-radius;
-    drop-shadow-color: Theme.focus-glow;
-    opacity: shown ? 1 : 0;
-    animate opacity { duration: Theme.fast; easing: ease-out; }
-}
-
-component CategoryList inherits Rectangle {
-    in property <int> index;
-    in property <bool> focused;     // false: the current row is only "selected"
-    in property <bool> show-values: true;
-    height: SettingsData.categories.length * (Theme.row-height + Theme.row-gap);
-
-    FocusFrame {
-        index: index;
-        shown: focused;
-    }
-    for cat[i] in SettingsData.categories: ListRow {
-        y: i * (Theme.row-height + Theme.row-gap);
-        icon: Settings.icon-for(cat.key);
-        label: cat.label;
-        value: show-values ? cat.status : "";
-        selected: !focused && i == index;
-        show-divider: !(i == index || i + 1 == index);
-    }
-}
 
 export global Settings {
     public pure function icon-for(key: string) -> image {
@@ -62,77 +25,220 @@ export global Settings {
     }
 }
 
-// Settings: centered category list (level 0), then a two-pane page sliding in from the right
-// (level 1) with the categories as a sidebar and the selected category's content.
+// What the right pane shows beyond a category's own content.
+enum SettingsPage {
+    none,
+    pad,        // one controller's page (in the right pane)
+    controls,   // a console's controls drawing (wide: the list becomes a rail)
+    test,       // the button test (wide)
+}
+
+// The category list: icon, label and status as a second line. Collapses to an icon rail for
+// wide pages; there is never a second list.
+component CategoryList inherits Rectangle {
+    in property <int> index;
+    in property <bool> focused;     // false: the current row is only "selected"
+    in property <bool> rail;
+    in property <length> row-h;
+
+    property <length> step: row-h + Theme.row-gap;
+    height: SettingsData.categories.length * step;
+
+    // Focus frame (or the "selected" fill when focus is in the right pane).
+    Rectangle {
+        y: index * step;
+        animate y { duration: Theme.fast; easing: ease-out; }
+        width: parent.width;
+        height: row-h;
+        border-radius: Theme.radius-md;
+        background: focused ? Theme.surface-raised : Theme.accent-soft;
+        border-width: focused ? Theme.focus-ring-width : 0;
+        border-color: Theme.focus-ring;
+        drop-shadow-blur: focused ? Theme.focus-glow-radius : 0;
+        drop-shadow-color: Theme.focus-glow;
+    }
+    for cat[i] in SettingsData.categories: Rectangle {
+        y: i * step;
+        height: row-h;
+        clip: true;
+        Image {
+            x: Theme.sp-24;
+            y: (parent.height - self.height) / 2;
+            source: Settings.icon-for(cat.key);
+            width: Theme.icon-size;
+            height: Theme.icon-size;
+            colorize: Theme.text-primary;
+        }
+        VerticalLayout {
+            x: Theme.sp-24 + Theme.icon-size + Theme.sp-24;
+            width: parent.width - self.x - Theme.sp-24;
+            alignment: center;
+            spacing: Theme.sp-4;
+            opacity: rail ? 0 : 1;
+            animate opacity { duration: Theme.fast; easing: ease-out; }
+            Text {
+                text: cat.label;
+                font-size: Theme.body-lg;
+                font-weight: Theme.medium;
+                color: Theme.text-primary;
+                overflow: elide;
+            }
+            if cat.status != "": Text {
+                text: cat.status;
+                font-size: Theme.body;
+                color: Theme.text-secondary;
+                overflow: elide;
+            }
+        }
+    }
+}
+
+// Settings (README §4): the category list on the left, the highlighted category's content on
+// the right, updated as focus moves. Right/Accept enter the right pane; Left at its edge or
+// Back return to the list; Back from the list leaves Settings. Deeper pages open in the right
+// pane; the controls drawing and the button test need the width, so the list collapses to an
+// icon rail for them.
 export component SettingsScreen inherits Rectangle {
     callback close();
 
-    property <int> level: 0;        // 0 list, 1 page
-    property <int> index: 0;        // category
-    property <int> pane: 0;         // 0 sidebar, 1 content
+    property <int> index: 0;        // category, kept while Hearth runs
+    property <int> pane: 0;         // 0 list, 1 right pane
     property <int> content-index: 0;
+    property <SettingsPage> page: SettingsPage.none;
+    property <int> pad-index: 0;    // the controller whose page is open
     property <int> count: SettingsData.categories.length;
     property <string> key: SettingsData.categories[index].key;
+    property <int> pad-count: SettingsData.pads.length;
     property <int> content-count: key == "network" ? SettingsData.wifi.length
-        : key == "controllers" ? SettingsData.controller-items.length
+        : key == "controllers" ? pad-count + SettingsData.controller-items.length
         : key == "display" ? (picking ? SettingsData.pack-choices.length : SettingsData.display-items.length)
         : 0;
     // Display & sound: the pack list of one category is open.
     property <bool> picking: false;
     property <int> picking-row: 0;
     property <bool> has-content: content-count > 0;
-    property <length> list-top: 180px * Theme.scale;
+    property <bool> wide: page == SettingsPage.controls || page == SettingsPage.test;
 
+    property <length> list-top: 180px * Theme.scale;
+    property <length> list-width: 520px * Theme.scale;
+    property <length> rail-width: Theme.sp-24 * 2 + Theme.icon-size;
+    property <length> cat-row-h: Theme.row-height + Theme.sp-16;
+    property <length> pane-x: Theme.safe-x + list-width + Theme.sp-48;
+
+    // The right pane fades out, switches, then fades in (`fast` in all), so two lists are
+    // never drawn over each other.
+    property <string> view: page == SettingsPage.pad ? "pad" : key;
+    property <string> shown-view;
+    property <bool> fading: false;
+    init => { shown-view = view; }
+    changed view => { fading = true; }
+    Timer {
+        interval: Theme.fast / 2;
+        running: fading;
+        triggered => {
+            shown-view = view;
+            fading = false;
+        }
+    }
+
+    // A controller unplugged while its page is open: back to the list of controllers.
+    changed pad-count => {
+        if page == SettingsPage.pad && pad-index >= pad-count {
+            page = SettingsPage.none;
+            content-index = 0;
+        }
+        if pane == 1 && content-index >= content-count {
+            content-index = max(0, content-count - 1);
+            if content-count == 0 { pane = 0; }
+        }
+    }
+
+    // Opening Settings: the last category visited, focus in the list.
     public function reset() {
-        level = 0;
-        index = 0;
         pane = 0;
+        page = SettingsPage.none;
+        content-index = 0;
+        picking = false;
+        shown-view = view;
+        fading = false;
+    }
+
+    // Rust filled ControlsData for a console: show its controls page.
+    public function open-controls() {
+        controls.reset();
+        page = SettingsPage.controls;
+    }
+    public function open-test() {
+        page = SettingsPage.test;
+    }
+    public function close-test() {
+        page = pad-index < pad-count ? SettingsPage.pad : SettingsPage.none;
+    }
+
+    function move-category(delta: int) {
+        index = max(0, min(count - 1, index + delta));
         content-index = 0;
         picking = false;
     }
 
-    public function handle(action: UiAction) -> bool {
-        if level == 0 {
-            if action == UiAction.up { index = max(0, index - 1); return true; }
-            if action == UiAction.down { index = min(count - 1, index + 1); return true; }
-            if action == UiAction.accept || action == UiAction.right {
-                level = 1;
-                pane = 0;
-                content-index = 0;
-                return true;
+    function accept-content() {
+        if key == "network" { SettingsData.wifi-selected(SettingsData.wifi[content-index].ssid); }
+        if key == "controllers" {
+            if content-index < pad-count {
+                pad-index = content-index;
+                page = SettingsPage.pad;
+            } else {
+                SettingsData.controller-item(SettingsData.controller-items[content-index - pad-count].key);
             }
-            if action == UiAction.back { close(); return true; }
-            return false;
         }
-        if pane == 0 {
-            if action == UiAction.up { index = max(0, index - 1); content-index = 0; picking = false; return true; }
-            if action == UiAction.down { index = min(count - 1, index + 1); content-index = 0; picking = false; return true; }
-            if (action == UiAction.right || action == UiAction.accept) && has-content { pane = 1; return true; }
-            if action == UiAction.back || action == UiAction.left { level = 0; return true; }
-            return false;
+        if key == "display" && !picking {
+            picking-row = content-index;
+            SettingsData.open-packs(SettingsData.display-items[content-index].key);
+            picking = true;
+            content-index = 0;
+        } else if key == "display" {
+            SettingsData.choose-pack(SettingsData.display-items[picking-row].key, SettingsData.pack-choices[content-index].key);
         }
-        if action == UiAction.up { content-index = max(0, content-index - 1); return true; }
-        if action == UiAction.down { content-index = min(content-count - 1, content-index + 1); return true; }
-        if action == UiAction.accept {
-            if key == "network" { SettingsData.wifi-selected(SettingsData.wifi[content-index].ssid); }
-            if key == "controllers" { SettingsData.controller-item(SettingsData.controller-items[content-index].key); }
-            if key == "display" && !picking {
-                picking-row = content-index;
-                SettingsData.open-packs(SettingsData.display-items[content-index].key);
-                picking = true;
-                content-index = 0;
-            } else if key == "display" {
-                SettingsData.choose-pack(SettingsData.display-items[picking-row].key, SettingsData.pack-choices[content-index].key);
+    }
+
+    public function handle(action: UiAction) -> bool {
+        if page == SettingsPage.controls {
+            return controls.handle(action);
+        }
+        if page == SettingsPage.test {
+            return true;
+        }
+        if page == SettingsPage.pad {
+            if action == UiAction.accept {
+                SettingsData.controller-item("test:" + SettingsData.pads[pad-index].id);
+            }
+            if action == UiAction.back || action == UiAction.left {
+                page = SettingsPage.none;
+                content-index = pad-index;
             }
             return true;
         }
+        if pane == 0 {
+            if action == UiAction.up { move-category(-1); return true; }
+            if action == UiAction.down { move-category(1); return true; }
+            if (action == UiAction.right || action == UiAction.accept) && has-content {
+                pane = 1;
+                content-index = min(content-index, content-count - 1);
+                return true;
+            }
+            if action == UiAction.back { close(); return true; }
+            return action == UiAction.left || action == UiAction.right || action == UiAction.accept;
+        }
+        if action == UiAction.up { content-index = max(0, content-index - 1); return true; }
+        if action == UiAction.down { content-index = min(content-count - 1, content-index + 1); return true; }
+        if action == UiAction.accept { accept-content(); return true; }
         if (action == UiAction.left || action == UiAction.back) && picking {
             picking = false;
             content-index = picking-row;
             return true;
         }
         if action == UiAction.left || action == UiAction.back { pane = 0; return true; }
-        false
+        action == UiAction.right
     }
 
     background: Theme.bg-base;
@@ -150,67 +256,82 @@ export component SettingsScreen inherits Rectangle {
     Text {
         x: Theme.safe-x;
         y: Theme.safe-y + Theme.sp-24;
-        text: level == 0 ? "Settings" : "Settings · " + SettingsData.categories[index].label;
+        text: "Settings";
         font-size: Theme.display;
         font-weight: Theme.semibold;
         color: Theme.text-primary;
+        opacity: wide ? 0 : 1;
+        animate opacity { duration: Theme.fast; easing: ease-out; }
     }
 
-    // Level 0: centered list.
-    CategoryList {
-        x: (parent.width - Theme.settings-list-width) / 2 - (level == 0 ? 0 : Theme.sp-96);
-        animate x { duration: Theme.slow; easing: ease-in-out; }
+    // Right pane: the category's content, or a controller's page.
+    Rectangle {
+        x: pane-x;
         y: list-top;
-        width: Theme.settings-list-width;
-        index: index;
-        focused: true;
-        opacity: level == 0 ? 1 : 0;
+        width: parent.width - self.x - Theme.safe-x;
+        height: parent.height - self.y - Theme.safe-y - Theme.sp-48;
+        opacity: fading || wide ? 0 : 1;
+        animate opacity { duration: Theme.fast / 2; easing: ease-out; }
+
+        if shown-view == "network": NetworkPane {
+            focus-index: pane == 1 ? content-index : -1;
+        }
+        if shown-view == "controllers": ControllersPane {
+            focus-index: pane == 1 ? content-index : -1;
+        }
+        if shown-view == "pad" && pad-index < pad-count: PadPage {
+            pad: SettingsData.pads[pad-index];
+            focus-index: 0;
+        }
+        if shown-view == "display": DisplayPane {
+            focus-index: pane == 1 ? content-index : -1;
+            picking: picking;
+            picking-label: SettingsData.display-items[picking-row].label;
+        }
+        if shown-view == "folders" || shown-view == "emulators" || shown-view == "system": Text {
+            x: Theme.sp-24;
+            y: Theme.sp-24;
+            width: parent.width - 2 * Theme.sp-24;
+            text: Settings.placeholder-for(shown-view);
+            wrap: word-wrap;
+            font-size: Theme.body-lg;
+            color: Theme.text-secondary;
+            vertical-alignment: top;
+        }
+    }
+
+    // Wide pages, right of the rail. They keep their own title-safe margin, so they start a
+    // margin's width before the rail's edge.
+    controls := ControlsScreen {
+        x: Theme.safe-x + rail-width + Theme.sp-32 - Theme.safe-x;
+        width: parent.width - self.x;
+        embedded: true;
+        opacity: page == SettingsPage.controls ? 1 : 0;
+        visible: self.opacity > 0;
+        animate opacity { duration: Theme.base; easing: ease-out; }
+        close => {
+            page = SettingsPage.none;
+        }
+    }
+    ControlsScreen {
+        x: controls.x;
+        width: controls.width;
+        embedded: true;
+        test-mode: true;
+        opacity: page == SettingsPage.test ? 1 : 0;
+        visible: self.opacity > 0;
         animate opacity { duration: Theme.base; easing: ease-out; }
     }
 
-    // Level 1: two-pane page sliding in from the right.
-    Rectangle {
-        x: level == 1 ? 0 : parent.width;
-        animate x { duration: Theme.slow; easing: ease-in-out; }
-        width: parent.width;
-
-        CategoryList {
-            x: Theme.safe-x;
-            y: list-top;
-            width: Theme.settings-sidebar-width;
-            index: index;
-            focused: pane == 0;
-            show-values: false;
-        }
-
-        Rectangle {
-            x: Theme.safe-x + Theme.settings-sidebar-width + Theme.sp-48;
-            y: list-top;
-            width: parent.width - self.x - Theme.safe-x;
-            height: parent.height - self.y - Theme.safe-y - Theme.sp-48;
-
-            if key == "network": NetworkPane {
-                focus-index: pane == 1 ? content-index : -1;
-            }
-            if key == "controllers": ControllersPane {
-                focus-index: pane == 1 ? content-index : -1;
-            }
-            if key == "display": DisplayPane {
-                focus-index: pane == 1 ? content-index : -1;
-                picking: picking;
-                picking-label: SettingsData.display-items[picking-row].label;
-            }
-            if key != "network" && key != "controllers" && key != "display": Text {
-                x: Theme.sp-24;
-                y: Theme.sp-24;
-                width: parent.width - 2 * Theme.sp-24;
-                text: Settings.placeholder-for(key);
-                wrap: word-wrap;
-                font-size: Theme.body-lg;
-                color: Theme.text-secondary;
-                vertical-alignment: top;
-            }
-        }
+    CategoryList {
+        x: Theme.safe-x;
+        y: list-top;
+        width: wide ? rail-width : list-width;
+        animate width { duration: Theme.base; easing: ease-in-out; }
+        row-h: cat-row-h;
+        index: index;
+        focused: pane == 0 && page == SettingsPage.none;
+        rail: wide;
     }
 
     HintBar {
@@ -218,6 +339,7 @@ export component SettingsScreen inherits Rectangle {
         width: parent.width - 2 * Theme.safe-x;
         height: Theme.sp-32;
         y: parent.height - Theme.safe-y - self.height;
+        opacity: wide ? 0 : 1;
         hints: [
             { input: "south", label: "Select" },
             { input: "east", label: "Back" },

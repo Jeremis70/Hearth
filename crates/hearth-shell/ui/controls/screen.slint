@@ -93,6 +93,8 @@ component CalloutBox inherits Rectangle {
 export component ControlsScreen inherits Rectangle {
     callback close();
     in property <bool> test-mode: false;
+    // Inside Settings' right pane: no background of its own, and scaled to its width.
+    in property <bool> embedded: false;
 
     property <int> tab: 0;              // 0 Buttons, 1 Sticks & options
     property <int> index: 0;            // focused callout
@@ -107,9 +109,10 @@ export component ControlsScreen inherits Rectangle {
     property <int> count: ControlsData.callouts.length;
     property <Callout> current: ControlsData.callouts[index];
 
-    // Geometry: callouts come in page pixels at 1920×1080 (src/callouts.rs), × Theme.scale,
-    // centered horizontally when the window is wider than 16:9.
-    property <length> s: 1px * Theme.scale;
+    // Geometry: callouts come in page pixels at 1920×1080 (src/callouts.rs), × Theme.scale
+    // (less when the page is narrower than the window, inside Settings), centered horizontally
+    // when the page is wider than 16:9.
+    property <length> s: 1px * min(Theme.scale, root.width / 1920px);
     property <length> ox: (root.width - 1920 * s) / 2;
     property <length> content-y: 236 * s;
     property <length> menu-row: 56 * s;
@@ -235,11 +238,11 @@ export component ControlsScreen inherits Rectangle {
         true
     }
 
-    background: Theme.bg-base;
+    background: embedded ? transparent : Theme.bg-base;
     clip: true;
 
     // Soft top-left glow.
-    Rectangle {
+    if !embedded: Rectangle {
         x: -parent.width * 0.4;
         y: -parent.height * 0.6;
         width: parent.width * 1.2;

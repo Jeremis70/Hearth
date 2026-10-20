@@ -1,65 +1,223 @@
 import { Theme } from "../theme.slint";
 import { Icons } from "../icons.slint";
-import { SettingsData } from "../data.slint";
+import { SettingsData, PadRow } from "../data.slint";
 import { ListRow } from "../components/list_row.slint";
 
-// Controllers pane: connected controllers (information), then the button test and one row
-// per console with controls (SettingsData.controller-items), each opening a full page.
+// Glides behind the focused row; `y` is set by the owner.
+component RowFocus inherits Rectangle {
+    in property <bool> shown;
+    animate y { duration: Theme.fast; easing: ease-out; }
+    height: Theme.row-height;
+    border-radius: Theme.radius-md;
+    background: Theme.surface-raised;
+    border-width: Theme.focus-ring-width;
+    border-color: Theme.focus-ring;
+    drop-shadow-blur: Theme.focus-glow-radius;
+    drop-shadow-color: Theme.focus-glow;
+    opacity: shown ? 1 : 0;
+    animate opacity { duration: Theme.fast; easing: ease-out; }
+}
+
+component SectionTitle inherits Text {
+    font-size: Theme.heading;
+    font-weight: Theme.semibold;
+    color: Theme.text-primary;
+}
+
+// "Bluetooth · 🔋 85 %": connection, then the battery icon and level when reported.
+component PadStatus inherits HorizontalLayout {
+    in property <PadRow> pad;
+    in property <length> font-size: Theme.body;
+    spacing: Theme.sp-8;
+    alignment: end;
+    Text {
+        text: pad.connection == "" ? "" : pad.battery >= 0 ? pad.connection + "  ·" : pad.connection;
+        vertical-alignment: center;
+        font-size: font-size;
+        color: Theme.text-secondary;
+    }
+    if pad.battery >= 0: Image {
+        y: (parent.height - self.height) / 2;
+        source: pad.charging ? Icons.battery-charging : pad.battery <= 20 ? Icons.battery-low : Icons.battery;
+        colorize: pad.battery <= 20 && !pad.charging ? Theme.warning : Theme.text-secondary;
+        width: Theme.icon-size * 0.85;
+        height: self.width;
+    }
+    if pad.battery >= 0: Text {
+        text: pad.battery + " %";
+        vertical-alignment: center;
+        font-size: font-size;
+        color: pad.battery <= 20 && !pad.charging ? Theme.warning : Theme.text-secondary;
+    }
+}
+
+// One connected controller: glyph, name, connection and battery, chevron (opens its page).
+component PadListRow inherits Rectangle {
+    in property <PadRow> pad;
+    in property <bool> show-divider: true;
+    height: Theme.row-height;
+
+    HorizontalLayout {
+        padding-left: Theme.sp-24;
+        padding-right: Theme.sp-24;
+        spacing: Theme.sp-24;
+        Image {
+            source: Icons.gamepad;
+            width: Theme.icon-size;
+            height: Theme.icon-size;
+            y: (parent.height - self.height) / 2;
+            colorize: Theme.text-primary;
+        }
+        Text {
+            text: pad.name;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            font-size: Theme.body-lg;
+            font-weight: Theme.medium;
+            color: Theme.text-primary;
+            overflow: elide;
+        }
+        PadStatus {
+            pad: pad;
+        }
+        Image {
+            source: Icons.chevron-right;
+            width: Theme.icon-size * 0.75;
+            height: self.width;
+            y: (parent.height - self.height) / 2;
+            colorize: Theme.text-secondary;
+        }
+    }
+    if show-divider: Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        x: Theme.sp-16;
+        width: parent.width - 2 * Theme.sp-16;
+        background: Theme.divider;
+    }
+}
+
+// Controllers pane: "Connected controllers" (one row per physical pad, each opening its page),
+// then "Controls" (one row per console, shared by every controller). Focus runs through both
+// lists: pads first (`focus-index` < pads.length), then consoles.
 export component ControllersPane inherits Rectangle {
-    in property <int> focus-index: -1;    // -1 when focus is in the sidebar
+    in property <int> focus-index: -1;    // -1 when focus is in the category list
 
-    property <length> items-top: info.y + info.height + Theme.sp-32;
+    property <int> pad-count: SettingsData.pads.length;
+    property <length> step: Theme.row-height + Theme.row-gap;
+    property <length> pads-top: Theme.sp-48 + Theme.sp-8;
+    property <length> controls-title-y: pads-top + max(1, pad-count) * step + Theme.sp-32;
+    property <length> controls-top: controls-title-y + Theme.sp-48 + Theme.sp-8;
 
-    info := VerticalLayout {
+    SectionTitle {
         x: 0;
         y: 0;
-        width: parent.width;
-        height: self.preferred-height;
-        spacing: Theme.sp-8;
-        Text {
-            text: "Connected";
-            font-size: Theme.heading;
-            font-weight: Theme.semibold;
-            color: Theme.text-primary;
-        }
-        if SettingsData.controller-info.length == 0: Text {
-            text: "No controller connected";
-            font-size: Theme.body;
-            color: Theme.text-secondary;
-        }
-        for pad in SettingsData.controller-info: Text {
-            text: pad.label + "  ·  " + pad.status;
-            font-size: Theme.body-lg;
-            color: Theme.text-secondary;
-        }
+        text: "Connected controllers";
     }
-
-    // Focus frame behind the rows, gliding with `fast`.
-    Rectangle {
-        x: 0;
-        y: items-top + max(0, focus-index) * (Theme.row-height + Theme.row-gap);
-        animate y { duration: Theme.fast; easing: ease-out; }
-        width: parent.width;
+    if pad-count == 0: Text {
+        x: Theme.sp-24;
+        y: pads-top;
         height: Theme.row-height;
-        border-radius: Theme.radius-md;
-        background: Theme.surface-raised;
-        border-width: Theme.focus-ring-width;
-        border-color: Theme.focus-ring;
-        drop-shadow-blur: Theme.focus-glow-radius;
-        drop-shadow-color: Theme.focus-glow;
-        opacity: focus-index >= 0 ? 1 : 0;
-        animate opacity { duration: Theme.fast; easing: ease-out; }
+        vertical-alignment: center;
+        text: "No controller connected";
+        font-size: Theme.body-lg;
+        color: Theme.text-secondary;
+    }
+    SectionTitle {
+        x: 0;
+        y: controls-title-y;
+        text: "Controls";
     }
 
+    RowFocus {
+        x: 0;
+        width: parent.width;
+        shown: focus-index >= 0;
+        y: focus-index < pad-count
+            ? pads-top + max(0, focus-index) * step
+            : controls-top + (focus-index - pad-count) * step;
+    }
+
+    for pad[i] in SettingsData.pads: PadListRow {
+        x: 0;
+        y: pads-top + i * step;
+        width: parent.width;
+        pad: pad;
+        show-divider: i != focus-index && i + 1 != focus-index && i + 1 < pad-count;
+    }
     for item[i] in SettingsData.controller-items: ListRow {
         x: 0;
-        y: items-top + i * (Theme.row-height + Theme.row-gap);
+        y: controls-top + i * step;
         width: parent.width;
-        icon: item.key == "test" ? Icons.gamepad : Icons.settings;
+        icon: Icons.settings;
         label: item.label;
         value: item.status;
         trailing-icon: Icons.chevron-right;
         has-trailing-icon: true;
-        show-divider: i != focus-index && i + 1 != focus-index;
+        show-divider: pad-count + i != focus-index && pad-count + i + 1 != focus-index;
+    }
+}
+
+// One controller's page, opened from its row: what it is, then its actions. Only "Button test"
+// for now; player number and Identify will join it.
+export component PadPage inherits Rectangle {
+    in property <PadRow> pad;
+    in property <int> focus-index: 0;
+
+    property <length> step: Theme.row-height + Theme.row-gap;
+    property <length> actions-top: header.y + header.height + Theme.sp-48;
+
+    header := HorizontalLayout {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: self.preferred-height;
+        spacing: Theme.sp-24;
+        alignment: start;
+        Rectangle {
+            width: 96px * Theme.scale;
+            height: self.width;
+            border-radius: Theme.radius-md;
+            background: Theme.surface;
+            Image {
+                source: Icons.gamepad;
+                width: 56px * Theme.scale;
+                height: self.width;
+                colorize: Theme.text-primary;
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: Theme.sp-8;
+            Text {
+                text: pad.name;
+                font-size: Theme.title;
+                font-weight: Theme.semibold;
+                color: Theme.text-primary;
+            }
+            PadStatus {
+                pad: pad;
+                alignment: start;
+                font-size: Theme.body-lg;
+            }
+        }
+    }
+
+    RowFocus {
+        x: 0;
+        y: actions-top + focus-index * step;
+        width: parent.width;
+        shown: focus-index >= 0;
+    }
+    ListRow {
+        x: 0;
+        y: actions-top;
+        width: parent.width;
+        icon: Icons.activity;
+        label: "Button test";
+        value: "See every press and stick move";
+        trailing-icon: Icons.chevron-right;
+        has-trailing-icon: true;
+        show-divider: false;
     }
 }

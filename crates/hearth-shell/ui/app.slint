@@ -5,7 +5,7 @@ import "../../../assets/fonts/Manrope-SemiBold.ttf";
 
 import { Theme } from "theme.slint";
 import { UiAction, InputMap } from "input.slint";
-import { HomeData, SettingsData, Status, PadNotice, Session, HomeTile, TileKind, SettingsCategory, WifiRow, GameProperties } from "data.slint";
+import { HomeData, SettingsData, Status, PadNotice, Session, HomeTile, TileKind, SettingsCategory, WifiRow, PadRow, GameProperties } from "data.slint";
 import { Home } from "home.slint";
 import { SettingsScreen } from "settings/settings.slint";
 import { Placeholder } from "placeholder.slint";
@@ -17,9 +17,9 @@ import { ControllerType } from "components/glyphs.slint";
 import { ControlsScreen } from "controls/screen.slint";
 import { ControlsData, Callout, Choice, OptionRow } from "controls/data.slint";
 
-export { Theme, ControllerType, OverlayWindow, OverlayPanel, HomeData, SettingsData, Status, PadNotice, Session, HomeTile, TileKind, SettingsCategory, WifiRow, GameProperties, ControlsData, Callout, Choice, OptionRow }
+export { Theme, ControllerType, OverlayWindow, OverlayPanel, HomeData, SettingsData, Status, PadNotice, Session, HomeTile, TileKind, SettingsCategory, WifiRow, PadRow, GameProperties, ControlsData, Callout, Choice, OptionRow }
 
-enum Screen { home, settings, placeholder, controls, button-test }
+enum Screen { home, settings, placeholder, controls }
 
 export component AppWindow inherits Window {
     title: "Hearth";
@@ -36,8 +36,6 @@ export component AppWindow inherits Window {
     property <int> switch-index: 1;
     changed switch-open => { switch-index = 1; }
 
-    // Where Back on the controls page returns (Settings or Home).
-    property <Screen> controls-return: Screen.settings;
 
     function update-scale() {
         Theme.scale = min(self.width / 1920px, self.height / 1080px);
@@ -57,19 +55,25 @@ export component AppWindow inherits Window {
         home.reset(focus-game);
     }
 
-    // Shows the controls page (ControlsData filled by Rust), returning to the current screen.
+    // Shows the controls page (ControlsData filled by Rust): inside Settings when opened from
+    // there, else full screen, returning Home.
     public function open-controls() {
-        controls-return = screen == Screen.home ? Screen.home : Screen.settings;
+        if screen == Screen.settings {
+            settings.open-controls();
+            return;
+        }
         controls.reset();
         screen = Screen.controls;
     }
 
-    // Button test: input is handled by Rust (a long Guide press closes it).
+    // Button test (Settings → Controllers → a controller): input is handled by Rust (a long
+    // Guide press closes it).
     public function open-button-test() {
-        screen = Screen.button-test;
+        screen = Screen.settings;
+        settings.open-test();
     }
     public function close-button-test() {
-        screen = Screen.settings;
+        settings.close-test();
     }
 
     function handle-switch(action: UiAction) -> bool {
@@ -102,9 +106,6 @@ export component AppWindow inherits Window {
         }
         if screen == Screen.controls {
             return controls.handle(action);
-        }
-        if screen == Screen.button-test {
-            return true;
         }
         if screen == Screen.placeholder {
             if action == UiAction.back {
@@ -145,15 +146,7 @@ export component AppWindow inherits Window {
             opacity: screen == Screen.controls ? 1 : 0;
             visible: self.opacity > 0;
             animate opacity { duration: Theme.base; easing: ease-out; }
-            close => { screen = controls-return; }
-        }
-
-        // The button test: the controls page's layout with live input.
-        ControlsScreen {
-            test-mode: true;
-            opacity: screen == Screen.button-test ? 1 : 0;
-            visible: self.opacity > 0;
-            animate opacity { duration: Theme.base; easing: ease-out; }
+            close => { screen = Screen.home; }
         }
 
         placeholder := Placeholder {

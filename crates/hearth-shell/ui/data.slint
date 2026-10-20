@@ -41,6 +41,15 @@ export struct SettingsCategory {
     status: string,
 }
 
+// A connected controller (Settings → Controllers).
+export struct PadRow {
+    id: string,
+    name: string,       // "DualSense"
+    connection: string, // "USB", "Bluetooth" or ""
+    battery: int,       // percent, -1 when not reported (or wired)
+    charging: bool,
+}
+
 export struct WifiRow {
     ssid: string,
     strength: int,      // 0-100
@@ -66,9 +75,10 @@ export global SettingsData {
     in property <[SettingsCategory]> categories;
     in property <[WifiRow]> wifi;
     callback wifi-selected(/* ssid */ string);
-    // Controllers: connected pads (label = name, status = type), then the rows that open a
-    // page ("test" for the button test, "system:<id>" for a console's controls).
-    in property <[SettingsCategory]> controller-info;
+    // Controllers: the connected pads, then one row per console with controls (key
+    // "system:<id>", status "Default" / "Customized"). `controller-item` opens a page:
+    // "system:<id>" a console's controls, "test:<pad id>" a pad's button test.
+    in property <[PadRow]> pads;
     in property <[SettingsCategory]> controller-items;
     callback controller-item(/* key */ string);
     // Display & sound: one row per pack category (key "console_icons" / "ui_sounds", status
@@ -84,7 +94,10 @@ export global SettingsData {
 export global Status {
     in property <string> clock;
     in property <string> greeting;  // "Good evening", for the Welcome cell
-    in property <string> controller-battery;
+    in property <string> controller-battery;    // top bar: "85 %", or empty
+    // Controllers widget on Welcome: "1 connected" and "DualSense · 85 %".
+    in property <string> pads-value: "None connected";
+    in property <string> pads-detail: "Connect a controller";
     in property <string> toast;     // empty: hidden
     // A problem Hearth worked around (e.g. hearth.toml unreadable); empty title: hidden.
     in property <string> notice-title;

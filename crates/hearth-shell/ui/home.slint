@@ -1,7 +1,7 @@
 import { Theme } from "theme.slint";
 import { Icons } from "icons.slint";
 import { UiAction } from "input.slint";
-import { HomeData, HomeTile, TileKind, Session } from "data.slint";
+import { HomeData, HomeTile, TileKind, Session, Status } from "data.slint";
 import { Tile } from "components/tile.slint";
 import { TopBar } from "components/top_bar.slint";
 import { HButton } from "components/button.slint";
@@ -13,61 +13,73 @@ import { ConfirmDialog } from "components/dialog.slint";
 
 export enum HomeZone { topbar, row, hero, widgets }
 
-// One background layer for a tile: the sharp hero across the top at its own aspect ratio,
-// fading into the pre-blurred hero (stretched over the whole screen, behind the widgets).
-// Without art, the tile's placeholder gradient.
-component Backdrop inherits Rectangle {
-    in property <HomeTile> tile;
-    property <length> hero-height: tile.hero.width > 0
-        ? min(root.height, root.width * tile.hero.height / tile.hero.width) : 0;
-
-    if tile.hero.width == 0 && tile.hero-blur.width == 0: Rectangle {
-        background: @linear-gradient(150deg, tile.art-a 0%, tile.art-b 70%, Theme.bg-base 100%);
-    }
-    if tile.hero-blur.width > 0: Image {
-        width: root.width;
-        height: root.height;
-        source: tile.hero-blur;
-        image-fit: cover;
-    }
-    // Darkens the blur so widgets and text stay readable on any art.
-    if tile.hero-blur.width > 0: Rectangle {
-        background: Theme.hero-vignette;
-    }
-    if tile.hero.width > 0: Image {
-        y: 0;
-        width: root.width;
-        height: hero-height;
-        source: tile.hero;
-        image-fit: cover;
-    }
-    // Softens the edge between the sharp hero and the blur below it.
-    if tile.hero.width > 0: Rectangle {
-        y: hero-height - self.height;
-        height: hero-height * 0.45;
-        background: @linear-gradient(180deg, transparent 0%, Theme.hero-vignette 100%);
+// Plain background: base color with the warm top-left glow (Welcome, games without art).
+component Glow inherits Rectangle {
+    background: Theme.bg-base;
+    Rectangle {
+        x: -root.width * 0.4;
+        y: -root.height * 0.6;
+        width: root.width * 1.2;
+        height: self.width;
+        background: @radial-gradient(circle, Theme.bg-glow 0%, Theme.bg-base 60%);
     }
 }
 
-// The console icon (24 px) or its monogram, then the name: beside the focused tile.
+// One background layer: the hero full-bleed behind the whole screen (cover, centered crop),
+// darkened on the left and at the bottom so the logo, text and buttons stay readable. Without
+// a hero (Welcome, Library, games without art): the glow.
+component Backdrop inherits Rectangle {
+    in property <HomeTile> tile;
+
+    if tile.hero.width == 0: Glow { }
+    if tile.hero.width > 0: Image {
+        width: root.width;
+        height: root.height;
+        source: tile.hero;
+        image-fit: cover;
+    }
+    // Strong on the left, gone by 60 % of the width.
+    if tile.hero.width > 0: Rectangle {
+        x: 0;
+        width: root.width * 0.6;
+        background: @linear-gradient(90deg, #000000E0 0%, #000000A6 45%, transparent 100%);
+    }
+    if tile.hero.width > 0: Rectangle {
+        y: root.height - self.height;
+        height: root.height * 0.45;
+        background: @linear-gradient(0deg, Theme.hero-vignette 0%, transparent 100%);
+    }
+    // Light, so the tabs and clock read on bright art.
+    if tile.hero.width > 0: Rectangle {
+        y: 0;
+        height: root.height * 0.25;
+        background: @linear-gradient(180deg, #00000059 0%, transparent 100%);
+    }
+}
+
+// The cell's icon (24 px) then its name, beside the focused cell (and in the collapsed
+// header). Games: console icon from the pack (as drawn) or Hearth's glyph (tinted), else a
+// monogram. Welcome: the Hearth glyph. Library: the library icon.
 component TileLabel inherits HorizontalLayout {
     in property <HomeTile> tile;
+    property <bool> game: tile.kind == TileKind.game;
     spacing: Theme.sp-12;
     alignment: start;
-    if tile.kind == TileKind.game && tile.console-icon.width > 0 && tile.console-icon-tint: Image {
-        source: tile.console-icon;
+    if !game || (tile.console-icon.width > 0 && tile.console-icon-tint): Image {
+        source: tile.kind == TileKind.welcome ? Icons.hearth
+            : tile.kind == TileKind.library ? Icons.library : tile.console-icon;
         width: 24px * Theme.scale;
         height: self.width;
         y: (parent.height - self.height) / 2;
         colorize: Theme.text-primary;
     }
-    if tile.kind == TileKind.game && tile.console-icon.width > 0 && !tile.console-icon-tint: Image {
+    if game && tile.console-icon.width > 0 && !tile.console-icon-tint: Image {
         source: tile.console-icon;
         width: 24px * Theme.scale;
         height: self.width;
         y: (parent.height - self.height) / 2;
     }
-    if tile.kind == TileKind.game && tile.console-icon.width == 0: Rectangle {
+    if game && tile.console-icon.width == 0: Rectangle {
         width: monogram.preferred-width + 2 * Theme.sp-8;
         height: 24px * Theme.scale;
         y: (parent.height - self.height) / 2;
@@ -91,25 +103,30 @@ component TileLabel inherits HorizontalLayout {
     }
 }
 
-// Home screen (README §4): top bar, tile row, hero zone for the current tile, widget row.
+// Home screen (README §4, PS5-style): top bar and cell row over the focused game's hero, its
+// logo, details and buttons in the lower half. Down collapses the row into a small header and
+// moves the content up; Welcome shows a greeting and the status widgets instead.
 export component Home inherits Rectangle {
     callback open-settings();
     callback open-placeholder(/* title */ string, /* text */ string);
 
     property <[HomeTile]> tiles: HomeData.tiles;
     property <HomeZone> zone: HomeZone.row;
-    property <int> index: 0;          // current tile
+    property <int> index: 0;          // current cell
     property <int> top-index: 0;      // 0 Games, 1 Media, 2 Search, 3 Settings
     property <int> hero-index: 0;
     property <int> widget-index: 0;
     property <int> tab: 0;            // 0 Games, 1 Media
     property <HomeTile> current: tiles[index];
     property <bool> current-is-game: current.kind == TileKind.game;
-    // Hero buttons: Play [⋯], or Resume, Close and [⋯] for the running game.
+    property <bool> welcome: current.kind == TileKind.welcome;
+    // Buttons: Play [⋯], Resume, Close and [⋯] for the running game, Open for the Library.
     property <int> hero-count: !current-is-game ? 1 : current.running ? 3 : 2;
     property <int> widget-count: 4;
+    // Down from the row: the row collapses into a header and the content moves up.
+    property <bool> collapsed: zone == HomeZone.hero || zone == HomeZone.widgets;
 
-    // Options menu, Properties and the Close game confirmation for the current tile.
+    // Options menu, Properties and the Close game confirmation for the current cell.
     property <bool> menu-open: false;
     property <int> menu-index: 0;
     property <[MenuItem]> menu-items: [
@@ -122,23 +139,29 @@ export component Home inherits Rectangle {
     property <bool> confirm-open: false;
     property <int> confirm-index: 0;
 
-    // Tile row geometry (README §4, fixed focus anchor): the focused tile stays at safe-x and
-    // the row slides by one tile per press, until the last tile is fully visible; from there
-    // focus moves the rest of the way. The row never ends before the right safe edge.
+    // Row geometry (README §4, fixed focus anchor). The anchor is the second slot: Welcome
+    // sits at safe-x (under the "Games" tab) with the first game focused next to it; from
+    // there the focused cell stays at the anchor all the way to the last cell, the previous
+    // cell fully visible on its left and older ones running off the screen edge.
     property <length> step: Theme.tile + Theme.tile-gap;
     property <length> row-top: Theme.topbar-height + Theme.sp-24;
-    property <length> row-width: max(0, tiles.length - 1) * step + Theme.tile-focused;
-    property <length> max-offset: max(0, row-width - (root.width - 2 * Theme.safe-x));
-    property <length> row-offset: min(index * step, max-offset);
+    property <length> row-offset: max(0, index - 1) * step;
     property <length> focused-x: Theme.safe-x + index * step - row-offset;
-    // Beside the focused tile, in the band below the smaller tiles; under it when the
-    // focused tile is too close to the right edge.
     property <length> label-x: focused-x + Theme.tile-focused + Theme.tile-gap;
-    property <bool> label-beside: root.width - Theme.safe-x - label-x >= 320px * Theme.scale;
-    property <length> hero-top: row-top + Theme.tile-focused + Theme.sp-64;
 
-    // Background layers crossfade (`slow`) whenever the current tile's art changes.
-    property <string> backdrop-key: current.id + ":" + current.hero.width + ":" + current.hero-blur.width;
+    // Content block: the logo box (640 × 260) ends at 62 % of the height, in the lower half;
+    // collapsing lifts everything by 260.
+    property <length> logo-box-width: 640px * Theme.scale;
+    property <length> logo-box-height: 260px * Theme.scale;
+    property <length> lift: collapsed ? 260px * Theme.scale : 0;
+    animate lift { duration: Theme.slow; easing: ease-in-out; }
+    property <length> logo-bottom: root.height * 0.62 - lift;
+    property <length> meta-y: logo-bottom + Theme.sp-24;
+    property <length> buttons-y: meta-y + Theme.body + Theme.sp-32;
+    property <length> widgets-y: logo-bottom + Theme.sp-48;
+
+    // Background layers crossfade (`slow`) whenever the current cell's hero changes.
+    property <string> backdrop-key: current.id + ":" + current.hero.width;
     property <bool> show-a: true;
     property <HomeTile> backdrop-a;
     property <HomeTile> backdrop-b;
@@ -151,11 +174,10 @@ export component Home inherits Rectangle {
         show-a = !show-a;
     }
 
-    // Focus starts on the first tile: the running game if there is one (Rust puts it first),
-    // else the most recently played.
+    // Focus starts on the first game: the running one if there is one (Rust puts it first),
+    // else the most recently played; Welcome when there are no games.
     public function reset() {
         zone = HomeZone.row;
-        // The first game (the running one, else the most recent); Welcome without games.
         index = tiles.length > 2 ? 1 : 0;
         tab = 0;
         hero-index = 0;
@@ -280,8 +302,25 @@ export component Home inherits Rectangle {
             if action == UiAction.left { index = max(0, index - 1); hero-index = 0; return true; }
             if action == UiAction.right { index = min(tiles.length - 1, index + 1); hero-index = 0; return true; }
             if action == UiAction.up { zone = HomeZone.topbar; top-index = tab; return true; }
-            if action == UiAction.down { zone = HomeZone.hero; hero-index = 0; return true; }
-            if action == UiAction.accept { activate-current(); return true; }
+            if action == UiAction.down {
+                if welcome {
+                    zone = HomeZone.widgets;
+                    widget-index = 0;
+                } else {
+                    zone = HomeZone.hero;
+                    hero-index = 0;
+                }
+                return true;
+            }
+            if action == UiAction.accept {
+                if welcome {
+                    zone = HomeZone.widgets;
+                    widget-index = 0;
+                } else {
+                    activate-current();
+                }
+                return true;
+            }
             if action == UiAction.options { open-menu(); return true; }
             return false;
         }
@@ -289,7 +328,6 @@ export component Home inherits Rectangle {
             if action == UiAction.left { hero-index = max(0, hero-index - 1); return true; }
             if action == UiAction.right { hero-index = min(hero-count - 1, hero-index + 1); return true; }
             if action == UiAction.up || action == UiAction.back { zone = HomeZone.row; return true; }
-            if action == UiAction.down { zone = HomeZone.widgets; return true; }
             if action == UiAction.accept {
                 if hero-index == 0 {
                     activate-current();
@@ -301,21 +339,20 @@ export component Home inherits Rectangle {
                 return true;
             }
             if action == UiAction.options { open-menu(); return true; }
-            return false;
+            return true;
         }
-        // widgets
+        // widgets (Welcome only)
         if action == UiAction.left { widget-index = max(0, widget-index - 1); return true; }
         if action == UiAction.right { widget-index = min(widget-count - 1, widget-index + 1); return true; }
-        if action == UiAction.up { zone = HomeZone.hero; return true; }
-        if action == UiAction.back { zone = HomeZone.row; return true; }
+        if action == UiAction.up || action == UiAction.back { zone = HomeZone.row; return true; }
         if action == UiAction.accept { HomeData.activated("widget", widget-index); return true; }
-        false
+        true
     }
 
     background: Theme.bg-base;
     clip: true;
 
-    // Background: the current tile's art, crossfading between two layers.
+    // Background: the current cell's hero, crossfading between two layers.
     Backdrop {
         tile: backdrop-a;
         opacity: show-a && tab == 0 ? 1 : 0;
@@ -326,34 +363,81 @@ export component Home inherits Rectangle {
         opacity: !show-a && tab == 0 ? 1 : 0;
         animate opacity { duration: Theme.slow; easing: ease-in-out; }
     }
-    // Plain warm glow for the Media tab.
-    Rectangle {
-        background: @radial-gradient(circle, Theme.bg-glow 0%, Theme.bg-base 70%);
+    // Plain glow for the Media tab.
+    Glow {
         opacity: tab == 1 ? 1 : 0;
         animate opacity { duration: Theme.slow; easing: ease-in-out; }
     }
-    // Vignettes (top, bottom) and a left shade so hero text stays readable.
+
+    // Tabs and row slide up and fade out when collapsed.
     Rectangle {
-        height: parent.height * 0.4;
-        y: 0;
-        background: @linear-gradient(180deg, Theme.hero-vignette 0%, transparent 100%);
-    }
-    Rectangle {
-        height: parent.height * 0.5;
-        y: parent.height - self.height;
-        background: @linear-gradient(0deg, Theme.hero-vignette 0%, transparent 100%);
-    }
-    Rectangle {
-        width: parent.width * 0.6;
-        x: 0;
-        background: @linear-gradient(90deg, #00000059 0%, transparent 100%);
+        y: collapsed ? -(row-top + Theme.tile-focused) : 0;
+        animate y { duration: Theme.slow; easing: ease-in-out; }
+        opacity: collapsed ? 0 : 1;
+        animate opacity { duration: Theme.slow; easing: ease-in-out; }
+
+        TopBar {
+            y: 0;
+            width: parent.width;
+            tab: tab;
+            focus-index: zone == HomeZone.topbar ? top-index : -1;
+        }
+
+        // Cell row and the label beside the focused cell.
+        Rectangle {
+            opacity: tab == 0 ? 1 : 0;
+            animate opacity { duration: Theme.base; easing: ease-out; }
+            for tile[i] in tiles: Tile {
+                x: Theme.safe-x + i * step + (i > index ? Theme.tile-focused - Theme.tile : 0) - row-offset;
+                animate x { duration: Theme.base; easing: ease-out; }
+                y: row-top;
+                data: tile;
+                current: i == index;
+                focused: i == index && zone == HomeZone.row;
+            }
+            TileLabel {
+                x: label-x;
+                animate x { duration: Theme.base; easing: ease-out; }
+                y: row-top + Theme.tile-focused - self.height;
+                width: root.width - Theme.safe-x - label-x;
+                height: Theme.sp-32;
+                tile: current;
+            }
+        }
     }
 
-    TopBar {
-        y: 0;
-        width: parent.width;
-        tab: tab;
-        focus-index: zone == HomeZone.topbar ? top-index : -1;
+    // Collapsed header, top left: the cell's art, then its icon and name.
+    HorizontalLayout {
+        x: Theme.safe-x;
+        y: Theme.safe-y + (collapsed ? 0 : -Theme.sp-32);
+        animate y { duration: Theme.slow; easing: ease-in-out; }
+        height: 64px * Theme.scale;
+        width: root.width - 2 * Theme.safe-x;
+        spacing: Theme.sp-24;
+        alignment: start;
+        opacity: collapsed && tab == 0 ? 1 : 0;
+        animate opacity { duration: Theme.slow; easing: ease-in-out; }
+        Rectangle {
+            width: self.height;
+            border-radius: Theme.radius-md;
+            clip: true;
+            background: @linear-gradient(135deg, current.art-a 0%, current.art-b 100%);
+            if current.art.width > 0: Image {
+                width: parent.width;
+                height: parent.height;
+                source: current.art;
+                image-fit: cover;
+            }
+            if current.art.width == 0 && !current-is-game: Image {
+                width: parent.width * 0.5;
+                height: self.width;
+                source: welcome ? Icons.hearth : Icons.library;
+                colorize: Theme.text-primary;
+            }
+        }
+        TileLabel {
+            tile: current;
+        }
     }
 
     // Games tab content.
@@ -361,90 +445,104 @@ export component Home inherits Rectangle {
         opacity: tab == 0 ? 1 : 0;
         animate opacity { duration: Theme.base; easing: ease-out; }
 
-        // Tile row
-        for tile[i] in tiles: Tile {
-            x: Theme.safe-x + i * step + (i > index ? Theme.tile-focused - Theme.tile : 0) - row-offset;
-            animate x { duration: Theme.base; easing: ease-out; }
-            y: row-top;
-            data: tile;
-            current: i == index;
-            focused: i == index && zone == HomeZone.row;
+        // Logo (fit inside the box, bottom-left), else the title on up to two lines; the
+        // greeting on Welcome.
+        if current.logo.width > 0: Image {
+            x: Theme.safe-x;
+            y: logo-bottom - logo-box-height;
+            width: logo-box-width;
+            height: logo-box-height;
+            source: current.logo;
+            image-fit: contain;
+            horizontal-alignment: left;
+            vertical-alignment: bottom;
         }
-        if label-beside: TileLabel {
-            x: label-x;
-            animate x { duration: Theme.base; easing: ease-out; }
-            y: row-top + Theme.tile-focused - self.height;
-            width: root.width - Theme.safe-x - label-x;
-            height: Theme.sp-32;
-            tile: current;
-        }
-        if !label-beside: TileLabel {
-            x: max(Theme.safe-x, focused-x + Theme.tile-focused - self.preferred-width);
-            y: row-top + Theme.tile-focused + Theme.sp-12;
-            width: min(self.preferred-width, root.width - 2 * Theme.safe-x);
-            height: Theme.sp-32;
-            tile: current;
+        if current.logo.width == 0: Text {
+            x: Theme.safe-x;
+            y: logo-bottom - self.height;
+            width: min(root.width * 0.6, root.width - 2 * Theme.safe-x);
+            height: 2 * 1.3 * Theme.display;
+            text: welcome ? Status.greeting : current.title;
+            wrap: word-wrap;
+            overflow: elide;
+            vertical-alignment: bottom;
+            font-size: Theme.display;
+            font-weight: Theme.semibold;
+            color: Theme.text-primary;
         }
 
-        // Hero zone
-        VerticalLayout {
+        // Console · last played (games), a description (Library).
+        if !welcome: Text {
             x: Theme.safe-x;
-            y: hero-top;
-            width: parent.width - 2 * Theme.safe-x;
-            height: self.preferred-height;
+            y: meta-y;
+            width: root.width - 2 * Theme.safe-x;
+            text: !current-is-game ? current.subtitle
+                : current.last-played != "" ? current.badge + " · " + current.last-played
+                : current.badge;
+            font-size: Theme.body;
+            color: Theme.text-secondary;
+        }
+
+        if !welcome: HorizontalLayout {
+            x: Theme.safe-x;
+            y: buttons-y;
+            height: Theme.button-height;
+            width: root.width - 2 * Theme.safe-x;
             spacing: Theme.sp-16;
             alignment: start;
+            HButton {
+                primary: true;
+                has-icon: current-is-game;
+                icon: Icons.play;
+                label: current.running ? "Resume" : current-is-game ? "Play" : "Open";
+                focused: zone == HomeZone.hero && hero-index == 0;
+            }
+            if current.running: HButton {
+                label: "Close";
+                focused: zone == HomeZone.hero && hero-index == 1;
+            }
+            if current-is-game: HButton {
+                has-icon: true;
+                icon: Icons.ellipsis;
+                focused: zone == HomeZone.hero && hero-index == hero-count - 1;
+            }
+        }
 
-            // The game's logo when cached, else its title.
-            if current.logo.width > 0: Image {
-                height: 140px * Theme.scale;
-                width: min(640px * Theme.scale, self.height * current.logo.width / current.logo.height);
-                source: current.logo;
-                image-fit: contain;
-                horizontal-alignment: left;
-            }
-            if current.logo.width == 0: Text {
-                text: current.title;
-                font-size: Theme.display;
-                font-weight: Theme.semibold;
-                color: Theme.text-primary;
-            }
-            // Console · playtime · last played.
-            Text {
-                text: current.badge != "" ? current.badge + " · " + current.subtitle : current.subtitle;
-                font-size: Theme.body;
-                color: Theme.text-secondary;
-            }
-            HorizontalLayout {
-                padding-top: Theme.sp-16;
-                spacing: Theme.sp-16;
-                alignment: start;
-                HButton {
-                    primary: true;
-                    has-icon: current-is-game;
-                    icon: Icons.play;
-                    label: current.running ? "Resume" : current-is-game ? "Play" : "Open";
-                    focused: zone == HomeZone.hero && hero-index == 0;
+        // Playtime pill, right-aligned on the buttons' line.
+        if current-is-game: Rectangle {
+            x: root.width - Theme.safe-x - self.width;
+            y: buttons-y;
+            height: Theme.button-height;
+            width: pill.preferred-width + 2 * Theme.sp-24;
+            border-radius: Theme.radius-md;
+            background: Theme.surface;
+            pill := HorizontalLayout {
+                alignment: center;
+                spacing: Theme.sp-12;
+                Image {
+                    source: Icons.clock;
+                    width: Theme.icon-size * 0.75;
+                    height: self.width;
+                    y: (parent.height - self.height) / 2;
+                    colorize: Theme.text-primary;
                 }
-                if current.running: HButton {
-                    label: "Close";
-                    focused: zone == HomeZone.hero && hero-index == 1;
-                }
-                if current-is-game: HButton {
-                    has-icon: true;
-                    icon: Icons.ellipsis;
-                    focused: zone == HomeZone.hero && hero-index == hero-count - 1;
+                Text {
+                    text: current.played;
+                    vertical-alignment: center;
+                    font-size: Theme.body-lg;
+                    font-weight: Theme.medium;
+                    color: Theme.text-primary;
                 }
             }
         }
 
-        // Widget row (fake values). TODO(M3/M4): running game, storage, controllers, media.
-        widget-row := HorizontalLayout {
+        // Status widgets: Welcome only. TODO(M3/M4): real storage, controllers, media.
+        if welcome: widget-row := HorizontalLayout {
             property <length> widget-width: (self.width - 3 * Theme.sp-24) / widget-count;
             x: Theme.safe-x;
-            width: parent.width - 2 * Theme.safe-x;
+            y: widgets-y;
+            width: root.width - 2 * Theme.safe-x;
             height: 200px * Theme.scale;
-            y: parent.height - Theme.safe-y - Theme.sp-48 - self.height;
             spacing: Theme.sp-24;
             Widget {
                 width: widget-row.widget-width;
@@ -515,11 +613,10 @@ export component Home inherits Rectangle {
         ];
     }
 
-    // To the right of the focused tile; to its left when it sits at the end of the row.
+    // Right of the focused cell; under the buttons when opened from them.
     if menu-open: OptionsMenu {
-        x: root.width - Theme.safe-x - label-x >= self.width ? label-x
-            : focused-x - Theme.tile-gap - self.width;
-        y: row-top;
+        x: collapsed ? Theme.safe-x : label-x;
+        y: collapsed ? buttons-y + Theme.button-height + Theme.sp-16 : row-top;
         items: menu-items;
         index: menu-index;
     }

@@ -14,6 +14,8 @@ use super::provider::{ArtKind, AssetRef, CatalogGame, MetadataProvider, Provider
 const API: &str = "https://www.steamgriddb.com/api/v2";
 /// Square grids, our tile shape.
 const SQUARE_GRIDS: &str = "512x512,1024x1024";
+/// 4K heroes: Home draws the hero full-bleed behind the whole screen.
+const HERO_4K: &str = "3840x1240";
 /// Larger images aren't art anyone uploads on purpose.
 const MAX_DOWNLOAD: u64 = 30 * 1024 * 1024;
 
@@ -143,6 +145,13 @@ impl MetadataProvider for SteamGridDb {
             } else {
                 top_scored(square)
             }
+        } else if kind == ArtKind::Hero {
+            let large = self.images(id, kind, Some(HERO_4K))?;
+            if large.is_empty() {
+                largest(self.images(id, kind, None)?)
+            } else {
+                top_scored(large)
+            }
         } else {
             top_scored(self.images(id, kind, None)?)
         };
@@ -204,6 +213,13 @@ fn top_scored(images: Vec<Image>) -> Option<Image> {
         .enumerate()
         .max_by_key(|(i, image)| (image.score, std::cmp::Reverse(*i)))
         .map(|(_, image)| image)
+}
+
+/// The image with the most pixels, then the highest score.
+fn largest(images: Vec<Image>) -> Option<Image> {
+    let area = |i: &Image| u64::from(i.width) * u64::from(i.height);
+    let most = images.iter().map(area).max()?;
+    top_scored(images.into_iter().filter(|i| area(i) == most).collect())
 }
 
 /// The image nearest to square (aspect ratio distance), then the highest score.
@@ -285,6 +301,17 @@ mod tests {
             image("near-square-better", 4, 620, 660),
         ];
         assert_eq!(closest_to_square(images).unwrap().url, "near-square-better");
+    }
+
+    #[test]
+    fn largest_hero_when_no_4k() {
+        let images = vec![
+            image("small-popular", 90, 1920, 620),
+            image("big", 1, 3000, 1000),
+            image("big-better", 5, 3000, 1000),
+        ];
+        assert_eq!(largest(images).unwrap().url, "big-better");
+        assert!(largest(Vec::new()).is_none());
     }
 
     #[test]

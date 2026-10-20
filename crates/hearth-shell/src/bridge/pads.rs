@@ -61,6 +61,15 @@ pub struct Summary {
     pub battery: String,
 }
 
+/// While the input backend is still looking for pads at startup.
+pub fn checking() -> Summary {
+    Summary {
+        count: "Checking…".into(),
+        detail: "Looking for controllers".into(),
+        battery: String::new(),
+    }
+}
+
 /// Sums up `pads` (the first one is player 1's).
 pub fn summary(pads: &[PadInfo]) -> Summary {
     let Some(first) = pads.first() else {

@@ -200,8 +200,8 @@ pub struct Controller {
     service_lost: Option<(Instant, bool)>,
     /// Controllers as last seen, to notice them coming and going.
     known_pads: Vec<PadInfo>,
-    /// The pads have been put in the UI once.
-    pads_shown: bool,
+    /// Whether the UI shows the pads (`Some`), and as "still looking" (`Some(true)`).
+    pads_shown: Option<bool>,
     /// No controller notices before this (startup, controller service changes).
     pads_settle: Instant,
     /// The controller driving the running game (player 1 when it started).
@@ -416,7 +416,7 @@ pub fn install(setup: Setup) {
         test_timer: slint::Timer::default(),
         service_lost: None,
         known_pads: Vec::new(),
-        pads_shown: false,
+        pads_shown: None,
         pads_settle: Instant::now() + PAD_SETTLE,
         game_pad: None,
         battery_warned: std::collections::HashMap::new(),
@@ -711,9 +711,12 @@ impl Controller {
         let now = Instant::now();
         // Connects and disconnects reach the input backend's list at once, battery levels
         // every few seconds: the UI follows whenever the list changes.
-        if pads != self.known_pads || !self.pads_shown {
-            self.pads_shown = true;
-            self.refresh_pads(&pads);
+        // Until the backend has had time to find them (InputPlumber takes a few seconds), no
+        // pad means "still looking", not "none".
+        let checking = pads.is_empty() && now < self.pads_settle;
+        if pads != self.known_pads || self.pads_shown != Some(checking) {
+            self.pads_shown = Some(checking);
+            self.refresh_pads(&pads, checking);
         }
         if self.service_lost.is_some() || now < self.pads_settle {
             self.known_pads = pads;
@@ -2016,7 +2019,7 @@ impl Controller {
 
     /// The connected controllers everywhere they show: Settings → Controllers and its status
     /// line, the Welcome widget, the top bar.
-    fn refresh_pads(&self, pads: &[PadInfo]) {
+    fn refresh_pads(&self, pads: &[PadInfo], checking: bool) {
         let Some(app) = self.app.upgrade() else {
             return;
         };
@@ -2032,7 +2035,11 @@ impl Controller {
         } else {
             settings.set_pads(ModelRc::from(Rc::new(VecModel::from(rows))));
         }
-        let summary = super::pads::summary(pads);
+        let summary = if checking {
+            super::pads::checking()
+        } else {
+            super::pads::summary(pads)
+        };
         models::set_category_status(&app, "controllers", &summary.count);
         let status = app.global::<Status>();
         status.set_pads_value(summary.count.into());

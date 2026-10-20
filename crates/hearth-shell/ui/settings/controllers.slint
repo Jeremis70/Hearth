@@ -1,6 +1,6 @@
 import { Theme } from "../theme.slint";
 import { Icons } from "../icons.slint";
-import { SettingsData, PadRow } from "../data.slint";
+import { SettingsData, PadRow, Status } from "../data.slint";
 import { ListRow } from "../components/list_row.slint";
 
 // Glides behind the focused row; `y` is set by the owner.
@@ -119,7 +119,7 @@ export component ControllersPane inherits Rectangle {
         y: pads-top;
         height: Theme.row-height;
         vertical-alignment: center;
-        text: "No controller connected";
+        text: Status.pads-value == "Checking…" ? "Looking for controllers…" : "No controller connected";
         font-size: Theme.body-lg;
         color: Theme.text-secondary;
     }

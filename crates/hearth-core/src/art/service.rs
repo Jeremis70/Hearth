@@ -36,6 +36,8 @@ pub enum ArtEvent {
     Art {
         /// The game.
         game: GameId,
+        /// Its art key (where its display copies go, see [`super::display`]).
+        key: ArtKey,
         /// Its art; empty means placeholders.
         art: GameArt,
         /// The SteamGridDB game it matched, if any (for Properties).
@@ -366,6 +368,7 @@ impl Worker {
         for game in &known.games {
             (self.events)(ArtEvent::Art {
                 game: game.id.clone(),
+                key: key.clone(),
                 art: self.cache.resolve(key, &game.path),
                 match_name: match_name.clone(),
             });
@@ -531,6 +534,7 @@ mod tests {
                      game,
                      art,
                      match_name,
+                     ..
                  }| {
                     (game.as_str() == id).then(|| (art.clone(), match_name.clone()))
                 },

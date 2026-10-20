@@ -188,7 +188,7 @@ pub fn local_overrides(rom: &Path) -> GameArt {
 }
 
 /// True if `derived` is missing or older than `source`.
-fn is_stale(derived: &Path, source: &Path) -> bool {
+pub(super) fn is_stale(derived: &Path, source: &Path) -> bool {
     let modified = |p: &Path| fs::metadata(p).and_then(|m| m.modified()).ok();
     match (modified(derived), modified(source)) {
         (Some(d), Some(s)) => d < s,

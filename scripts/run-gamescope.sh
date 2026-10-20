@@ -11,6 +11,8 @@
 #                           16:10 laptop panel gets no black bars)
 #   HEARTH_GS_FULLSCREEN=1  start the gamescope window fullscreen (instead of Alt+F3 later)
 #   HEARTH_GS_ARGS="..."    extra gamescope flags, e.g. "--backend sdl"
+#   HEARTH_GS_RELEASE=1     run the optimised build (target/release); day to day:
+#                           HEARTH_GS_RELEASE=1 HEARTH_GS_FULLSCREEN=1 scripts/run-gamescope.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -33,8 +35,15 @@ if [[ -n "${HEARTH_GS_ARGS:-}" ]]; then
     gamescope_args+=("${extra[@]}")
 fi
 
-cargo build -p hearth-shell
-echo "gamescope ${gamescope_args[*]}" >&2
+profile=debug
+build_args=(-p hearth-shell)
+if [[ "${HEARTH_GS_RELEASE:-0}" == "1" ]]; then
+    profile=release
+    build_args+=(--release)
+fi
+
+cargo build "${build_args[@]}"
+echo "gamescope ${gamescope_args[*]} ($profile build)" >&2
 exec gamescope "${gamescope_args[@]}" -- \
     env -u WAYLAND_DISPLAY HEARTH_HOME=./.dev-data \
-    target/debug/hearth-shell --fullscreen "$@"
+    "target/$profile/hearth-shell" --fullscreen "$@"

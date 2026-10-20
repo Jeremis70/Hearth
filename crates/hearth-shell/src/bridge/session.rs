@@ -48,8 +48,8 @@ use super::controls_page::{
 use super::models;
 use crate::controls;
 use crate::{
-    AppWindow, ControllerType, ControlsData, GameProperties, HomeData, OverlayPanel, OverlayWindow,
-    PadNotice, Session, SettingsCategory, SettingsData, Status,
+    AppWindow, ControllerType, ControlsData, GameProperties, HomeData, HomeTile, OverlayPanel,
+    OverlayWindow, PadNotice, Session, SettingsCategory, SettingsData, Status, TileKind,
 };
 
 /// How long to look for a game's window before giving up.
@@ -456,6 +456,7 @@ fn load_library(load: LibraryLoad) {
             });
             match result {
                 Ok(entries) => {
+                    super::startup::note("library loaded");
                     if let Some(art) = &load.art {
                         art.library_loaded(entries.iter().map(|e| e.game.clone()).collect());
                     }
@@ -1396,6 +1397,29 @@ impl Controller {
     pub fn set_art(&mut self, game: GameId, art: DecodedArt) {
         self.art.insert(game, art.into());
         self.refresh_tiles();
+        self.probe_startup();
+    }
+
+    /// Startup timing: the first game's hero, and art for every game in view.
+    fn probe_startup(&self) {
+        /// Game cells in view at startup (Welcome focused, any 16:9 or 16:10 screen).
+        const IN_VIEW: usize = 11;
+        let Some(app) = self.app.upgrade() else {
+            return;
+        };
+        let tiles = app.global::<HomeData>().get_tiles();
+        let games: Vec<HomeTile> = tiles.iter().filter(|t| t.kind == TileKind::Game).collect();
+        if games.first().is_some_and(|t| t.hero.size().width > 0) {
+            super::startup::shown("first game's hero", &app);
+        }
+        let in_view = &games[..games.len().min(IN_VIEW)];
+        if !in_view.is_empty()
+            && in_view
+                .iter()
+                .all(|t| self.art.contains_key(&GameId::new(t.id.as_str())))
+        {
+            super::startup::shown("art of the games in view", &app);
+        }
     }
 
     fn title(&self) -> String {

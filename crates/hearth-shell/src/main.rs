@@ -137,6 +137,7 @@ fn select_input(choice: InputChoice, runtime_dir: &std::path::Path) -> anyhow::R
 }
 
 fn main() -> anyhow::Result<()> {
+    bridge::startup::start();
     // Before any thread exists, so every thread inherits the mask and only the signal thread
     // receives these.
     let shutdown_signals = block_shutdown_signals()?;
@@ -195,6 +196,7 @@ fn main() -> anyhow::Result<()> {
     spawn_signal_thread(shutdown_signals)?;
 
     let app = AppWindow::new()?;
+    bridge::startup::install(&app);
     // The overlay window keeps the event loop alive, so quit explicitly when Hearth is closed.
     app.window().on_close_requested(|| {
         let _ = slint::quit_event_loop();

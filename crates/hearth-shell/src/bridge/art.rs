@@ -105,6 +105,7 @@ pub fn start(
             art,
             match_name,
         } => {
+            super::startup::note("first art event");
             let decoded = decode_all(&art, match_name);
             defer(move |c| c.set_art(game, decoded));
         }

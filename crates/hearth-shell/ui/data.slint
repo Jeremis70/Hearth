@@ -65,6 +65,8 @@ export global HomeData {
     callback toggle-favorite(/* game id */ string);
     // The focused cell of the row (art for it is decoded first).
     callback focus-changed(/* index */ int);
+    // The game whose theme may play: the focused game while Home's Games row shows, else "".
+    callback music-focus-changed(/* game id */ string);
     // A game's own controls page (running or not).
     callback open-game-controls(/* game id */ string);
     // Fills `properties` (synchronously) for a game.

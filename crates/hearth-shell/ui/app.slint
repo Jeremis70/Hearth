@@ -31,6 +31,8 @@ export component AppWindow inherits Window {
     default-font-family: "Manrope";
 
     property <Screen> screen: Screen.home;
+    property <string> music-focus: screen == Screen.home ? home.music-focus : "";
+    changed music-focus => { HomeData.music-focus-changed(music-focus); }
     // "Close <game>?" before starting another game: 0 Close and play, 1 Cancel (the default).
     property <bool> switch-open: Session.switch-open;
     property <int> switch-index: 1;

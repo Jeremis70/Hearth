@@ -114,6 +114,8 @@ export component Home inherits Rectangle {
     property <HomeZone> zone: HomeZone.row;
     property <int> index: 0;          // current cell
     changed index => { HomeData.focus-changed(index); }
+    // The focused game while the Games row shows (its theme may play), else "".
+    out property <string> music-focus: tab == 0 && current.kind == TileKind.game ? current.id : "";
     property <int> top-index: 0;      // 0 Games, 1 Media, 2 Search, 3 Settings
     property <int> hero-index: 0;
     property <int> widget-index: 0;

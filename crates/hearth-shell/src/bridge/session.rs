@@ -57,9 +57,13 @@ use crate::{
 use hearth_audio::director::{self, GameScene, MusicDirector, Scene};
 use hearth_audio::{Audio, SoundFile};
 use hearth_core::config::AudioSettings;
+use hearth_core::themes::ThemeLookup;
 
 /// When the controls page's drawing is rasterized ahead of use (the window has its size).
 const DIAGRAM_WARM_UP: Duration = Duration::from_secs(6);
+
+/// How long Home's focus must stay on a game before its theme plays (or stops).
+const THEME_SETTLE: Duration = Duration::from_millis(500);
 
 /// How long a problem notice (e.g. hearth.toml unreadable) stays on screen.
 const PROBLEM_TIME: Duration = Duration::from_secs(20);
@@ -223,6 +227,11 @@ pub struct Controller {
     audio_settings: AudioSettings,
     /// The ambient loop of the selected sound pack (else Hearth's).
     ambient: Option<SoundFile>,
+    themes: ThemeLookup,
+    /// The theme of the game focused on Home, once focus settled there.
+    focused_theme: Option<SoundFile>,
+    /// Waits for focus to settle before the theme changes.
+    theme_timer: slint::Timer,
 }
 
 /// Which window a controls page is in.
@@ -312,6 +321,10 @@ pub fn install(setup: Setup) {
         home.on_focus_changed(|index| {
             let index = usize::try_from(index).unwrap_or(0);
             defer(move |c| c.art_loader.set_focus(index));
+        });
+        home.on_music_focus_changed(|id| {
+            let id = (!id.is_empty()).then(|| GameId::new(id.as_str()));
+            defer(move |c| c.music_focus_changed(id));
         });
         home.on_toggle_favorite(|id| {
             let id = GameId::new(id.as_str());
@@ -442,6 +455,9 @@ pub fn install(setup: Setup) {
         music: MusicDirector::default(),
         audio_settings: setup.audio_settings,
         ambient: sounds::music_file("ambient_loop"),
+        themes: ThemeLookup::default(),
+        focused_theme: None,
+        theme_timer: slint::Timer::default(),
     };
     CONTROLLER.with(|cell| *cell.borrow_mut() = Some(controller));
     with(Controller::fill_display_items);
@@ -645,8 +661,44 @@ impl Controller {
 
     // --- music -------------------------------------------------------------------------
 
+    fn theme_of(&self, game: &Game) -> Option<SoundFile> {
+        self.themes.find(game).map(|theme| SoundFile {
+            path: theme.path,
+            origin: theme.source.to_owned(),
+            loop_spec: None,
+        })
+    }
+
+    /// Home's focused game changed (`None`: no game, or Home isn't showing). The theme follows
+    /// once focus has stayed put for [`THEME_SETTLE`], so scrolling past games doesn't start
+    /// and stop music; leaving Home goes back to the ambient at once.
+    fn music_focus_changed(&mut self, id: Option<GameId>) {
+        self.theme_timer.stop();
+        let Some(id) = id else {
+            if self.focused_theme.take().is_some() {
+                self.sync_music(director::FADE_LAUNCH);
+            }
+            return;
+        };
+        self.theme_timer
+            .start(slint::TimerMode::SingleShot, THEME_SETTLE, move || {
+                with(|c| {
+                    let theme = c
+                        .entries
+                        .iter()
+                        .find(|e| e.game.id == id)
+                        .and_then(|e| c.theme_of(&e.game));
+                    if theme != c.focused_theme {
+                        c.focused_theme = theme;
+                        c.sync_music(director::FADE_LAUNCH);
+                    }
+                });
+            });
+    }
+
     /// Tells the music director what Hearth shows now (see `hearth_audio::director`).
     fn sync_music(&mut self, silence_fade: Duration) {
+        let running_theme = self.active.as_ref().and_then(|a| self.theme_of(&a.game));
         let game = match &self.active {
             None => GameScene::None,
             Some(active) if active.frozen => GameScene::Frozen,
@@ -656,8 +708,8 @@ impl Controller {
             game,
             overlay: self.mode == Mode::Overlay,
             ambient: self.ambient.as_ref(),
-            focused_theme: None,
-            running_theme: None,
+            focused_theme: self.focused_theme.as_ref(),
+            running_theme: running_theme.as_ref(),
             music_in_overlay: self.audio_settings.music_in_overlay,
             game_themes: self.audio_settings.game_themes,
         };

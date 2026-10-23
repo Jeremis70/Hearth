@@ -17,6 +17,7 @@ pub mod runtime;
 pub mod scan;
 pub mod session;
 pub mod systems;
+pub mod themes;
 pub mod title;
 
 #[cfg(test)]

@@ -485,6 +485,60 @@ mod tests {
     use crate::testwav::write_wav;
     use crate::{Audio, Music};
 
+    #[test]
+    fn a_failed_or_hung_output_is_reopened_and_the_music_goes_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ambient.wav");
+        let tone: Vec<f32> = (0..4800).map(|i| (i as f32 * 0.05).sin() * 0.3).collect();
+        write_wav(&path, 48_000, &tone);
+        let mut engine = Engine::new(AudioOptions {
+            backend: Backend::Null,
+            stats: false,
+        });
+        engine.keep_output();
+        assert!(engine.output.is_some());
+        engine.set_music(
+            Some(Music {
+                key: "ambient".into(),
+                file: SoundFile {
+                    path,
+                    origin: "test".into(),
+                    loop_spec: None,
+                },
+                resume: true,
+            }),
+            Duration::from_millis(10),
+        );
+
+        // The stream reports a fatal error (the HDMI sink went away): closed, then reopened
+        // after the back-off, keeping the mixer and its music.
+        engine.health.failed.store(true, Ordering::Relaxed);
+        engine.keep_output();
+        assert!(engine.output.is_none());
+        thread::sleep(FIRST_BACKOFF + Duration::from_millis(50));
+        engine.keep_output();
+        assert!(engine.output.is_some());
+        assert_eq!(engine.reopens, 1);
+        assert_eq!(engine.state().music.len(), 1);
+
+        // A callback that stops coming (a hung device) counts as failed too.
+        // (An output that renders but reports to another counter, so ours stands still.)
+        engine.output =
+            Some(output::open_null(engine.mixer.clone(), Arc::new(Health::default())).0);
+        engine.last_callbacks = (
+            engine.health.callbacks.load(Ordering::Relaxed),
+            Instant::now() - STALL - Duration::from_millis(1),
+        );
+        engine.keep_output();
+        assert!(engine.output.is_none());
+        thread::sleep(FIRST_BACKOFF + Duration::from_millis(50));
+        engine.keep_output();
+        assert_eq!(engine.reopens, 2);
+        let callbacks = engine.health.callbacks.load(Ordering::Relaxed);
+        thread::sleep(Duration::from_millis(100));
+        assert!(engine.health.callbacks.load(Ordering::Relaxed) > callbacks);
+    }
+
     fn wait_for(audio: &Audio, what: impl Fn(&AudioState) -> bool) -> AudioState {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {

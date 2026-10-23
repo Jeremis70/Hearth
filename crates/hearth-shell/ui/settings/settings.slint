@@ -111,11 +111,15 @@ export component SettingsScreen inherits Rectangle {
     property <int> pad-count: SettingsData.pads.length;
     property <int> content-count: key == "network" ? SettingsData.wifi.length
         : key == "controllers" ? pad-count + SettingsData.controller-items.length
-        : key == "display" ? (picking ? SettingsData.pack-choices.length : SettingsData.display-items.length)
+        : key == "display" ? (picking ? SettingsData.pack-choices.length
+            : SettingsData.display-items.length + SettingsData.audio-rows.length)
         : 0;
     // Display & sound: the pack list of one category is open.
     property <bool> picking: false;
     property <int> picking-row: 0;
+    // The audio row focused in Display & sound (-1: none).
+    property <int> audio-index: key == "display" && !picking && pane == 1
+        ? content-index - SettingsData.display-items.length : -1;
     property <bool> has-content: content-count > 0;
     property <bool> wide: page == SettingsPage.controls || page == SettingsPage.test;
 
@@ -200,7 +204,10 @@ export component SettingsScreen inherits Rectangle {
                 SettingsData.controller-item(SettingsData.controller-items[content-index - pad-count].key);
             }
         }
-        if key == "display" && !picking {
+        if audio-index >= 0 {
+            let row = SettingsData.audio-rows[audio-index];
+            if !row.slider { SettingsData.audio-change(row.key, 0); }
+        } else if key == "display" && !picking {
             picking-row = content-index;
             SettingsData.open-packs(SettingsData.display-items[content-index].key);
             picking = true;
@@ -252,6 +259,18 @@ export component SettingsScreen inherits Rectangle {
         if action == UiAction.up { return move-content(-1); }
         if action == UiAction.down { return move-content(1); }
         if action == UiAction.accept { accept-content(); return NavResult.handled; }
+        // A volume: Left/Right change it. The UI volume is heard at its new level (Rust plays
+        // the move sound once the volume is set), so it doesn't sound here.
+        if audio-index >= 0 && SettingsData.audio-rows[audio-index].slider
+            && (action == UiAction.left || action == UiAction.right) {
+            let row = SettingsData.audio-rows[audio-index];
+            let step = action == UiAction.left ? -1 : 1;
+            if (step < 0 && row.value <= 0) || (step > 0 && row.value >= 100) {
+                return NavResult.edge;
+            }
+            SettingsData.audio-change(row.key, step);
+            return row.key == "ui_volume" ? NavResult.quiet : NavResult.moved;
+        }
         if (action == UiAction.left || action == UiAction.back) && picking {
             picking = false;
             content-index = picking-row;

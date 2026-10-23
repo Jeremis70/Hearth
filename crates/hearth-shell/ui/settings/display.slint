@@ -1,6 +1,6 @@
 import { Theme } from "../theme.slint";
 import { Icons } from "../icons.slint";
-import { SettingsData } from "../data.slint";
+import { SettingsData, AudioRow } from "../data.slint";
 import { ListRow } from "../components/list_row.slint";
 
 component RowFocus inherits Rectangle {
@@ -20,8 +20,44 @@ component RowFocus inherits Rectangle {
     animate opacity { duration: Theme.fast; easing: ease-out; }
 }
 
+// A volume: the level as a bar and a number.
+component LevelBar inherits Rectangle {
+    in property <int> value;
+    width: 220px * Theme.scale;
+    height: 6px * Theme.scale;
+    border-radius: self.height / 2;
+    background: Theme.divider;
+    Rectangle {
+        x: 0;
+        width: parent.width * value / 100;
+        animate width { duration: Theme.fast; easing: ease-out; }
+        border-radius: parent.border-radius;
+        background: Theme.accent;
+    }
+}
+
+component AudioRowView inherits Rectangle {
+    in property <AudioRow> data;
+    in property <bool> show-divider;
+    height: Theme.row-height;
+    ListRow {
+        width: parent.width;
+        icon: Icons.volume;
+        label: data.label;
+        value: data.slider ? data.value : (data.on ? "On" : "Off");
+        value-color: !data.slider && data.on ? Theme.accent : Theme.text-secondary;
+        show-divider: show-divider;
+    }
+    if data.slider: LevelBar {
+        x: parent.width - Theme.sp-24 - Theme.sp-64 - self.width;
+        y: (parent.height - self.height) / 2;
+        value: data.value;
+    }
+}
+
 // Display & sound pane: "Console icons" and "UI sounds" (SettingsData.display-items), each
-// opening a list of installed packs plus "Hearth default" (SettingsData.pack-choices).
+// opening a list of installed packs plus "Hearth default" (SettingsData.pack-choices), then
+// Hearth's volumes and music options (SettingsData.audio-rows).
 export component DisplayPane inherits Rectangle {
     in property <int> focus-index: -1;    // -1 when focus is in the sidebar
     in property <bool> picking: false;    // the pack list is shown
@@ -55,6 +91,14 @@ export component DisplayPane inherits Rectangle {
             value: item.status;
             trailing-icon: Icons.chevron-right;
             has-trailing-icon: true;
+            show-divider: i != focus-index && i + 1 != focus-index;
+        }
+        for row[j] in SettingsData.audio-rows: AudioRowView {
+            property <int> i: SettingsData.display-items.length + j;
+            x: 0;
+            y: i * (Theme.row-height + Theme.row-gap);
+            width: parent.width;
+            data: row;
             show-divider: i != focus-index && i + 1 != focus-index;
         }
     }

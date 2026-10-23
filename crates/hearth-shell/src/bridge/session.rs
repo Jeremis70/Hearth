@@ -51,11 +51,12 @@ use super::models;
 use super::sounds;
 use crate::controls;
 use crate::{
-    AppWindow, ControllerType, ControlsData, GameProperties, HomeData, HomeTile, OverlayPanel,
-    OverlayWindow, PadNotice, PadRow, Session, SettingsCategory, SettingsData, Status, TileKind,
+    AppWindow, AudioRow, ControllerType, ControlsData, GameProperties, HomeData, HomeTile,
+    OverlayPanel, OverlayWindow, PadNotice, PadRow, Session, SettingsCategory, SettingsData,
+    Status, TileKind,
 };
 use hearth_audio::director::{self, GameScene, MusicDirector, Scene};
-use hearth_audio::{Audio, SoundFile};
+use hearth_audio::{Audio, SoundFile, Volumes};
 use hearth_core::config::AudioSettings;
 use hearth_core::themes::ThemeLookup;
 
@@ -344,6 +345,10 @@ pub fn install(setup: Setup) {
             let key = key.to_string();
             defer(move |c| c.settings_controller_item(&key));
         });
+        settings.on_audio_change(|key, step| {
+            let key = key.to_string();
+            defer(move |c| c.audio_change(&key, step));
+        });
         // Synchronous, like request-properties: the list is shown right after.
         settings.on_open_packs(|key| {
             with(|c| c.fill_pack_choices(&key));
@@ -461,6 +466,7 @@ pub fn install(setup: Setup) {
     };
     CONTROLLER.with(|cell| *cell.borrow_mut() = Some(controller));
     with(Controller::fill_display_items);
+    with(Controller::fill_audio_rows);
     with(|c| c.sync_music(director::FADE_IN));
     if let Some((title, text)) = setup.config_problem {
         with(|c| c.show_problem(&title, &text));
@@ -2088,6 +2094,67 @@ impl Controller {
             .collect();
         app.global::<SettingsData>()
             .set_display_items(ModelRc::from(Rc::new(VecModel::from(items))));
+    }
+
+    /// Settings → Display & sound: the volumes and music options.
+    fn fill_audio_rows(&mut self) {
+        let Some(app) = self.app.upgrade() else {
+            return;
+        };
+        let a = self.audio_settings;
+        let slider = |key: &str, label: &str, value: u8| AudioRow {
+            key: key.into(),
+            label: label.into(),
+            slider: true,
+            value: i32::from(value),
+            on: false,
+        };
+        let toggle = |key: &str, label: &str, on: bool| AudioRow {
+            key: key.into(),
+            label: label.into(),
+            slider: false,
+            value: 0,
+            on,
+        };
+        let rows = vec![
+            slider("ui_volume", "UI sounds volume", a.ui_volume),
+            slider("music_volume", "Music volume", a.music_volume),
+            toggle("mute", "Mute all", a.mute),
+            toggle("music_in_overlay", "Music in overlay", a.music_in_overlay),
+            toggle("game_themes", "Game themes", a.game_themes),
+        ];
+        app.global::<SettingsData>()
+            .set_audio_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
+    }
+
+    /// A volume step (`step` ±1 = 10) or a toggle (`step` 0), applied at once and saved.
+    fn audio_change(&mut self, key: &str, step: i32) {
+        let a = &mut self.audio_settings;
+        let volume = |v: u8| (i32::from(v) + step * 10).clamp(0, 100) as u8;
+        match key {
+            "ui_volume" => a.ui_volume = volume(a.ui_volume),
+            "music_volume" => a.music_volume = volume(a.music_volume),
+            "mute" => a.mute = !a.mute,
+            "music_in_overlay" => a.music_in_overlay = !a.music_in_overlay,
+            "game_themes" => a.game_themes = !a.game_themes,
+            _ => return,
+        }
+        let a = *a;
+        self.audio.set_volumes(Volumes {
+            ui: a.ui_volume,
+            music: a.music_volume,
+            mute: a.mute,
+        });
+        // Heard at the new level.
+        if key == "ui_volume" {
+            sounds::play("move");
+        }
+        if let Err(err) = config::save_audio(&self.config_file, &a) {
+            tracing::warn!("saving the audio settings failed: {err}");
+            self.toast(&format!("Couldn't save the setting: {err}"));
+        }
+        self.fill_audio_rows();
+        self.sync_music(director::FADE_LAUNCH);
     }
 
     /// The pack list of one category: Hearth default, then the installed packs that have

@@ -41,6 +41,16 @@ export struct SettingsCategory {
     status: string,
 }
 
+// Settings → Display & sound, below the pack rows: a volume (`slider`, 0–100 in steps of 10)
+// or an on/off option.
+export struct AudioRow {
+    key: string,      // ui_volume, music_volume, mute, music_in_overlay, game_themes
+    label: string,
+    slider: bool,
+    value: int,       // sliders
+    on: bool,         // toggles
+}
+
 // A connected controller (Settings → Controllers).
 export struct PadRow {
     id: string,
@@ -91,6 +101,9 @@ export global SettingsData {
     in property <string> pack-selected;
     callback open-packs(/* category key */ string);
     callback choose-pack(/* category key */ string, /* pack id */ string);
+    in property <[AudioRow]> audio-rows;
+    // A volume step (-1/+1) or a toggle (0); applies at once and is saved.
+    callback audio-change(/* key */ string, /* step */ int);
 }
 
 export global Status {

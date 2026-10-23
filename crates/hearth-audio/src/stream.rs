@@ -77,6 +77,8 @@ struct Looper {
     chunk: Vec<f32>,
     /// Frames sent in the current pass (a pass that sends nothing would spin).
     sent_this_pass: u64,
+    /// Times it looped.
+    loops: u32,
 }
 
 impl Looper {
@@ -94,6 +96,7 @@ impl Looper {
             held: VecDeque::with_capacity(points.crossfade as usize * 2 + 8192),
             chunk: Vec::with_capacity(8192),
             sent_this_pass: 0,
+            loops: 0,
         })
     }
 
@@ -173,11 +176,49 @@ impl Looper {
             });
         }
         self.sent_this_pass = 0;
+        self.loops += 1;
         self.decoder = Decoder::open(&self.path)?;
         self.pos = 0;
         self.skip_until = self.points.start + head_frames as u64;
         Ok(())
     }
+}
+
+/// The `around` seconds before and after a track's first loop seam, as the mixer would get
+/// them (stereo, at the file's rate), and where the crossfade starts in it. For checking loop
+/// points (`examples/loop_seam.rs`).
+#[doc(hidden)]
+pub fn loop_seam(
+    path: &Path,
+    spec: Option<LoopSpec>,
+    around: f32,
+) -> Result<(Vec<f32>, u32, usize), AudioError> {
+    let mut looper = Looper::open(path, spec)?;
+    let rate = looper.rate();
+    let around = (around * rate as f32) as usize;
+    let mut out = Vec::new();
+    while looper.loops == 0 {
+        let before = out.len();
+        looper.next(&mut out)?;
+        if looper.loops > 0 {
+            // Where the wrap started writing: the crossfade.
+            let seam = before / 2;
+            while out.len() / 2 < seam + around {
+                looper.next(&mut out)?;
+            }
+            let start = seam.saturating_sub(around);
+            return Ok((
+                out[start * 2..(seam + around) * 2].to_vec(),
+                rate,
+                seam - start,
+            ));
+        }
+        // Only the last `around` seconds before the seam matter.
+        if out.len() > around * 4 {
+            out.drain(..out.len() - around * 2);
+        }
+    }
+    Ok((out, rate, 0))
 }
 
 /// A playing music track's decode thread. Dropping it stops the thread.

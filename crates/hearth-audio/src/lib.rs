@@ -19,7 +19,7 @@ mod gain;
 mod mixer;
 mod output;
 mod resample;
-mod stream;
+pub(crate) mod stream;
 #[cfg(test)]
 mod testwav;
 
@@ -31,6 +31,8 @@ use hearth_core::packs::LoopSpec;
 use serde::Serialize;
 
 pub use gain::volume_to_gain;
+#[doc(hidden)]
+pub use stream::loop_seam;
 
 /// Errors inside the engine (logged, never returned to the UI).
 #[derive(Debug, thiserror::Error)]

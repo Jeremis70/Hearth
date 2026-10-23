@@ -328,6 +328,22 @@ mod tests {
     }
 
     #[test]
+    fn the_bundled_ambient_loops_without_a_step() {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/sounds/ambient_loop.ogg");
+        let mut looper = Looper::open(&path, None).unwrap();
+        let frames = 32 * 48_000;
+        let out = collect(&mut looper, frames + 4800);
+        let left: Vec<f32> = out.iter().step_by(2).copied().collect();
+        let steps: Vec<f32> = left.windows(2).map(|w| (w[1] - w[0]).abs()).collect();
+        let largest_inside = steps[..frames - 1].iter().fold(0f32, |m, &v| m.max(v));
+        let seam = steps[frames - 1];
+        assert!(seam <= largest_inside, "seam {seam} > {largest_inside}");
+        // And it really wrapped: the loop's second pass matches its first.
+        assert!((left[frames + 100] - left[100]).abs() < 1e-4);
+    }
+
+    #[test]
     fn loop_frames_are_clamped() {
         let spec = LoopSpec {
             start_ms: 1000,

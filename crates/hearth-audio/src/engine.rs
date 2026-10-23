@@ -33,6 +33,8 @@ struct Track {
     _stream: MusicStream,
     wanted: bool,
     parked_at: Option<Instant>,
+    /// How it is fading out (while not wanted).
+    leaving: AtSilence,
 }
 
 struct Engine {
@@ -220,7 +222,11 @@ impl Engine {
                 } else {
                     AtSilence::Remove
                 };
+                track.leaving = then;
                 fades.push((track.id, 0.0, then));
+            } else if track.parked_at.is_none() {
+                // Still fading out: this fade's length now (a launch hurrying it).
+                fades.push((track.id, 0.0, track.leaving));
             }
         }
         for (id, target, then) in fades {
@@ -256,6 +262,7 @@ impl Engine {
             _stream: stream,
             wanted: true,
             parked_at: None,
+            leaving: AtSilence::Nothing,
         });
     }
 

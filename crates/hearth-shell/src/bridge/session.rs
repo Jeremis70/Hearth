@@ -1320,6 +1320,11 @@ impl Controller {
         let Some(app_id) = self.active.as_ref().map(|a| a.app_id) else {
             return;
         };
+        // A game that opened its window faster than the launch fade: be silent now. (Resume
+        // keeps its own fade, overlapping the game a little.)
+        if self.mode == Mode::Launching {
+            self.music.hurry(&self.audio, director::FADE_FOCUS);
+        }
         self.hide_overlay();
         self.thaw();
         self.set_mode(Mode::Game);

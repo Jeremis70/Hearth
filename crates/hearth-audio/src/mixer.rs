@@ -13,6 +13,8 @@ const MAX_VOICES: usize = 24;
 const MAX_MUSIC: usize = 6;
 /// A cut voice fades out over this long, so cutting never clicks.
 pub(crate) const CUT_FADE: Duration = Duration::from_millis(6);
+/// A new music track waits until this much is decoded before it starts.
+const MUSIC_PRIME_MS: usize = 50;
 /// Volume changes glide over this long instead of jumping (no zipper noise).
 const GAIN_GLIDE: Duration = Duration::from_millis(30);
 
@@ -99,6 +101,8 @@ struct Music {
     step: f32,
     then: AtSilence,
     parked: bool,
+    /// Its decoder has filled enough of the ring to start (no silent first samples).
+    primed: bool,
 }
 
 /// A smoothly changing gain.
@@ -149,6 +153,8 @@ pub(crate) struct Mixer {
     ui: Glide,
     music_gain: Glide,
     underruns: u64,
+    /// Samples a new music ring must hold before it plays.
+    prime: usize,
 }
 
 /// The control thread's ends of the mixer's queues.
@@ -170,6 +176,7 @@ impl Mixer {
             ui: Glide::new(0.0),
             music_gain: Glide::new(0.0),
             underruns: 0,
+            prime: (rate as usize / 1000 * MUSIC_PRIME_MS) * 2,
         };
         let link = MixerLink {
             commands: command_tx,
@@ -238,6 +245,7 @@ impl Mixer {
                         step: 0.0,
                         then: AtSilence::Nothing,
                         parked: true,
+                        primed: false,
                     });
                 }
                 Command::Fade {
@@ -283,6 +291,11 @@ impl Mixer {
                 });
             }
         }
+        for music in &mut self.music {
+            if !music.primed {
+                music.primed = music.ring.slots() >= self.prime || music.ring.is_abandoned();
+            }
+        }
         let channels = channels.max(1);
         for frame in out.chunks_exact_mut(channels) {
             let ui = self.ui.next();
@@ -302,7 +315,7 @@ impl Mixer {
                 voice.pos += 2;
             }
             for music in &mut self.music {
-                if music.parked {
+                if music.parked || !music.primed {
                     continue;
                 }
                 if music.gain < music.target {

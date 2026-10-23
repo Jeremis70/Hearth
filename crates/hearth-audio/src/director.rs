@@ -17,6 +17,8 @@ pub const FADE_IN: Duration = Duration::from_millis(300);
 pub const FADE_LAUNCH: Duration = Duration::from_millis(300);
 /// Going silent on Resume, in parallel with the game continuing.
 pub const FADE_RESUME: Duration = Duration::from_millis(150);
+/// Whatever is still fading when a launched game takes the screen.
+pub const FADE_FOCUS: Duration = Duration::from_millis(20);
 /// Ambient ↔ theme.
 pub const CROSSFADE: Duration = Duration::from_millis(800);
 
@@ -97,6 +99,13 @@ impl MusicDirector {
         tracing::debug!(from = ?self.current.as_ref().map(|m| &m.key), to = ?next.as_ref().map(|m| &m.key), ?fade, "music");
         audio.set_music(next.clone(), fade);
         self.current = next;
+    }
+
+    /// Silence asked for and still fading: finish within `fade` (a game taking the screen).
+    pub fn hurry(&self, audio: &Audio, fade: Duration) {
+        if self.current.is_none() {
+            audio.set_music(None, fade);
+        }
     }
 
     /// The music asked for last.

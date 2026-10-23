@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use clap::Parser;
+use hearth_audio::{Audio, AudioOptions, Backend, Volumes};
 use hearth_core::art::{
     ArtCache, DisplayClass, MetadataProvider, MockMetadataProvider, SteamGridDb,
 };
@@ -68,6 +69,10 @@ struct Args {
     /// keep cached art or placeholders and wait in the needs-art queue.
     #[arg(long)]
     mock_network: bool,
+    /// No sound output (tests, headless runs); the audio engine still runs. Same as
+    /// HEARTH_AUDIO=null.
+    #[arg(long)]
+    no_audio: bool,
 }
 
 /// Hearth's bundled assets (default console icons, sounds). TODO: an installed location
@@ -85,6 +90,27 @@ fn art_provider(mock_network: bool, config: &Config) -> Option<Box<dyn MetadataP
     }
     let key = config.steamgriddb_key(std::env::var(config::STEAMGRIDDB_KEY_ENV).ok())?;
     Some(Box::new(SteamGridDb::new(key)))
+}
+
+/// The audio engine: the default output device, or nothing with `--no-audio` or
+/// `HEARTH_AUDIO=null`. `HEARTH_AUDIO_STATS=1` logs input-to-sound times.
+fn start_audio(no_audio: bool, config: &Config) -> Audio {
+    let null = no_audio || std::env::var("HEARTH_AUDIO").is_ok_and(|v| v == "null");
+    let stats = std::env::var("HEARTH_AUDIO_STATS").is_ok_and(|v| v == "1");
+    if null {
+        tracing::info!("audio: null output");
+    }
+    let audio = Audio::start(AudioOptions {
+        backend: if null { Backend::Null } else { Backend::Device },
+        stats,
+    });
+    let settings = config.audio();
+    audio.set_volumes(Volumes {
+        ui: settings.ui_volume,
+        music: settings.music_volume,
+        mute: settings.mute,
+    });
+    audio
 }
 
 /// `--input`.
@@ -239,6 +265,18 @@ fn main() -> anyhow::Result<()> {
         }
     };
     let icons = bridge::art::ConsoleIcons::new(Resolver::new(dirs.packs(), assets_dir(), &config));
+
+    let audio = start_audio(args.no_audio, &config);
+    bridge::sounds::install(
+        audio.clone(),
+        Resolver::new(dirs.packs(), assets_dir(), &config),
+    );
+    app.global::<Feedback>().on_input(bridge::sounds::on_input);
+    if let Some(overlay) = &overlay {
+        overlay
+            .global::<Feedback>()
+            .on_input(bridge::sounds::on_input);
+    }
 
     let input = select_input(args.input, dirs.runtime())?;
     // Hands the controllers back even if Hearth is killed (SIGKILL included).

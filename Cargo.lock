@@ -2018,6 +2018,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "hearth-audio",
  "hearth-core",
  "hearth-platform",
  "image",

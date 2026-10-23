@@ -1,6 +1,6 @@
 import { PadNoticeCard } from "../components/pad_notice.slint";
 import { Theme } from "../theme.slint";
-import { UiAction, InputMap } from "../input.slint";
+import { UiAction, InputMap, NavResult, Feedback } from "../input.slint";
 import { ControlsScreen } from "../controls/screen.slint";
 import { Toast } from "../components/toast.slint";
 import { QuickMenu } from "quick_menu.slint";
@@ -73,14 +73,22 @@ export component OverlayWindow inherits Window {
         scope.focus();
     }
 
-    public function handle(action: UiAction) -> bool {
+    function route(action: UiAction) -> NavResult {
+        if action == UiAction.none { return NavResult.ignored; }
         if action == UiAction.home-short || action == UiAction.home-long {
             home-button(action == UiAction.home-long);
-            return true;
+            return NavResult.quiet;
         }
         if panel == OverlayPanel.controls { return controls.handle(action); }
         if panel == OverlayPanel.menu { return menu.handle(action); }
-        false
+        NavResult.ignored
+    }
+
+    // Every key goes through here; Feedback picks the sound.
+    public function handle(action: UiAction) -> bool {
+        let result = route(action);
+        Feedback.input(action, result);
+        result != NavResult.ignored
     }
 
     scope := FocusScope {

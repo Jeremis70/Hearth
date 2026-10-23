@@ -9,6 +9,7 @@ license = "GPL-3.0-or-later"
 rust-version = "1.89"
 
 [workspace.dependencies]
+hearth-audio = { path = "crates/hearth-audio" }
 hearth-core = { path = "crates/hearth-core" }
 hearth-platform = { path = "crates/hearth-platform" }
 anyhow = "1.0"

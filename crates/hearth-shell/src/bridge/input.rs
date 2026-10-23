@@ -33,7 +33,8 @@ pub fn start(backends: Vec<Box<dyn InputBackend>>) -> anyhow::Result<()> {
             let _backends = running;
             for action in rx {
                 tracing::debug!(?action, "controller action");
-                if slint::invoke_from_event_loop(move || dispatch(action)).is_err() {
+                let at = std::time::Instant::now();
+                if slint::invoke_from_event_loop(move || dispatch(action, at)).is_err() {
                     break;
                 }
             }
@@ -42,7 +43,8 @@ pub fn start(backends: Vec<Box<dyn InputBackend>>) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn dispatch(action: Action) {
+fn dispatch(action: Action, at: std::time::Instant) {
+    super::sounds::note_input(at);
     // Capture is the session's alone (`route` handles it); it has no key.
     match session::route(action) {
         Route::Main(app) => inject(app.window(), action),

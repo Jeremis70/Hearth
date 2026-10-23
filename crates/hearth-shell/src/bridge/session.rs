@@ -48,6 +48,7 @@ use super::controls_page::{
     self, ApplyOutcome, EmulatorConfigApplier, InputPlumberApplier, MappingApplier, Page, TestPage,
 };
 use super::models;
+use super::sounds;
 use crate::controls;
 use crate::{
     AppWindow, ControllerType, ControlsData, GameProperties, HomeData, HomeTile, OverlayPanel,
@@ -1296,6 +1297,7 @@ impl Controller {
         self.sync_session_ui();
         overlay.invoke_reset();
         overlay.set_panel(OverlayPanel::Menu);
+        sounds::play("overlay_open");
         if let Err(err) = self.compositor.set_overlay(window, true) {
             tracing::warn!("showing the overlay failed: {err}");
             self.go_home();
@@ -1309,6 +1311,13 @@ impl Controller {
 
     fn hide_overlay(&mut self) {
         if let Some(overlay) = &self.overlay {
+            // Only the menu (and its pages) sound; a notice comes and goes silently.
+            if matches!(
+                overlay.get_panel(),
+                OverlayPanel::Menu | OverlayPanel::Controls
+            ) {
+                sounds::play("overlay_close");
+            }
             overlay.set_panel(OverlayPanel::None);
             overlay.global::<Status>().set_toast("".into());
         }
@@ -2034,6 +2043,9 @@ impl Controller {
             "pack selected"
         );
         self.icons.select(category, pack);
+        if category == PackCategory::UiSounds {
+            sounds::select_pack(pack);
+        }
         if let Some(app) = self.app.upgrade() {
             app.global::<SettingsData>().set_pack_selected(id.into());
         }

@@ -1,6 +1,6 @@
 import { Theme } from "../theme.slint";
 import { Icons } from "../icons.slint";
-import { UiAction } from "../input.slint";
+import { UiAction, NavResult, Nav } from "../input.slint";
 import { SettingsData, SettingsCategory } from "../data.slint";
 import { HintBar } from "../components/hint_bar.slint";
 import { ControlsScreen } from "../controls/screen.slint";
@@ -175,10 +175,19 @@ export component SettingsScreen inherits Rectangle {
         page = pad-index < pad-count ? SettingsPage.pad : SettingsPage.none;
     }
 
-    function move-category(delta: int) {
+    function move-category(delta: int) -> NavResult {
+        let old = index;
         index = max(0, min(count - 1, index + delta));
+        if index == old { return NavResult.edge; }
         content-index = 0;
         picking = false;
+        NavResult.moved
+    }
+
+    function move-content(delta: int) -> NavResult {
+        let old = content-index;
+        content-index = max(0, min(content-count - 1, content-index + delta));
+        Nav.moved(content-index != old)
     }
 
     function accept-content() {
@@ -201,44 +210,57 @@ export component SettingsScreen inherits Rectangle {
         }
     }
 
-    public function handle(action: UiAction) -> bool {
+    public function handle(action: UiAction) -> NavResult {
         if page == SettingsPage.controls {
             return controls.handle(action);
         }
         if page == SettingsPage.test {
-            return true;
+            return NavResult.quiet;
         }
         if page == SettingsPage.pad {
             if action == UiAction.accept {
                 SettingsData.controller-item("test:" + SettingsData.pads[pad-index].id);
+                return NavResult.handled;
             }
             if action == UiAction.back || action == UiAction.left {
                 page = SettingsPage.none;
                 content-index = pad-index;
+                return action == UiAction.back ? NavResult.handled : NavResult.moved;
             }
-            return true;
+            if action == UiAction.up || action == UiAction.down || action == UiAction.right {
+                return NavResult.edge;
+            }
+            return NavResult.handled;
         }
         if pane == 0 {
-            if action == UiAction.up { move-category(-1); return true; }
-            if action == UiAction.down { move-category(1); return true; }
-            if (action == UiAction.right || action == UiAction.accept) && has-content {
+            if action == UiAction.up { return move-category(-1); }
+            if action == UiAction.down { return move-category(1); }
+            if action == UiAction.right && has-content {
                 pane = 1;
                 content-index = min(content-index, content-count - 1);
-                return true;
+                return NavResult.moved;
             }
-            if action == UiAction.back { close(); return true; }
-            return action == UiAction.left || action == UiAction.right || action == UiAction.accept;
+            if action == UiAction.accept && has-content {
+                pane = 1;
+                content-index = min(content-index, content-count - 1);
+                return NavResult.handled;
+            }
+            if action == UiAction.back { close(); return NavResult.handled; }
+            if action == UiAction.left || action == UiAction.right { return NavResult.edge; }
+            return Nav.used(action == UiAction.accept);
         }
-        if action == UiAction.up { content-index = max(0, content-index - 1); return true; }
-        if action == UiAction.down { content-index = min(content-count - 1, content-index + 1); return true; }
-        if action == UiAction.accept { accept-content(); return true; }
+        if action == UiAction.up { return move-content(-1); }
+        if action == UiAction.down { return move-content(1); }
+        if action == UiAction.accept { accept-content(); return NavResult.handled; }
         if (action == UiAction.left || action == UiAction.back) && picking {
             picking = false;
             content-index = picking-row;
-            return true;
+            return action == UiAction.back ? NavResult.handled : NavResult.moved;
         }
-        if action == UiAction.left || action == UiAction.back { pane = 0; return true; }
-        action == UiAction.right
+        if action == UiAction.left { pane = 0; return NavResult.moved; }
+        if action == UiAction.back { pane = 0; return NavResult.handled; }
+        if action == UiAction.right { return NavResult.edge; }
+        NavResult.ignored
     }
 
     background: Theme.bg-base;

@@ -8,4 +8,5 @@ pub mod input;
 pub mod models;
 pub mod pads;
 pub mod session;
+pub mod sounds;
 pub mod startup;

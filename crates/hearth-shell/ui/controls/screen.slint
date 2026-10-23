@@ -1,5 +1,5 @@
 import { Theme } from "../theme.slint";
-import { UiAction } from "../input.slint";
+import { UiAction, NavResult, Nav } from "../input.slint";
 import { ButtonGlyph, Glyphs, ControllerType } from "../components/glyphs.slint";
 import { HintBar } from "../components/hint_bar.slint";
 import { FocusRing } from "../components/focus.slint";
@@ -266,51 +266,71 @@ export component ControlsScreen inherits Rectangle {
         if action == UiAction.right && side == 0 { index = first-of(1) + min(row, right-count - 1); }
     }
 
-    public function handle(action: UiAction) -> bool {
-        if test-mode { return true; }
+    public function handle(action: UiAction) -> NavResult {
+        if test-mode { return NavResult.quiet; }
         if confirm-open {
-            if action == UiAction.left { confirm-index = 0; }
-            if action == UiAction.right { confirm-index = 1; }
-            if action == UiAction.back { confirm-open = false; }
+            if action == UiAction.left || action == UiAction.right {
+                let old = confirm-index;
+                confirm-index = action == UiAction.left ? 0 : 1;
+                return Nav.moved(confirm-index != old);
+            }
+            if action == UiAction.back { confirm-open = false; return NavResult.handled; }
             if action == UiAction.accept {
                 confirm-open = false;
                 if confirm-index == 0 { ControlsData.change-option("reset", 0); }
+                return NavResult.handled;
             }
-            return true;
+            return action == UiAction.up || action == UiAction.down ? NavResult.edge : NavResult.handled;
         }
         if menu-open {
-            if action == UiAction.up { menu-index = max(0, menu-index - 1); }
-            if action == UiAction.down { menu-index = min(ControlsData.choices.length - 1, menu-index + 1); }
-            if action == UiAction.back { menu-open = false; }
+            if action == UiAction.up || action == UiAction.down {
+                let old = menu-index;
+                menu-index = max(0, min(ControlsData.choices.length - 1, menu-index + (action == UiAction.up ? -1 : 1)));
+                return Nav.moved(menu-index != old);
+            }
+            if action == UiAction.back { menu-open = false; return NavResult.handled; }
             if action == UiAction.accept {
                 menu-open = false;
                 ControlsData.choose(current.input, ControlsData.choices[menu-index].id);
+                return NavResult.handled;
             }
-            return true;
+            return action == UiAction.left || action == UiAction.right ? NavResult.edge : NavResult.handled;
         }
         if action == UiAction.prev-tab || action == UiAction.next-tab {
+            let old = tab;
             tab = action == UiAction.prev-tab ? 0 : 1;
-            return true;
+            return Nav.moved(tab != old);
         }
         if action == UiAction.back {
             ControlsData.closed();
             close();
-            return true;
+            return NavResult.handled;
         }
         if tab == 0 {
             if action == UiAction.accept {
                 menu-index = max(0, ControlsData.request-choices(current.input));
                 menu-open = true;
-                return true;
+                return NavResult.handled;
             }
-            move(action);
-            return true;
+            if action == UiAction.up || action == UiAction.down || action == UiAction.left || action == UiAction.right {
+                let old = index;
+                move(action);
+                return Nav.moved(index != old);
+            }
+            return NavResult.handled;
         }
         let option = ControlsData.options[option-index];
-        if action == UiAction.up { option-index = max(0, option-index - 1); }
-        if action == UiAction.down { option-index = min(ControlsData.options.length - 1, option-index + 1); }
-        if action == UiAction.left && option.kind != 2 { ControlsData.change-option(option.id, -1); }
-        if action == UiAction.right && option.kind != 2 { ControlsData.change-option(option.id, 1); }
+        if action == UiAction.up || action == UiAction.down {
+            let old = option-index;
+            option-index = max(0, min(ControlsData.options.length - 1, option-index + (action == UiAction.up ? -1 : 1)));
+            return Nav.moved(option-index != old);
+        }
+        if (action == UiAction.left || action == UiAction.right) {
+            if option.kind == 2 { return NavResult.edge; }
+            // Changing a value: a move tick.
+            ControlsData.change-option(option.id, action == UiAction.left ? -1 : 1);
+            return NavResult.moved;
+        }
         if action == UiAction.accept {
             if option.kind == 2 {
                 confirm-open = true;
@@ -318,8 +338,9 @@ export component ControlsScreen inherits Rectangle {
             } else {
                 ControlsData.change-option(option.id, 0);
             }
+            return NavResult.handled;
         }
-        true
+        NavResult.handled
     }
 
     background: embedded ? transparent : Theme.bg-base;

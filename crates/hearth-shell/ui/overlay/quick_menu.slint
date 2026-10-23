@@ -1,6 +1,6 @@
 import { Theme } from "../theme.slint";
 import { Icons } from "../icons.slint";
-import { UiAction } from "../input.slint";
+import { UiAction, NavResult, Nav } from "../input.slint";
 import { HButton } from "../components/button.slint";
 import { ConfirmDialog } from "../components/dialog.slint";
 import { FocusRing } from "../components/focus.slint";
@@ -89,34 +89,47 @@ export component QuickMenu inherits Rectangle {
         }
     }
 
-    public function handle(action: UiAction) -> bool {
+    public function handle(action: UiAction) -> NavResult {
         if confirm-open {
-            if action == UiAction.left { confirm-index = 0; }
-            if action == UiAction.right { confirm-index = 1; }
-            if action == UiAction.back { confirm-open = false; }
+            if action == UiAction.left || action == UiAction.right {
+                let old = confirm-index;
+                confirm-index = action == UiAction.left ? 0 : 1;
+                return Nav.moved(confirm-index != old);
+            }
+            if action == UiAction.back { confirm-open = false; return NavResult.handled; }
             if action == UiAction.accept {
                 confirm-open = false;
                 if confirm-index == 0 { close-game(); }
+                return NavResult.handled;
             }
-            return true;
+            return action == UiAction.up || action == UiAction.down ? NavResult.edge : NavResult.handled;
         }
-        if action == UiAction.back { resume(); return true; }
-        if action == UiAction.accept { activate(); return true; }
+        // Leaving the overlay sounds as the overlay closing.
+        if action == UiAction.back { resume(); return NavResult.quiet; }
+        if action == UiAction.accept {
+            let closes = at == MenuFocus.resume || at == MenuFocus.go-home
+                || (at == MenuFocus.dock && dock-items[dock-index].id == "Home");
+            activate();
+            return closes ? NavResult.quiet : NavResult.handled;
+        }
+        let old-at = at;
+        let old-dock = dock-index;
         if at == MenuFocus.resume {
             if action == UiAction.down { at = MenuFocus.go-home; }
-            return true;
-        }
-        if at == MenuFocus.go-home || at == MenuFocus.close-game {
+        } else if at == MenuFocus.go-home || at == MenuFocus.close-game {
             if action == UiAction.up { at = MenuFocus.resume; }
             if action == UiAction.left { at = MenuFocus.go-home; }
             if action == UiAction.right { at = MenuFocus.close-game; }
             if action == UiAction.down { at = MenuFocus.dock; dock-index = 0; }
-            return true;
+        } else {
+            if action == UiAction.left { dock-index = max(0, dock-index - 1); }
+            if action == UiAction.right { dock-index = min(dock-items.length - 1, dock-index + 1); }
+            if action == UiAction.up { at = MenuFocus.go-home; }
         }
-        if action == UiAction.left { dock-index = max(0, dock-index - 1); }
-        if action == UiAction.right { dock-index = min(dock-items.length - 1, dock-index + 1); }
-        if action == UiAction.up { at = MenuFocus.go-home; }
-        true
+        let direction = action == UiAction.up || action == UiAction.down
+            || action == UiAction.left || action == UiAction.right;
+        if !direction { return NavResult.handled; }
+        Nav.moved(at != old-at || dock-index != old-dock)
     }
 
     Rectangle {

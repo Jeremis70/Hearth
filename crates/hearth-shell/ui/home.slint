@@ -1,6 +1,6 @@
 import { Theme } from "theme.slint";
 import { Icons } from "icons.slint";
-import { UiAction } from "input.slint";
+import { UiAction, NavResult, Nav } from "input.slint";
 import { HomeData, HomeTile, TileKind, Session, Status } from "data.slint";
 import { Tile } from "components/tile.slint";
 import { TopBar } from "components/top_bar.slint";
@@ -222,19 +222,27 @@ export component Home inherits Rectangle {
         confirm-index = 0;
     }
 
-    function handle-menu(action: UiAction) -> bool {
-        if action == UiAction.up { menu-index = max(0, menu-index - 1); return true; }
-        if action == UiAction.down { menu-index = min(menu-items.length - 1, menu-index + 1); return true; }
+    function handle-menu(action: UiAction) -> NavResult {
+        if action == UiAction.up {
+            let old = menu-index;
+            menu-index = max(0, menu-index - 1);
+            return Nav.moved(menu-index != old);
+        }
+        if action == UiAction.down {
+            let old = menu-index;
+            menu-index = min(menu-items.length - 1, menu-index + 1);
+            return Nav.moved(menu-index != old);
+        }
         if action == UiAction.back || action == UiAction.options || action == UiAction.left {
             menu-open = false;
-            return true;
+            return NavResult.handled;
         }
         if action == UiAction.accept {
             let key = menu-items[menu-index].key;
             if key == "favorite" {
                 // Stays open so the check mark visibly flips.
                 HomeData.toggle-favorite(current.id);
-                return true;
+                return NavResult.handled;
             }
             menu-open = false;
             if key == "close" {
@@ -247,25 +255,35 @@ export component Home inherits Rectangle {
                 HomeData.request-properties(current.id);
                 properties-open = true;
             }
-            return true;
+            return NavResult.handled;
         }
-        true
+        if action == UiAction.right { return NavResult.edge; }
+        NavResult.handled
     }
 
-    function handle-confirm(action: UiAction) -> bool {
-        if action == UiAction.left { confirm-index = 0; return true; }
-        if action == UiAction.right { confirm-index = 1; return true; }
-        if action == UiAction.back { confirm-open = false; return true; }
+    function handle-confirm(action: UiAction) -> NavResult {
+        if action == UiAction.left {
+            let old = confirm-index;
+            confirm-index = 0;
+            return Nav.moved(confirm-index != old);
+        }
+        if action == UiAction.right {
+            let old = confirm-index;
+            confirm-index = 1;
+            return Nav.moved(confirm-index != old);
+        }
+        if action == UiAction.back { confirm-open = false; return NavResult.handled; }
         if action == UiAction.accept {
             confirm-open = false;
             if confirm-index == 0 { Session.close-game(); }
-            return true;
+            return NavResult.handled;
         }
-        true
+        if action == UiAction.up || action == UiAction.down { return NavResult.edge; }
+        NavResult.handled
     }
 
-    // Returns true when the action was used.
-    public function handle(action: UiAction) -> bool {
+    // What the action did (see NavResult).
+    public function handle(action: UiAction) -> NavResult {
         if confirm-open {
             return handle-confirm(action);
         }
@@ -273,36 +291,41 @@ export component Home inherits Rectangle {
             if action == UiAction.back || action == UiAction.accept || action == UiAction.options {
                 properties-open = false;
             }
-            return true;
+            return NavResult.handled;
         }
         if menu-open {
             return handle-menu(action);
         }
-        if action == UiAction.prev-tab {
-            set-tab(0);
-            return true;
-        }
-        if action == UiAction.next-tab {
-            set-tab(1);
-            return true;
+        if action == UiAction.prev-tab || action == UiAction.next-tab {
+            let old = tab;
+            set-tab(action == UiAction.prev-tab ? 0 : 1);
+            return Nav.moved(tab != old);
         }
         if zone == HomeZone.topbar {
-            if action == UiAction.left { top-index = max(0, top-index - 1); return true; }
-            if action == UiAction.right { top-index = min(3, top-index + 1); return true; }
-            if action == UiAction.down && tab == 0 { zone = HomeZone.row; return true; }
-            if action == UiAction.back && tab == 0 { zone = HomeZone.row; return true; }
+            if action == UiAction.left || action == UiAction.right {
+                let old = top-index;
+                top-index = max(0, min(3, top-index + (action == UiAction.left ? -1 : 1)));
+                return Nav.moved(top-index != old);
+            }
+            if action == UiAction.down && tab == 0 { zone = HomeZone.row; return NavResult.moved; }
+            if action == UiAction.back && tab == 0 { zone = HomeZone.row; return NavResult.handled; }
             if action == UiAction.accept {
                 if top-index < 2 { set-tab(top-index); }
                 if top-index == 2 { HomeData.activated("search", ""); }
                 if top-index == 3 { open-settings(); }
-                return true;
+                return NavResult.handled;
             }
-            return false;
+            if action == UiAction.up || action == UiAction.down { return NavResult.edge; }
+            return NavResult.ignored;
         }
         if zone == HomeZone.row {
-            if action == UiAction.left { index = max(0, index - 1); hero-index = 0; return true; }
-            if action == UiAction.right { index = min(tiles.length - 1, index + 1); hero-index = 0; return true; }
-            if action == UiAction.up { zone = HomeZone.topbar; top-index = tab; return true; }
+            if action == UiAction.left || action == UiAction.right {
+                let old = index;
+                index = max(0, min(tiles.length - 1, index + (action == UiAction.left ? -1 : 1)));
+                hero-index = 0;
+                return Nav.moved(index != old);
+            }
+            if action == UiAction.up { zone = HomeZone.topbar; top-index = tab; return NavResult.moved; }
             if action == UiAction.down {
                 if welcome {
                     zone = HomeZone.widgets;
@@ -311,7 +334,7 @@ export component Home inherits Rectangle {
                     zone = HomeZone.hero;
                     hero-index = 0;
                 }
-                return true;
+                return NavResult.moved;
             }
             if action == UiAction.accept {
                 if welcome {
@@ -320,15 +343,19 @@ export component Home inherits Rectangle {
                 } else {
                     activate-current();
                 }
-                return true;
+                return NavResult.handled;
             }
-            if action == UiAction.options { open-menu(); return true; }
-            return false;
+            if action == UiAction.options { open-menu(); return NavResult.handled; }
+            return NavResult.ignored;
         }
         if zone == HomeZone.hero {
-            if action == UiAction.left { hero-index = max(0, hero-index - 1); return true; }
-            if action == UiAction.right { hero-index = min(hero-count - 1, hero-index + 1); return true; }
-            if action == UiAction.up || action == UiAction.back { zone = HomeZone.row; return true; }
+            if action == UiAction.left || action == UiAction.right {
+                let old = hero-index;
+                hero-index = max(0, min(hero-count - 1, hero-index + (action == UiAction.left ? -1 : 1)));
+                return Nav.moved(hero-index != old);
+            }
+            if action == UiAction.up { zone = HomeZone.row; return NavResult.moved; }
+            if action == UiAction.back { zone = HomeZone.row; return NavResult.handled; }
             if action == UiAction.accept {
                 if hero-index == 0 {
                     activate-current();
@@ -337,17 +364,23 @@ export component Home inherits Rectangle {
                 } else {
                     ask-close();
                 }
-                return true;
+                return NavResult.handled;
             }
-            if action == UiAction.options { open-menu(); return true; }
-            return true;
+            if action == UiAction.options { open-menu(); return NavResult.handled; }
+            if action == UiAction.down { return NavResult.edge; }
+            return NavResult.handled;
         }
         // widgets (Welcome only)
-        if action == UiAction.left { widget-index = max(0, widget-index - 1); return true; }
-        if action == UiAction.right { widget-index = min(widget-count - 1, widget-index + 1); return true; }
-        if action == UiAction.up || action == UiAction.back { zone = HomeZone.row; return true; }
-        if action == UiAction.accept { HomeData.activated("widget", widget-index); return true; }
-        true
+        if action == UiAction.left || action == UiAction.right {
+            let old = widget-index;
+            widget-index = max(0, min(widget-count - 1, widget-index + (action == UiAction.left ? -1 : 1)));
+            return Nav.moved(widget-index != old);
+        }
+        if action == UiAction.up { zone = HomeZone.row; return NavResult.moved; }
+        if action == UiAction.back { zone = HomeZone.row; return NavResult.handled; }
+        if action == UiAction.accept { HomeData.activated("widget", widget-index); return NavResult.handled; }
+        if action == UiAction.down { return NavResult.edge; }
+        NavResult.handled
     }
 
     background: Theme.bg-base;

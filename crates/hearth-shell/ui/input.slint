@@ -33,3 +33,29 @@ export global InputMap {
         UiAction.none
     }
 }
+
+// What a screen did with an action. Every `handle()` returns one; the dispatchers pass it to
+// `Feedback.input`, which picks the UI sound (src/bridge/sounds.rs). Only input goes through
+// here, so focus set by code (cold start, returning from a game, list reloads) never sounds.
+export enum NavResult {
+    ignored,    // not used (the key goes on, no sound)
+    handled,    // used: Accept and Back sound, other actions are silent
+    quiet,      // used, and its sound comes from elsewhere (e.g. the overlay closing)
+    moved,      // focus moved: "move"
+    edge,       // a move that hit the end of a row or list: "edge_bump"
+}
+
+export global Nav {
+    // A move: `moved` when focus changed, `edge` when it was already at the end.
+    public pure function moved(changed: bool) -> NavResult {
+        changed ? NavResult.moved : NavResult.edge
+    }
+    public pure function used(used: bool) -> NavResult {
+        used ? NavResult.handled : NavResult.ignored
+    }
+}
+
+// Rust's side of every dispatched action (one global per window).
+export global Feedback {
+    callback input(UiAction, NavResult);
+}

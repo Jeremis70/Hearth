@@ -1,6 +1,6 @@
 # Hearth status
 
-Last updated: 2026-10-20 (round A.3). Read this first, then `AGENTS.md` (rules, commands),
+Last updated: 2026-10-23 (round B, audio). Read this first, then `AGENTS.md` (rules, commands),
 `.github/instructions/rust.instructions.md` and `docs/plan.md` (architecture).
 
 ## 0. Where we are, and how we work
@@ -16,6 +16,57 @@ Last updated: 2026-10-20 (round A.3). Read this first, then `AGENTS.md` (rules, 
 - Art and Home round (2026-10-19): per-game static art from SteamGridDB, the new Home row,
   the Options menu with Favorite and Properties, asset packs for console icons (sounds: names
   only).
+- Round B, audio (2026-10-23): UI sounds from packs, the ambient loop, per-game themes,
+  volumes in Settings. Design: `docs/design/README.md` §7 "Sound".
+
+Round B (audio), 2026-10-23, oldest first:
+- `3efe5e6`: `pack.toml` `[sounds]` (logical name → file inside the pack) and
+  `[loops.<name>]` (start, end, crossfade_ms); `[audio]` in `hearth.toml`; reserved names
+  `achievement`, `mastery`, `ambient_profiles`, `startup`.
+- `738f560`: `crates/hearth-audio`: cpal 0.18 (ALSA `default` = PipeWire), symphonia 0.6
+  (MPL-2.0; ogg/vorbis, wav, flac, mp3), rubato 5 (FFT, to 48 kHz), rtrb queues into the
+  callback. UI sounds decoded once; music streamed by one thread per track and looped by the
+  looper in `stream.rs` (head kept, tail held back, equal-power crossfade, reopen + skip).
+- `ba6bf7a`: bundled CC0 sounds from `scripts/make-default-sounds.py` (numpy + ffmpeg only to
+  regenerate); the ambient is 32 s and loops with no loop points (checked by a test).
+- `30675f3`: every `handle()` returns `NavResult`; `Feedback.input` → `bridge/sounds.rs`.
+- `45cc7e6`: `hearth_audio::director` (pure rules) + `Controller::sync_music`, called from
+  `set_mode` (after freeze/thaw).
+- `cd691de`: `hearth-core::themes` (`ThemeLookup`, `LocalThemeFile`); 500 ms settle timer.
+- `bc207b4`: Display & sound rows (volumes, Mute all, Music in overlay, Game themes).
+- `222e084`: dev socket `sound:<name>` and `audio_state` (JSON reply).
+- `010a519`: `examples/loop_seam.rs`. `569324c`: reopen test. `eb917e4`: music waits for 50 ms
+  of decoded audio before it plays; a fade still running ends in 20 ms when a launched game
+  takes the screen (RetroArch's window came 254 ms after launch, inside the 300 ms fade).
+- The user's `ps5-sounds/pack.toml` maps `ambient_loop` = `themes/003. Home Menu.mp3`
+  (start 1.2, end 884.0, crossfade 3000 ms: it fades in over ~1.1 s and out over ~3.3 s),
+  `ambient_profiles` = `002. Select User.mp3`, `startup` = `001. First Time Startup.mp3`.
+  Suggested for `themes/unused/` (the user moves it): `004. 3D Spatial Audio Test.mp3`.
+- Verified live (release, nested gamescope 1920×1080, dev socket; laptop speakers):
+  - real stream: `pactl list sink-inputs` shows `alsa_playback.hearth-shell`, float32 2 ch
+    48 kHz, not corked; cpal buffer 256 frames, output delay 16.4 ms;
+  - input → first mixed sample → output (`HEARTH_AUDIO_STATS=1`, 57 sounds): median 20.7 ms,
+    p95 43.7 ms, max 52 ms (the worst when the same input opens a screen). Over the user's
+    Bluetooth headset (AAC) cpal reports ~360 ms output delay: that's the headset;
+  - CPU on idle Home with the mp3 ambient: 1.3 % of one core in total (PipeWire's ALSA thread,
+    cpal's callback and the decode thread ~0.4 % each);
+  - move/edge_bump/accept/back from the pack; held moves throttled; switching to the pack
+    re-decoded the sounds (33 ms) and crossfaded the ambient to the pack's;
+  - ambient fades out on launch; the overlay over frozen OoT plays OoT's theme (its own
+    `-theme.ogg`), else the ambient; Resume SIGCONTs at once with a 150 ms fade; with N64's
+    suspend set to none (temporarily), the overlay stayed silent;
+  - test theme `.dev-data/games/n64/…Ocarina of Time…-theme.ogg` (an 8 s arpeggio, made
+    here): crossfades in 500 ms after focusing OoT, back to the same ambient stream on TP;
+    sweeping past OoT starts nothing (needs `--games-dir ./.dev-data/games`);
+  - volumes, Mute all and both toggles apply live and survived two restarts;
+  - per-file fallback: with ps5-sounds, `achievement`/`mastery` come from Hearth's defaults.
+  - the seam of the pack's ambient (`loop_seam`): 100 ms levels stay −12…−18 dB through it,
+    largest sample step 0.031 (normal content 0.022 at p99.9); without loop points it dips to
+    −59 dB.
+- Not verified (the user's to do): hearing it (nothing here was listened to); real
+  controller input (dev socket only, so the pad's own path isn't in the latency numbers);
+  turning the TV/HDMI off and on or switching the output device (not allowed here: only
+  simulated in `a_failed_or_hung_output_is_reopened_and_the_music_goes_on`).
 
 Round A.3 follow-up (controls page), 2026-10-20:
 - Controls diagram on one canvas: drawing, highlights, lines, dots and callouts all in page
@@ -182,7 +233,7 @@ The working tree is clean.
   - "Refresh artwork", "Change artwork", "Wrong game?" (shown disabled in Properties);
   - a NetworkManager connectivity signal instead of the 60 s queue check;
   - the seam between the sharp and the blurred hero is softened by a gradient, not blended;
-  - UI sounds (playback) next round; the `ps5-sounds` pack has no `ambient_loop`.
+  - UI sounds: done in round B.
 - Not tested by the user yet (all done through the dev socket or unit tests). Ask how these went:
   - button test with real presses (held highlights, trigger bars, stick dots, PS short/long);
   - menu navigation with the stick and D-pad now that gilrs runs unfiltered;
@@ -338,6 +389,19 @@ The working tree is clean.
 - `cargo run -p hearth-platform --example pad_probe -- 10` lists pads and raw events
   (read-only).
 
+**Audio** (round B, `crates/hearth-audio`, `bridge/sounds.rs`, `Controller::sync_music`)
+- `Audio` is a handle; requests go over a channel to the `hearth-audio` thread (device,
+  decoding UI sounds, music streams). The mixer runs in cpal's callback behind a mutex only it
+  takes while a stream is open; it never allocates or frees (garbage goes back by queue).
+- Device errors (other than xruns) or no callback for 3 s: the stream is dropped and the
+  default device reopened (0.5 s doubling to 5 s); a rate change rebuilds the mixer.
+- `--no-audio` / `HEARTH_AUDIO=null`: the null output runs the mixer in real time.
+- Sounds per action: `NavResult` from every `handle()` (see the design README §7).
+- Music: `director::choose` (pure, tested); fades 300 ms in / 300 ms launch / 150 ms resume /
+  800 ms crossfade; the ambient is parked and resumed where it was, themes restart.
+- Themes: `hearth-core::themes::ThemeLookup` (sources in order; extracted themes go after
+  `LocalThemeFile`).
+
 **Art, Home and packs** (art round)
 - `hearth-core::art`: `identity.rs` (art key `<system>/<serial>` or `<system>/name-<fnv64 of the
   cleaned title>`, search names, match selection), `provider.rs` (`MetadataProvider`,
@@ -394,7 +458,11 @@ The working tree is clean.
 - **Real thing:** `scripts/run-gamescope.sh` (options: `HEARTH_GS_SIZE`,
   `HEARTH_GS_FULLSCREEN=1`, `HEARTH_GS_ARGS`, `HEARTH_GS_RELEASE=1`).
 - **Dev socket actions:** up, down, left, right, accept, back, prev_tab, next_tab, options,
-  home_short, home_long, capture.
+  home_short, home_long, capture. Commands: `sound:<name>`, `audio_state` (printed by
+  `scripts/send-action.sh`).
+- **Audio:** `HEARTH_AUDIO_STATS=1` (latency per UI sound), `--no-audio`. Check the stream:
+  `pactl list sink-inputs`. `cargo run --release -p hearth-audio --example audio_probe` and
+  `--example loop_seam` (see `AGENTS.md`, design README §7).
 - **Keyboard:**
   - arrows; Enter/Space = Accept; Esc/Backspace = Back;
   - Q/E = tabs; O = Options;
@@ -406,7 +474,7 @@ The working tree is clean.
   - library: `.dev-data/data/library.sqlite3`.
 - **FPS counter:** `HEARTH_RETROARCH_ARGS="--appendconfig=data/dev/retroarch-fps.cfg"`.
 - **Checks:** `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
-  `cargo test --workspace` (core 132, platform 35, shell 22 tests).
+  `cargo test --workspace` (audio 11, core 135, platform 35, shell 23 tests).
 - **Artwork:** set `HEARTH_STEAMGRIDDB_KEY` or `[art] steamgriddb_key` in
   `.dev-data/config/hearth.toml` (gitignored). Without it: placeholders and one log line.
 

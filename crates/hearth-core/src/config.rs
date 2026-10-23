@@ -7,6 +7,13 @@
 //! [packs]
 //! console_icons = "my-console-icons"    # missing: Hearth's bundled defaults
 //! ui_sounds = "ps5-sounds"
+//!
+//! [audio]
+//! ui_volume = 80                        # 0–100, a perceptual (dB) scale
+//! music_volume = 60
+//! mute = false
+//! music_in_overlay = true
+//! game_themes = true
 //! ```
 //!
 //! A missing file is an empty config. Settings change it through `toml_edit`, so comments and
@@ -121,6 +128,35 @@ impl PackCategory {
 pub struct Config {
     art: ArtConfig,
     packs: PacksConfig,
+    audio: AudioSettings,
+}
+
+/// Hearth's own volumes and music options (`[audio]`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct AudioSettings {
+    /// UI sounds volume, 0–100.
+    pub ui_volume: u8,
+    /// Music (ambient and game themes) volume, 0–100.
+    pub music_volume: u8,
+    /// Silences everything Hearth plays.
+    pub mute: bool,
+    /// Music plays in the overlay over a frozen game.
+    pub music_in_overlay: bool,
+    /// A focused game's theme plays instead of the ambient.
+    pub game_themes: bool,
+}
+
+impl Default for AudioSettings {
+    fn default() -> Self {
+        Self {
+            ui_volume: 80,
+            music_volume: 60,
+            mute: false,
+            music_in_overlay: true,
+            game_themes: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
@@ -180,6 +216,22 @@ impl Config {
     }
 }
 
+impl Config {
+    /// The `[audio]` settings (volumes clamped to 100).
+    pub fn audio(&self) -> AudioSettings {
+        AudioSettings {
+            ui_volume: self.audio.ui_volume.min(100),
+            music_volume: self.audio.music_volume.min(100),
+            ..self.audio
+        }
+    }
+
+    /// Replaces the audio settings, in memory only.
+    pub fn set_audio(&mut self, audio: AudioSettings) {
+        self.audio = audio;
+    }
+}
+
 /// Saves the pack choice for `category` into `path`, keeping everything else in the file.
 /// `None` removes the entry (Hearth's defaults).
 pub fn save_pack(
@@ -187,6 +239,29 @@ pub fn save_pack(
     category: PackCategory,
     pack: Option<&str>,
 ) -> Result<(), ConfigError> {
+    edit_table(path, "packs", |packs| match pack {
+        Some(id) => {
+            packs.insert(category.key(), value(id));
+        }
+        None => {
+            packs.remove(category.key());
+        }
+    })
+}
+
+/// Saves `[audio]` into `path`, keeping everything else in the file.
+pub fn save_audio(path: &Path, audio: &AudioSettings) -> Result<(), ConfigError> {
+    edit_table(path, "audio", |table| {
+        table.insert("ui_volume", value(i64::from(audio.ui_volume)));
+        table.insert("music_volume", value(i64::from(audio.music_volume)));
+        table.insert("mute", value(audio.mute));
+        table.insert("music_in_overlay", value(audio.music_in_overlay));
+        table.insert("game_themes", value(audio.game_themes));
+    })
+}
+
+/// Changes one table of the file through `toml_edit` (comments and other tables survive).
+fn edit_table(path: &Path, name: &str, edit: impl FnOnce(&mut Table)) -> Result<(), ConfigError> {
     let io_err = |source| ConfigError::Io {
         path: path.to_path_buf(),
         source,
@@ -199,23 +274,16 @@ pub fn save_pack(
     let mut doc: DocumentMut = text.parse().map_err(|err: toml_edit::TomlError| {
         ConfigError::parse(path, &text, err.message(), err.span())
     })?;
-    let packs = doc
-        .entry("packs")
+    let table = doc
+        .entry(name)
         .or_insert_with(|| Item::Table(Table::new()))
         .as_table_mut()
         .ok_or_else(|| ConfigError::Parse {
             path: path.to_path_buf(),
             line: None,
-            message: "[packs] isn't a table".into(),
+            message: format!("[{name}] isn't a table"),
         })?;
-    match pack {
-        Some(id) => {
-            packs.insert(category.key(), value(id));
-        }
-        None => {
-            packs.remove(category.key());
-        }
-    }
+    edit(table);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(io_err)?;
     }
@@ -271,6 +339,35 @@ mod tests {
         save_pack(&path, PackCategory::ConsoleIcons, None).unwrap();
         let config = Config::load(&path).unwrap();
         assert_eq!(config.pack(PackCategory::ConsoleIcons), None);
+        assert_eq!(config.pack(PackCategory::UiSounds), Some("ps5"));
+    }
+
+    #[test]
+    fn audio_defaults_save_and_clamp() {
+        let dir = tempdir();
+        let path = dir.path().join("hearth.toml");
+        assert_eq!(
+            Config::load(&path).unwrap().audio(),
+            AudioSettings::default()
+        );
+        fs::write(
+            &path,
+            "[packs]\nui_sounds = \"ps5\"\n[audio]\nui_volume = 250\n",
+        )
+        .unwrap();
+        let config = Config::load(&path).unwrap();
+        assert_eq!(config.audio().ui_volume, 100);
+        assert_eq!(config.audio().music_volume, 60);
+        let audio = AudioSettings {
+            ui_volume: 30,
+            music_volume: 0,
+            mute: true,
+            music_in_overlay: false,
+            game_themes: false,
+        };
+        save_audio(&path, &audio).unwrap();
+        let config = Config::load(&path).unwrap();
+        assert_eq!(config.audio(), audio);
         assert_eq!(config.pack(PackCategory::UiSounds), Some("ps5"));
     }
 

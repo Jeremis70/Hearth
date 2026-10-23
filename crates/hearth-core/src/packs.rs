@@ -8,18 +8,32 @@
 //! Assets are looked up by logical name (`consoles/gc`, `sounds/move`): first in the pack
 //! selected for that category, then in Hearth's bundled defaults (`assets/`). Each file falls
 //! back on its own, so a pack may hold only some of them.
+//!
+//! A sound pack's `pack.toml` may point logical names at other files inside the pack and give
+//! loop points for music, so a pack can use files as they came:
+//!
+//! ```toml
+//! [sounds]
+//! ambient_loop = "themes/003. Home Menu.mp3"
+//!
+//! [loops.ambient_loop]
+//! start = 1.0          # seconds; the loop restarts here
+//! end = 884.4          # seconds; default: the end of the file
+//! crossfade_ms = 2000  # the end fades into the start (equal power)
+//! ```
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::Deserialize;
 
 use crate::config::{Config, PackCategory};
 
-/// Logical names of the UI sounds (played from the next round on).
-pub const SOUND_NAMES: [&str; 7] = [
+/// Logical names of the UI sounds. `achievement`, `mastery`, `ambient_profiles` and `startup`
+/// are reserved: they resolve, but nothing plays them yet.
+pub const SOUND_NAMES: [&str; 11] = [
     "move",
     "accept",
     "back",
@@ -27,6 +41,10 @@ pub const SOUND_NAMES: [&str; 7] = [
     "overlay_close",
     "edge_bump",
     "ambient_loop",
+    "achievement",
+    "mastery",
+    "ambient_profiles",
+    "startup",
 ];
 
 const ICON_EXTENSIONS: [&str; 2] = ["svg", "png"];
@@ -58,6 +76,90 @@ struct PackToml {
     author: Option<String>,
     license: Option<String>,
     notes: Option<String>,
+    /// Logical sound name → file inside the pack.
+    sounds: BTreeMap<String, String>,
+    /// Logical sound name → loop points.
+    loops: BTreeMap<String, LoopToml>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct LoopToml {
+    start: Option<f64>,
+    end: Option<f64>,
+    crossfade_ms: Option<u32>,
+}
+
+/// Where a looping sound restarts, from a pack's `[loops.<name>]`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LoopSpec {
+    /// The loop restarts here (ms from the start of the file).
+    pub start_ms: u64,
+    /// The loop ends here (ms); `None`: the end of the file.
+    pub end_ms: Option<u64>,
+    /// How long the end fades into the start.
+    pub crossfade_ms: u32,
+}
+
+impl LoopToml {
+    fn spec(&self) -> LoopSpec {
+        let ms = |secs: f64| (secs.max(0.0) * 1000.0).round() as u64;
+        LoopSpec {
+            start_ms: self.start.map(ms).unwrap_or(0),
+            end_ms: self.end.map(ms),
+            crossfade_ms: self.crossfade_ms.unwrap_or(0),
+        }
+    }
+}
+
+fn read_pack_toml(id: &str, dir: &Path) -> PackToml {
+    match fs::read_to_string(dir.join("pack.toml")) {
+        Ok(text) => toml::from_str(&text).unwrap_or_else(|err: toml::de::Error| {
+            tracing::warn!(pack = %id, "ignoring its pack.toml: {}", err.message());
+            PackToml::default()
+        }),
+        Err(_) => PackToml::default(),
+    }
+}
+
+/// A relative path that stays inside its folder (no `..`, not absolute).
+fn inside_pack(rel: &str) -> Option<PathBuf> {
+    let path = Path::new(rel);
+    let ok = !rel.is_empty() && path.components().all(|c| matches!(c, Component::Normal(_)));
+    ok.then(|| path.to_path_buf())
+}
+
+/// The sound mappings and loop points of the selected sound pack.
+#[derive(Debug, Default)]
+struct SoundMap {
+    files: HashMap<String, PathBuf>,
+    loops: HashMap<String, LoopSpec>,
+}
+
+impl SoundMap {
+    fn load(packs_dir: &Path, pack: Option<&str>) -> Self {
+        let Some(id) = pack else {
+            return Self::default();
+        };
+        let meta = read_pack_toml(id, &packs_dir.join(id));
+        let files = meta
+            .sounds
+            .into_iter()
+            .filter_map(|(name, rel)| match inside_pack(&rel) {
+                Some(path) => Some((name, path)),
+                None => {
+                    tracing::warn!(pack = %id, sound = %name, "ignoring a mapping outside the pack");
+                    None
+                }
+            })
+            .collect();
+        let loops = meta
+            .loops
+            .into_iter()
+            .map(|(name, spec)| (name, spec.spec()))
+            .collect();
+        Self { files, loops }
+    }
 }
 
 impl PackCategory {
@@ -118,13 +220,7 @@ pub fn installed(packs_dir: &Path) -> Vec<PackInfo> {
 }
 
 fn read_pack(id: String, dir: PathBuf) -> Option<PackInfo> {
-    let meta = match fs::read_to_string(dir.join("pack.toml")) {
-        Ok(text) => toml::from_str(&text).unwrap_or_else(|err: toml::de::Error| {
-            tracing::warn!(pack = %id, "ignoring its pack.toml: {}", err.message());
-            PackToml::default()
-        }),
-        Err(_) => PackToml::default(),
-    };
+    let meta = read_pack_toml(&id, &dir);
     let categories: Vec<_> = PackCategory::ALL
         .into_iter()
         .filter(|c| dir.join(c.folder()).is_dir())
@@ -159,6 +255,8 @@ pub struct Resolved {
     pub path: PathBuf,
     /// Pack or default.
     pub origin: Origin,
+    /// Loop points, for a sound whose pack gives them.
+    pub loop_spec: Option<LoopSpec>,
 }
 
 /// Finds asset files by logical name, given the selected packs.
@@ -168,6 +266,8 @@ pub struct Resolver {
     defaults_dir: PathBuf,
     console_icons: Option<String>,
     ui_sounds: Option<String>,
+    /// `[sounds]` and `[loops]` of the selected sound pack.
+    sound_map: SoundMap,
     /// Logical names already reported missing (logged once each).
     reported: Mutex<HashSet<String>>,
 }
@@ -180,11 +280,14 @@ impl Resolver {
         defaults_dir: impl Into<PathBuf>,
         config: &Config,
     ) -> Self {
+        let packs_dir = packs_dir.into();
+        let ui_sounds = config.pack(PackCategory::UiSounds).map(str::to_owned);
         Self {
-            packs_dir: packs_dir.into(),
+            sound_map: SoundMap::load(&packs_dir, ui_sounds.as_deref()),
+            packs_dir,
             defaults_dir: defaults_dir.into(),
             console_icons: config.pack(PackCategory::ConsoleIcons).map(str::to_owned),
-            ui_sounds: config.pack(PackCategory::UiSounds).map(str::to_owned),
+            ui_sounds,
             reported: Mutex::new(HashSet::new()),
         }
     }
@@ -194,7 +297,14 @@ impl Resolver {
         let pack = pack.map(str::to_owned);
         match category {
             PackCategory::ConsoleIcons => self.console_icons = pack,
-            PackCategory::UiSounds => self.ui_sounds = pack,
+            PackCategory::UiSounds => {
+                self.sound_map = SoundMap::load(&self.packs_dir, pack.as_deref());
+                self.ui_sounds = pack;
+            }
+        }
+        // A new selection may have the files that were missing.
+        if let Ok(mut reported) = self.reported.lock() {
+            reported.clear();
         }
     }
 
@@ -217,17 +327,33 @@ impl Resolver {
                 .map(|ext| dir.join(category.folder()).join(format!("{name}.{ext}")))
                 .find(|path| path.is_file())
         };
-        if let Some(pack) = self.selected(category)
-            && let Some(path) = find(&self.packs_dir.join(pack))
-        {
-            return Some(Resolved {
-                path,
-                origin: Origin::Pack(pack.to_owned()),
-            });
+        if let Some(pack) = self.selected(category) {
+            let pack_dir = self.packs_dir.join(pack);
+            let mapped = match category {
+                PackCategory::UiSounds => self
+                    .sound_map
+                    .files
+                    .get(name)
+                    .map(|rel| pack_dir.join(rel))
+                    .filter(|path| path.is_file()),
+                PackCategory::ConsoleIcons => None,
+            };
+            if let Some(path) = mapped.or_else(|| find(&pack_dir)) {
+                let loop_spec = match category {
+                    PackCategory::UiSounds => self.sound_map.loops.get(name).copied(),
+                    PackCategory::ConsoleIcons => None,
+                };
+                return Some(Resolved {
+                    path,
+                    origin: Origin::Pack(pack.to_owned()),
+                    loop_spec,
+                });
+            }
         }
         find(&self.defaults_dir).map(|path| Resolved {
             path,
             origin: Origin::Default,
+            loop_spec: None,
         })
     }
 
@@ -294,6 +420,55 @@ mod tests {
 
         resolver.select(PackCategory::ConsoleIcons, None);
         assert_eq!(resolver.console_icon("gc").unwrap().origin, Origin::Default);
+    }
+
+    #[test]
+    fn pack_toml_maps_sounds_inside_the_pack_with_loop_points() {
+        let dir = tempdir();
+        let packs = dir.path().join("packs");
+        let assets = dir.path().join("assets");
+        touch(&packs.join("ps5/themes/003. Home Menu.mp3"));
+        touch(&packs.join("ps5/sounds/move.mp3"));
+        touch(&packs.join("secret.ogg"));
+        touch(&assets.join("sounds/ambient_loop.ogg"));
+        touch(&assets.join("sounds/back.wav"));
+        fs::write(
+            packs.join("ps5/pack.toml"),
+            "[sounds]\nambient_loop = \"themes/003. Home Menu.mp3\"\n\
+             accept = \"../secret.ogg\"\nback = \"themes/gone.ogg\"\n\
+             [loops.ambient_loop]\nstart = 1.0\nend = 884.4\ncrossfade_ms = 2000\n",
+        )
+        .unwrap();
+        let mut config = Config::default();
+        config.set_pack(PackCategory::UiSounds, Some("ps5"));
+        let mut resolver = Resolver::new(&packs, &assets, &config);
+
+        let ambient = resolver.resolve("sounds/ambient_loop").unwrap();
+        assert_eq!(ambient.path, packs.join("ps5/themes/003. Home Menu.mp3"));
+        assert_eq!(
+            ambient.loop_spec,
+            Some(LoopSpec {
+                start_ms: 1000,
+                end_ms: Some(884_400),
+                crossfade_ms: 2000
+            })
+        );
+        // Unmapped names use the default location; escaping mappings are ignored.
+        assert_eq!(
+            resolver.resolve("sounds/move").unwrap().path,
+            packs.join("ps5/sounds/move.mp3")
+        );
+        assert_eq!(resolver.resolve("sounds/accept"), None);
+        // A mapping to a missing file falls back like a missing file.
+        assert_eq!(
+            resolver.resolve("sounds/back").unwrap().origin,
+            Origin::Default
+        );
+
+        resolver.select(PackCategory::UiSounds, None);
+        let ambient = resolver.resolve("sounds/ambient_loop").unwrap();
+        assert_eq!(ambient.origin, Origin::Default);
+        assert_eq!(ambient.loop_spec, None);
     }
 
     #[test]

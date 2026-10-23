@@ -1,0 +1,24 @@
+[package]
+name = "hearth-audio"
+description = "Hearth's audio engine: UI sounds, ambient loops and game themes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+hearth-core.workspace = true
+cpal = "0.18"
+rtrb = "0.4"
+rubato = "5"
+symphonia = { version = "0.6", default-features = false, features = ["ogg", "vorbis", "wav", "pcm", "flac", "mp3"] }
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

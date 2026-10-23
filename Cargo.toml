@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/hearth-core", "crates/hearth-platform", "crates/hearth-shell"]
+members = ["crates/hearth-audio", "crates/hearth-core", "crates/hearth-platform", "crates/hearth-shell"]
 
 [workspace.package]
 version = "0.1.0"

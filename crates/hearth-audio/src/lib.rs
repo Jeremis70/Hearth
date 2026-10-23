@@ -13,6 +13,7 @@
 //! queues into the callback).
 
 mod decode;
+pub mod director;
 mod engine;
 mod gain;
 mod mixer;

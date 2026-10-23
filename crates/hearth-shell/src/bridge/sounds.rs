@@ -111,6 +111,16 @@ pub fn select_pack(pack: Option<&str>) {
     });
 }
 
+/// A music file of the selected pack (`ambient_loop`…), falling back to the default.
+pub fn music_file(name: &str) -> Option<SoundFile> {
+    with(|s| {
+        s.resolver
+            .resolve_or_log(&format!("sounds/{name}"))
+            .map(sound_file)
+    })
+    .flatten()
+}
+
 /// Plays a sound now (overlay, dev socket, the volume preview).
 pub fn play(name: &str) {
     with(|s| s.audio.play(name, None));

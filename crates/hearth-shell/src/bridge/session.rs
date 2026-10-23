@@ -54,6 +54,9 @@ use crate::{
     AppWindow, ControllerType, ControlsData, GameProperties, HomeData, HomeTile, OverlayPanel,
     OverlayWindow, PadNotice, PadRow, Session, SettingsCategory, SettingsData, Status, TileKind,
 };
+use hearth_audio::director::{self, GameScene, MusicDirector, Scene};
+use hearth_audio::{Audio, SoundFile};
+use hearth_core::config::AudioSettings;
 
 /// When the controls page's drawing is rasterized ahead of use (the window has its size).
 const DIAGRAM_WARM_UP: Duration = Duration::from_secs(6);
@@ -215,6 +218,11 @@ pub struct Controller {
     pad_timer: slint::Timer,
     pad_notice_timer: slint::Timer,
     test_timer: slint::Timer,
+    audio: Audio,
+    music: MusicDirector,
+    audio_settings: AudioSettings,
+    /// The ambient loop of the selected sound pack (else Hearth's).
+    ambient: Option<SoundFile>,
 }
 
 /// Which window a controls page is in.
@@ -267,6 +275,10 @@ pub struct Setup {
     pub config_file: PathBuf,
     /// Title and text of a notice about that file (it couldn't be read).
     pub config_problem: Option<(String, String)>,
+    /// The audio engine (UI sounds are in `sounds`; music is the session's).
+    pub audio: Audio,
+    /// Volumes and music options from `hearth.toml`.
+    pub audio_settings: AudioSettings,
     /// Installed asset packs.
     pub packs_dir: PathBuf,
 }
@@ -426,9 +438,14 @@ pub fn install(setup: Setup) {
         battery_warned: std::collections::HashMap::new(),
         pad_timer: slint::Timer::default(),
         pad_notice_timer: slint::Timer::default(),
+        audio: setup.audio,
+        music: MusicDirector::default(),
+        audio_settings: setup.audio_settings,
+        ambient: sounds::music_file("ambient_loop"),
     };
     CONTROLLER.with(|cell| *cell.borrow_mut() = Some(controller));
     with(Controller::fill_display_items);
+    with(|c| c.sync_music(director::FADE_IN));
     if let Some((title, text)) = setup.config_problem {
         with(|c| c.show_problem(&title, &text));
     }
@@ -618,6 +635,33 @@ impl Controller {
             Mode::Shell | Mode::Launching | Mode::Overlay => InputMode::Shell,
         });
         self.sync_capture();
+        // Every mode change follows the freezing or thawing, so the music sees the real state.
+        // The fades run in parallel: a launch or Resume never waits for them.
+        self.sync_music(match mode {
+            Mode::Game => director::FADE_RESUME,
+            Mode::Shell | Mode::Launching | Mode::Overlay => director::FADE_LAUNCH,
+        });
+    }
+
+    // --- music -------------------------------------------------------------------------
+
+    /// Tells the music director what Hearth shows now (see `hearth_audio::director`).
+    fn sync_music(&mut self, silence_fade: Duration) {
+        let game = match &self.active {
+            None => GameScene::None,
+            Some(active) if active.frozen => GameScene::Frozen,
+            Some(_) => GameScene::Running,
+        };
+        let scene = Scene {
+            game,
+            overlay: self.mode == Mode::Overlay,
+            ambient: self.ambient.as_ref(),
+            focused_theme: None,
+            running_theme: None,
+            music_in_overlay: self.audio_settings.music_in_overlay,
+            game_themes: self.audio_settings.game_themes,
+        };
+        self.music.update(&self.audio, &scene, silence_fade);
     }
 
     /// Tells the input thread which buttons are Capture now. Also called every second, as
@@ -2045,6 +2089,8 @@ impl Controller {
         self.icons.select(category, pack);
         if category == PackCategory::UiSounds {
             sounds::select_pack(pack);
+            self.ambient = sounds::music_file("ambient_loop");
+            self.sync_music(director::FADE_IN);
         }
         if let Some(app) = self.app.upgrade() {
             app.global::<SettingsData>().set_pack_selected(id.into());

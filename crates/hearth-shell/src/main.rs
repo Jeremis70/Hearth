@@ -306,6 +306,8 @@ fn main() -> anyhow::Result<()> {
         config_file: dirs.config_file(),
         config_problem,
         packs_dir: dirs.packs().to_path_buf(),
+        audio,
+        audio_settings: config.audio(),
     });
 
     let clock = slint::Timer::default();

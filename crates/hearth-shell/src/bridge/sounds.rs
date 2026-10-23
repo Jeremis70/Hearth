@@ -10,12 +10,13 @@
 //! Focus set by code never comes through here, so it never sounds.
 
 use std::cell::RefCell;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use hearth_audio::{Audio, SoundFile};
 use hearth_core::config::PackCategory;
 use hearth_core::packs::{Origin, Resolved, Resolver, SOUND_NAMES};
+use hearth_platform::input::dev_socket::CommandHandler;
 
 use crate::{NavResult, UiAction};
 
@@ -124,6 +125,26 @@ pub fn music_file(name: &str) -> Option<SoundFile> {
 /// Plays a sound now (overlay, dev socket, the volume preview).
 pub fn play(name: &str) {
     with(|s| s.audio.play(name, None));
+}
+
+/// Dev socket commands: `sound:<name>` plays any logical name (`achievement` included),
+/// `audio_state` replies with the engine's state as JSON.
+pub fn dev_commands(audio: Audio) -> CommandHandler {
+    Arc::new(move |word: &str| {
+        if let Some(name) = word.strip_prefix("sound:") {
+            audio.play(name, Some(Instant::now()));
+            return Some(format!("playing {name}"));
+        }
+        if word == "audio_state" {
+            let reply = match audio.state(Duration::from_secs(1)) {
+                Some(state) => serde_json::to_string_pretty(&state)
+                    .unwrap_or_else(|err| format!("{{\"error\": \"{err}\"}}")),
+                None => "{\"error\": \"the audio thread didn't answer\"}".into(),
+            };
+            return Some(reply);
+        }
+        None
+    })
 }
 
 /// Picks the sound for an action and what it did (see the module docs).

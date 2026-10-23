@@ -267,6 +267,7 @@ fn main() -> anyhow::Result<()> {
     let icons = bridge::art::ConsoleIcons::new(Resolver::new(dirs.packs(), assets_dir(), &config));
 
     let audio = start_audio(args.no_audio, &config);
+    let audio_handle = audio.clone();
     bridge::sounds::install(
         audio.clone(),
         Resolver::new(dirs.packs(), assets_dir(), &config),
@@ -328,7 +329,9 @@ fn main() -> anyhow::Result<()> {
         backends.push(Box::new(observer));
     }
     if let Some(path) = args.dev_socket {
-        backends.push(Box::new(DevSocketBackend::new(path)));
+        let socket =
+            DevSocketBackend::new(path).with_commands(bridge::sounds::dev_commands(audio_handle));
+        backends.push(Box::new(socket));
     }
     if let Err(err) = bridge::input::start(backends) {
         tracing::warn!("controller input unavailable, keyboard only: {err:#}");

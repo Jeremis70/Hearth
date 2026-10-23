@@ -2,9 +2,13 @@
 //! `home_short`, `accept`, `down`. Lets scripts drive Hearth exactly like a controller (the
 //! keyboard can't reach Hearth while a game has focus inside gamescope). Enabled only with
 //! `--dev-socket`.
+//!
+//! Words that aren't actions go to an optional command handler (e.g. `sound:move`,
+//! `audio_state`); a reply is sent back to the sender when it bound an address.
 
 use std::os::unix::net::UnixDatagram;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::mpsc::Sender;
 use std::thread;
 
@@ -29,11 +33,23 @@ pub fn parse_action(name: &str) -> Option<Action> {
     })
 }
 
+/// Handles a non-action word; `None`: not a command it knows. Runs on the socket's thread.
+pub type CommandHandler = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
+
 /// Reads actions from a Unix datagram socket at `path` (replaced if it exists).
-#[derive(Debug)]
 pub struct DevSocketBackend {
     path: PathBuf,
     started: bool,
+    commands: Option<CommandHandler>,
+}
+
+impl std::fmt::Debug for DevSocketBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DevSocketBackend")
+            .field("path", &self.path)
+            .field("started", &self.started)
+            .finish_non_exhaustive()
+    }
 }
 
 impl DevSocketBackend {
@@ -42,7 +58,14 @@ impl DevSocketBackend {
         Self {
             path: path.into(),
             started: false,
+            commands: None,
         }
+    }
+
+    /// Also handles other words with `handler` (its reply goes back to the sender).
+    pub fn with_commands(mut self, handler: CommandHandler) -> Self {
+        self.commands = Some(handler);
+        self
     }
 }
 
@@ -57,17 +80,24 @@ impl InputBackend for DevSocketBackend {
         let socket =
             UnixDatagram::bind(&self.path).map_err(|e| InputError::Start(e.to_string()))?;
         tracing::info!(path = %self.path.display(), "dev input socket listening");
+        let commands = self.commands.clone();
         thread::Builder::new()
             .name("hearth-dev-socket".into())
             .spawn(move || {
                 let mut buf = [0u8; 256];
-                while let Ok(n) = socket.recv(&mut buf) {
+                while let Ok((n, from)) = socket.recv_from(&mut buf) {
                     let text = String::from_utf8_lossy(&buf[..n]);
                     for name in text.split_whitespace() {
-                        match parse_action(name) {
-                            Some(action) => {
-                                if tx.send(action).is_err() {
-                                    return;
+                        if let Some(action) = parse_action(name) {
+                            if tx.send(action).is_err() {
+                                return;
+                            }
+                            continue;
+                        }
+                        match commands.as_ref().and_then(|handle| handle(name)) {
+                            Some(reply) => {
+                                if let Some(path) = from.as_pathname() {
+                                    let _ = socket.send_to(reply.as_bytes(), path);
                                 }
                             }
                             None => tracing::warn!(name, "dev socket: unknown action"),

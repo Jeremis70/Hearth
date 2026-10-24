@@ -67,6 +67,19 @@ Round B (audio), 2026-10-23, oldest first:
   under the UI sounds, Music defaults to 50, and packs can correct their mastering with
   `[gain] ui_db / music_db`; ps5-sounds uses +10 / −4 (its UI files peak at −27…−15 dBFS,
   Home Menu is −15 dBFS RMS). The user moved `004` out of `themes/` and replaced edge_bump.
+- Extras by fixed names in a game's own folder (replacing `<rom>-theme.*`, `<rom>.png`,
+  `<rom>-hero.png`, `<rom>-logo.png`): `hearth-core::extras` (`Extras` chain, `GameFolder`;
+  Round C's stored choice goes first in `Extras::standard`), `Game::folder` set by the scan
+  (a folder whose subtree holds one game), library `user_version` 2 (`games.folder`), and a
+  sync that moves a vanished game's row to a new id with the same system and file name.
+  - Why the themes didn't play: TP's ROM is `….nkit.iso`, so the old rule wanted
+    `….nkit-theme.mp3`; OoT's file was `…[!].mp3` without `-theme`.
+  - Verified on the dev library (backed up and restored afterwards): moving OoT and TP into
+    `.dev-data/games/<system>/<title>/` kept playtime (3738 s, 2725 s), last played, a
+    favorite, art keys and SteamGridDB ids (21202, 34645); no art deleted; Home showed the
+    cached art with `--mock-network`; OoT's `theme.ogg` played from its folder.
+  - Only the test theme in `.dev-data/games` and the user's TP `-theme.mp3` used the old
+    names; no local art files existed.
 - Not verified (the user's to do): hearing it (nothing here was listened to); real
   controller input (dev socket only, so the pad's own path isn't in the latency numbers);
   turning the TV/HDMI off and on or switching the output device (not allowed here: only
@@ -403,8 +416,8 @@ The working tree is clean.
 - Sounds per action: `NavResult` from every `handle()` (see the design README §7).
 - Music: `director::choose` (pure, tested); fades 300 ms in / 300 ms launch / 150 ms resume /
   800 ms crossfade; the ambient is parked and resumed where it was, themes restart.
-- Themes: `hearth-core::themes::ThemeLookup` (sources in order; extracted themes go after
-  `LocalThemeFile`).
+- Themes and a game's own art: `hearth-core::extras` (game folders, fixed names; see the
+  design README §6).
 
 **Art, Home and packs** (art round)
 - `hearth-core::art`: `identity.rs` (art key `<system>/<serial>` or `<system>/name-<fnv64 of the
@@ -478,7 +491,7 @@ The working tree is clean.
   - library: `.dev-data/data/library.sqlite3`.
 - **FPS counter:** `HEARTH_RETROARCH_ARGS="--appendconfig=data/dev/retroarch-fps.cfg"`.
 - **Checks:** `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
-  `cargo test --workspace` (audio 11, core 135, platform 35, shell 23 tests).
+  `cargo test --workspace` (audio 11, core 138, platform 35, shell 23 tests).
 - **Artwork:** set `HEARTH_STEAMGRIDDB_KEY` or `[art] steamgriddb_key` in
   `.dev-data/config/hearth.toml` (gitignored). Without it: placeholders and one log line.
 

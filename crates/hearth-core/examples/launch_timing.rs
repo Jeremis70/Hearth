@@ -36,6 +36,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         title: "timing".into(),
         system: SystemId::new("n64"),
         path: rom.into(),
+        folder: None,
     };
     let started = Instant::now();
     let session = ProcessRuntime::new().launch(

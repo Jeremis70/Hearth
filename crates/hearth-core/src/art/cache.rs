@@ -3,8 +3,8 @@
 //! Layout: `<cache>/art/<art key>/{grid,hero,logo,icon}.<ext>` plus `hero-blur.png`
 //! (the blurred, downscaled hero behind Home's widgets: Slint has no backdrop blur).
 //!
-//! Local files next to the ROM always win: `<rom stem>.png` (grid), `<rom stem>-hero.png`
-//! and `<rom stem>-logo.png`. A local hero gets its own blurred copy
+//! The game's own art (`crate::extras`: `grid`, `hero`, `logo`, `icon` in its game folder)
+//! always wins over the cache. A hero of its own gets its own blurred copy
 //! (`local-hero-blur.png`), remade when the hero is newer.
 
 use std::fs;
@@ -47,7 +47,8 @@ impl GameArt {
         }
     }
 
-    fn set(&mut self, kind: ArtKind, path: PathBuf) {
+    /// Sets the path of one kind.
+    pub fn set(&mut self, kind: ArtKind, path: PathBuf) {
         let slot = match kind {
             ArtKind::Grid => &mut self.grid,
             ArtKind::Hero => &mut self.hero,
@@ -136,11 +137,11 @@ impl ArtCache {
         }
     }
 
-    /// The art to show for the ROM at `rom`: local files first, then the cache. Makes the
-    /// blurred hero if it is missing or older than its hero (slow: call off the UI thread).
-    pub fn resolve(&self, key: &ArtKey, rom: &Path) -> GameArt {
+    /// The art to show: the game's own (`local`, from `crate::extras::Extras::art`) first,
+    /// then the cache. Makes the blurred hero if it is missing or older than its hero (slow:
+    /// call off the UI thread).
+    pub fn resolve(&self, key: &ArtKey, local: &GameArt) -> GameArt {
         let mut art = GameArt::default();
-        let local = local_overrides(rom);
         for kind in ArtKind::ALL {
             let path = local
                 .get(kind)
@@ -165,26 +166,6 @@ impl ArtCache {
         }
         art
     }
-}
-
-/// Local art files next to `rom` that exist.
-pub fn local_overrides(rom: &Path) -> GameArt {
-    let mut art = GameArt::default();
-    let (Some(dir), Some(stem)) = (rom.parent(), rom.file_stem()) else {
-        return art;
-    };
-    let stem = stem.to_string_lossy();
-    for (kind, suffix) in [
-        (ArtKind::Grid, ""),
-        (ArtKind::Hero, "-hero"),
-        (ArtKind::Logo, "-logo"),
-    ] {
-        let path = dir.join(format!("{stem}{suffix}.png"));
-        if path.is_file() {
-            art.set(kind, path);
-        }
-    }
-    art
 }
 
 /// True if `derived` is missing or older than `source`.
@@ -261,7 +242,7 @@ mod tests {
         assert_eq!(cache.cached(&key(), ArtKind::Hero), Some(hero.clone()));
         assert!(!cache.dir(&key()).join("hero.jpg").exists());
 
-        let art = cache.resolve(&key(), &dir.path().join("roms/tp.iso"));
+        let art = cache.resolve(&key(), &GameArt::default());
         assert_eq!(art.hero, Some(hero));
         assert_eq!(art.hero_blur, Some(cache.blurred_hero(&key())));
         let blurred = image::open(cache.blurred_hero(&key())).unwrap();
@@ -270,14 +251,17 @@ mod tests {
     }
 
     #[test]
-    fn local_files_win_over_the_cache() {
+    fn the_games_own_art_wins_over_the_cache() {
         let dir = tempdir();
-        let roms = dir.path().join("roms");
-        fs::create_dir_all(&roms).unwrap();
-        let rom = roms.join("Twilight Princess (USA).nkit.iso");
-        fs::write(&rom, b"x").unwrap();
-        png(&roms.join("Twilight Princess (USA).nkit.png"), 8, 8);
-        png(&roms.join("Twilight Princess (USA).nkit-hero.png"), 32, 10);
+        let folder = dir.path().join("gc/Twilight Princess");
+        fs::create_dir_all(&folder).unwrap();
+        png(&folder.join("grid.png"), 8, 8);
+        png(&folder.join("hero.png"), 32, 10);
+        let local = GameArt {
+            grid: Some(folder.join("grid.png")),
+            hero: Some(folder.join("hero.png")),
+            ..GameArt::default()
+        };
 
         let cache = ArtCache::new(dir.path().join("art"));
         cache
@@ -287,18 +271,15 @@ mod tests {
             .store(&key(), ArtKind::Logo, "png", b"cached")
             .unwrap();
 
-        let art = cache.resolve(&key(), &rom);
-        assert_eq!(
-            art.grid,
-            Some(roms.join("Twilight Princess (USA).nkit.png"))
-        );
+        let art = cache.resolve(&key(), &local);
+        assert_eq!(art.grid, Some(folder.join("grid.png")));
         assert_eq!(art.logo, cache.cached(&key(), ArtKind::Logo));
         assert_eq!(
             art.hero_blur,
             Some(cache.dir(&key()).join("local-hero-blur.png"))
         );
-        // Nothing is written next to the ROM.
-        assert_eq!(fs::read_dir(&roms).unwrap().count(), 3);
+        // Nothing is written into the game folder.
+        assert_eq!(fs::read_dir(&folder).unwrap().count(), 2);
     }
 
     #[test]

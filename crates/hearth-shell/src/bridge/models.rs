@@ -319,6 +319,7 @@ mod tests {
                 title: title.into(),
                 system: SystemId::new("n64"),
                 path: "/g.z64".into(),
+                folder: None,
             },
             last_played: last,
             playtime: Duration::from_secs(mins * 60),

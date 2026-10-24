@@ -222,7 +222,18 @@ Settings
 - Cache: `<cache>/art/<art key>/` (`~/.cache/hearth/art/`, or `$HEARTH_HOME/cache/art/`), where the art key is `<system>/<serial>` or `<system>/name-<hash of the cleaned title>`. Never re-fetched unless files are missing (or a later "Refresh artwork").
 - Display copies: Home never decodes the originals. Next to them, `sized/<class>/{hero,logo,grid}.qoi` are made for the screen's class (its height rounded up to 720/1080/1440/2160): hero as tall as the screen, logo inside 2× the 640×260 box, grid 2× `tile-focused`, all scaled with the class and never enlarged. Made on first use (already-cached art included), remade when the original is newer or the screen class changes (the class is remembered in `<data>/display-class`). Originals stay for "Change artwork" and other screens.
 - Loading order: the focused cell's hero and logo, the grids in view, the neighbours' heroes and logos, then the rest, on up to 3 threads.
-- Local files next to the ROM always win: `<rom stem>.png` (grid), `<rom stem>-hero.png`, `<rom stem>-logo.png`.
+- A game's own art wins over the cache: `grid`, `hero`, `logo`, `icon` (`.png`, `.jpg` or `.webp`) in its game folder (see "Game folders" below).
+- **Game folders.** A game in its own folder under the system folder (a folder whose whole contents are that one game: one ROM; later an `.m3u` with its discs, or a folder-based game) keeps its extras there under fixed names:
+
+  ```
+  <games>/gc/Twilight Princess/
+    Legend of Zelda, The - Twilight Princess (USA).nkit.iso
+    theme.mp3                     # or .ogg, .flac
+    hero.png  logo.png  grid.png  icon.png    # or .jpg, .webp
+  ```
+
+  A folder holding several games is only a grouping folder (no extras are read from it), and games laid out flat in the system folder simply have none. Nothing is matched by the ROM's file name. Lookups go through one chain (`hearth-core::extras`): a choice stored in Hearth's own per-game data, keyed by game id (Round C's picker, not built yet) > the file in the game folder > the pack or Hearth's default (the ambient) or the art cache. `cargo run -p hearth-core --example theme_probe -- ~/Games [title]` prints each game's folder and the files tried; the same paths are logged at debug (`hearth_core::extras`).
+- **Moving a game keeps it.** A game's id is its path under the system folder, so moving a ROM into its own folder changes it; the next scan sees a game gone and one new with the same system and file name, and moves the row (playtime, last played, favorite, art key; the SteamGridDB match and cached art are keyed by the art key) to the new id. Only an unambiguous pair moves; renaming the file itself still starts it over.
 - No match is remembered and not retried; network or HTTP errors put the game in a retry queue (startup, then with backoff while running).
 - API key: `HEARTH_STEAMGRIDDB_KEY`, else `[art] steamgriddb_key` in `hearth.toml`. Without one, only local and cached art is shown.
 
@@ -287,7 +298,7 @@ ui_sounds = "ps5-sounds"
   - `handled` Accept / Back → `accept` / `back` (controller actions fire on release);
   - `quiet`: used, sound comes from elsewhere (Back or Resume in the overlay play `overlay_close`).
 - **Music:** the ambient loop on Hearth's screens, fading in over 300 ms. Silent whenever a game runs unfrozen: launching fades it out over 300 ms while the game starts; Resume unfreezes at once and fades it out over 150 ms. In the overlay over a frozen game it plays only with "Music in overlay" (continuing where it left off); over a game whose suspend policy is off it stays silent.
-- **Game themes:** `<rom stem>-theme.ogg` (or `.mp3`, `.flac`) next to the ROM, like the local art. When a game with a theme stays focused on Home's Games row for 500 ms, the ambient crossfades to it (800 ms), and back once focus settles elsewhere or Home is left. The overlay plays the running game's theme instead of the ambient. Themes extracted from dumps will be a second source behind the file next to the ROM.
+- **Game themes:** `theme.ogg` (or `.mp3`, `.flac`) in the game's own folder (§6 "Game folders"). When a game with a theme stays focused on Home's Games row for 500 ms, the ambient crossfades to it (800 ms), and back once focus settles elsewhere or Home is left. The overlay plays the running game's theme instead of the ambient. Themes extracted from dumps will be another source in the same chain.
 - **Volumes** (Settings → Display & sound): UI sounds (default 80) and Music (default 70), 0–100 in steps of 10 on a dB scale (100 = 0 dB, each step −5 dB, 0 = silent); music always sits a further 6 dB under the UI sounds, so it stays a backdrop; Mute all; Music in overlay; Game themes. Changes apply at once (the UI volume plays a move at its new level) and are saved under `[audio]` in `hearth.toml`. System volume (PipeWire, the overlay's Volume button) is separate and later.
 
 ## 8. Assets and licenses

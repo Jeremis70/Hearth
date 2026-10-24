@@ -59,4 +59,7 @@ pub struct Game {
     pub system: SystemId,
     /// The ROM or disc image to launch.
     pub path: PathBuf,
+    /// The game's own folder (its contents are this one game), where its extras live
+    /// (`crate::extras`). `None` when it sits in the system folder or in a grouping folder.
+    pub folder: Option<PathBuf>,
 }

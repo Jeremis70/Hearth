@@ -58,7 +58,7 @@ use crate::{
 use hearth_audio::director::{self, GameScene, MusicDirector, Scene};
 use hearth_audio::{Audio, SoundFile, Volumes};
 use hearth_core::config::AudioSettings;
-use hearth_core::themes::ThemeLookup;
+use hearth_core::extras::{Extra, Extras};
 
 /// When the controls page's drawing is rasterized ahead of use (the window has its size).
 const DIAGRAM_WARM_UP: Duration = Duration::from_secs(6);
@@ -228,7 +228,8 @@ pub struct Controller {
     audio_settings: AudioSettings,
     /// The ambient loop of the selected sound pack (else Hearth's).
     ambient: Option<SoundFile>,
-    themes: ThemeLookup,
+    /// A game's own extras (its theme).
+    extras: Extras,
     /// The theme of the game focused on Home, once focus settled there.
     focused_theme: Option<SoundFile>,
     /// Waits for focus to settle before the theme changes.
@@ -460,7 +461,7 @@ pub fn install(setup: Setup) {
         music: MusicDirector::default(),
         audio_settings: setup.audio_settings,
         ambient: sounds::music_file("ambient_loop"),
-        themes: ThemeLookup::default(),
+        extras: Extras::standard(),
         focused_theme: None,
         theme_timer: slint::Timer::default(),
     };
@@ -668,7 +669,7 @@ impl Controller {
     // --- music -------------------------------------------------------------------------
 
     fn theme_of(&self, game: &Game) -> Option<SoundFile> {
-        self.themes.find(game).map(|theme| SoundFile {
+        self.extras.find(game, Extra::Theme).map(|theme| SoundFile {
             path: theme.path,
             origin: theme.source.to_owned(),
             loop_spec: None,

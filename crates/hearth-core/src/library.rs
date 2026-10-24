@@ -1,5 +1,12 @@
 //! The game library, persisted in SQLite: games found by scanning, when they were last played
 //! and for how long, favorites, and the artwork pipeline's results and retry queue.
+//!
+//! A game's id is its path under the system folder, so moving a ROM (e.g. into its own
+//! folder) gives it a new id. A sync recognises that: a game that vanished and a new one with
+//! the same system and file name are the same game, and its row (playtime, last played,
+//! favorite, art key) moves to the new id. Only an unambiguous pair moves.
+
+use std::collections::{HashMap, HashSet};
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -101,7 +108,8 @@ impl Library {
                 playtime_secs INTEGER NOT NULL DEFAULT 0
             );",
         )?;
-        // Schema version 0: games only; 1: favorites, art keys, art result and queue tables.
+        // Schema version 0: games only; 1: favorites, art keys, art result and queue tables;
+        // 2: the game's own folder.
         // The version is read under the write lock, so two threads opening the database at
         // once (library and art worker) don't both migrate.
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -127,6 +135,12 @@ impl Library {
                  PRAGMA user_version = 1;",
             )?;
         }
+        if version < 2 {
+            tx.execute_batch(
+                "ALTER TABLE games ADD COLUMN folder TEXT;
+                 PRAGMA user_version = 2;",
+            )?;
+        }
         tx.commit()?;
         Ok(Self { conn })
     }
@@ -135,18 +149,22 @@ impl Library {
     /// updated, games no longer found removed (with their history). Returns the removed games.
     pub fn sync(&mut self, games: &[Game]) -> Result<Vec<RemovedGame>, LibraryError> {
         let tx = self.conn.transaction()?;
+        move_renamed(&tx, games)?;
         tx.execute_batch(
             "CREATE TEMP TABLE IF NOT EXISTS seen (id TEXT PRIMARY KEY); DELETE FROM seen;",
         )?;
         for game in games {
             tx.execute(
-                "INSERT INTO games (id, title, system, path) VALUES (?1, ?2, ?3, ?4)
-                 ON CONFLICT(id) DO UPDATE SET title = ?2, system = ?3, path = ?4",
+                "INSERT INTO games (id, title, system, path, folder) VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(id) DO UPDATE SET title = ?2, system = ?3, path = ?4, folder = ?5",
                 params![
                     game.id.as_str(),
                     game.title,
                     game.system.as_str(),
-                    game.path.to_string_lossy()
+                    game.path.to_string_lossy(),
+                    game.folder
+                        .as_ref()
+                        .map(|f| f.to_string_lossy().into_owned())
                 ],
             )?;
             tx.execute(
@@ -156,7 +174,7 @@ impl Library {
         }
         let removed = {
             let mut stmt = tx.prepare(
-                "SELECT id, title, system, path, art_key FROM games
+                "SELECT id, title, system, path, art_key, folder FROM games
                  WHERE id NOT IN (SELECT id FROM seen)",
             )?;
             stmt.query_map([], |row| {
@@ -166,6 +184,7 @@ impl Library {
                         title: row.get(1)?,
                         system: SystemId::new(row.get::<_, String>(2)?),
                         path: PathBuf::from(row.get::<_, String>(3)?),
+                        folder: row.get::<_, Option<String>>(5)?.map(PathBuf::from),
                     },
                     art_key: row.get::<_, Option<String>>(4)?.map(ArtKey::from_stored),
                 })
@@ -183,7 +202,7 @@ impl Library {
     /// All games, most recently played first, then never-played games by title.
     pub fn recent(&self) -> Result<Vec<LibraryEntry>, LibraryError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, title, system, path, last_played, playtime_secs, favorite FROM games
+            "SELECT id, title, system, path, last_played, playtime_secs, favorite, folder FROM games
              ORDER BY last_played IS NULL, last_played DESC, title",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -193,6 +212,7 @@ impl Library {
                     title: row.get(1)?,
                     system: SystemId::new(row.get::<_, String>(2)?),
                     path: PathBuf::from(row.get::<_, String>(3)?),
+                    folder: row.get::<_, Option<String>>(7)?.map(PathBuf::from),
                 },
                 last_played: row.get(4)?,
                 playtime: Duration::from_secs(row.get::<_, i64>(5)?.max(0).unsigned_abs()),
@@ -393,6 +413,53 @@ impl Library {
     }
 }
 
+/// Moves the rows of games that vanished to the new ids of the same games found elsewhere
+/// (same system and file name, one of each), before the sync adds and removes rows.
+fn move_renamed(tx: &rusqlite::Transaction<'_>, games: &[Game]) -> Result<(), LibraryError> {
+    let file_name = |path: &Path| path.file_name().map(|n| n.to_string_lossy().into_owned());
+    let incoming: HashSet<&str> = games.iter().map(|g| g.id.as_str()).collect();
+    let mut gone: HashMap<(String, String), Vec<String>> = HashMap::new();
+    let mut stored = HashSet::new();
+    {
+        let mut stmt = tx.prepare("SELECT id, system, path FROM games")?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })?;
+        for row in rows {
+            let (id, system, path) = row?;
+            if !incoming.contains(id.as_str())
+                && let Some(name) = file_name(Path::new(&path))
+            {
+                gone.entry((system, name)).or_default().push(id.clone());
+            }
+            stored.insert(id);
+        }
+    }
+    let mut new: HashMap<(String, String), Vec<&Game>> = HashMap::new();
+    for game in games.iter().filter(|g| !stored.contains(g.id.as_str())) {
+        if let Some(name) = file_name(&game.path) {
+            new.entry((game.system.as_str().to_owned(), name))
+                .or_default()
+                .push(game);
+        }
+    }
+    for (key, found) in new {
+        let (Some([old]), [game]) = (gone.get(&key).map(Vec::as_slice), found.as_slice()) else {
+            continue;
+        };
+        tracing::info!(from = %old, to = %game.id, "game moved; keeping its history");
+        tx.execute(
+            "UPDATE games SET id = ?2 WHERE id = ?1",
+            params![old, game.id.as_str()],
+        )?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -404,7 +471,58 @@ mod tests {
             title: title.into(),
             system: SystemId::new("n64"),
             path: PathBuf::from(format!("/games/n64/{title}.z64")),
+            folder: None,
         }
+    }
+
+    #[test]
+    fn a_moved_game_keeps_its_history() {
+        let dir = tempdir();
+        let mut lib = Library::open(&dir.path().join("l.sqlite3")).unwrap();
+        lib.sync(&[
+            game("roms:n64/Zelda.z64", "Zelda"),
+            game("roms:n64/Mario.z64", "Mario"),
+        ])
+        .unwrap();
+        let old = GameId::new("roms:n64/Zelda.z64");
+        lib.record_session(
+            &old,
+            UNIX_EPOCH + Duration::from_secs(9),
+            Duration::from_secs(60),
+        )
+        .unwrap();
+        lib.set_favorite(&old, true).unwrap();
+        let key = ArtKey::new(&SystemId::new("n64"), Some("CZLE"), "");
+        lib.set_art_key(&old, &key).unwrap();
+
+        // Zelda moves into its own folder.
+        let moved = Game {
+            id: GameId::new("roms:n64/Zelda/Zelda.z64"),
+            path: PathBuf::from("/games/n64/Zelda/Zelda.z64"),
+            folder: Some(PathBuf::from("/games/n64/Zelda")),
+            ..game("x", "Zelda")
+        };
+        let removed = lib
+            .sync(&[moved.clone(), game("roms:n64/Mario.z64", "Mario")])
+            .unwrap();
+        assert!(removed.is_empty(), "nothing removed, so no art deleted");
+        let entry = lib.get(&moved.id).unwrap().unwrap();
+        assert_eq!(entry.playtime, Duration::from_secs(60));
+        assert_eq!(entry.last_played, Some(9));
+        assert!(entry.favorite);
+        assert_eq!(entry.game.folder, moved.folder);
+        assert!(lib.art_key_in_use(&key).unwrap());
+        assert_eq!(lib.get(&old).unwrap(), None);
+
+        // Two same-named files appearing for one that vanished: ambiguous, nothing moves.
+        let copy = |id: &str| Game {
+            id: GameId::new(id),
+            path: PathBuf::from(format!("/games/n64/{id}/Mario.z64")),
+            ..game("x", "Mario")
+        };
+        let removed = lib.sync(&[moved, copy("a"), copy("b")]).unwrap();
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0].game.title, "Mario");
     }
 
     #[test]

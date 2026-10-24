@@ -7,6 +7,7 @@
 pub mod art;
 pub mod config;
 pub mod controls;
+pub mod extras;
 pub mod library;
 pub mod model;
 pub mod packs;
@@ -17,7 +18,6 @@ pub mod runtime;
 pub mod scan;
 pub mod session;
 pub mod systems;
-pub mod themes;
 pub mod title;
 
 #[cfg(test)]

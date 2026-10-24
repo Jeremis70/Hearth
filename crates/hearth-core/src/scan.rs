@@ -1,7 +1,13 @@
 //! Finds ROMs under a games root: `<root>/<system folder>/**/<file with a system extension>`.
 //! Read-only: nothing under the root is created or modified.
+//!
+//! A folder below the system folder whose whole contents are one game is that game's own
+//! folder ([`Game::folder`]): its extras live there (`crate::extras`). A folder holding
+//! several games is only a grouping folder. (Every system today has one file per game; when
+//! `.m3u` playlists or folder-based games arrive, they count as one game here.)
 
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use walkdir::WalkDir;
 
@@ -26,6 +32,7 @@ pub fn scan_roms(root: &Path, systems: &Systems) -> Vec<Game> {
             if !dir.is_dir() {
                 continue;
             }
+            let first = games.len();
             for entry in WalkDir::new(&dir).follow_links(true).sort_by_file_name() {
                 let entry = match entry {
                     Ok(entry) => entry,
@@ -47,12 +54,35 @@ pub fn scan_roms(root: &Path, systems: &Systems) -> Vec<Game> {
                     title: clean_title(stem),
                     system: system.id.clone(),
                     path: path.to_path_buf(),
+                    folder: None,
                 });
             }
+            assign_folders(&mut games[first..], &dir);
         }
     }
     games.sort_by(|a, b| a.title.cmp(&b.title).then_with(|| a.id.cmp(&b.id)));
     games
+}
+
+/// Sets [`Game::folder`] for the games under `system_dir` that are alone in their folder.
+fn assign_folders(games: &mut [Game], system_dir: &Path) {
+    // Games under each folder below the system folder, nested folders included.
+    let mut counts: HashMap<PathBuf, usize> = HashMap::new();
+    for game in games.iter() {
+        for ancestor in game.path.ancestors().skip(1) {
+            if ancestor == system_dir || !ancestor.starts_with(system_dir) {
+                break;
+            }
+            *counts.entry(ancestor.to_path_buf()).or_default() += 1;
+        }
+    }
+    for game in games.iter_mut() {
+        game.folder = game
+            .path
+            .parent()
+            .filter(|parent| counts.get(*parent) == Some(&1))
+            .map(Path::to_path_buf);
+    }
 }
 
 #[cfg(test)]
@@ -124,6 +154,37 @@ mod tests {
                 ("Wii Sports", "wii")
             ]
         );
+    }
+
+    #[test]
+    fn a_folder_holding_one_game_is_its_folder() {
+        let dir = tempdir();
+        let root = dir.path();
+        touch(
+            root,
+            "gc/Twilight Princess/Legend of Zelda, The - Twilight Princess (USA).nkit.iso",
+        );
+        touch(root, "gc/Twilight Princess/theme.mp3");
+        touch(root, "gc/Zelda/Wind Waker (USA).iso");
+        touch(root, "gc/Zelda/Minish/Four Swords (USA).iso");
+        touch(root, "gc/Mario/Sunshine/Super Mario Sunshine (USA).iso");
+        touch(root, "gc/Pikmin (USA).iso");
+
+        let games = scan_roms(root, &Systems::builtin().unwrap());
+        let folder = |title: &str| {
+            let game = games.iter().find(|g| g.title.contains(title)).unwrap();
+            game.folder
+                .as_ref()
+                .map(|f| f.strip_prefix(root).unwrap().display().to_string())
+        };
+        assert_eq!(folder("Twilight").as_deref(), Some("gc/Twilight Princess"));
+        // Zelda holds two games: a grouping folder. Minish holds one.
+        assert_eq!(folder("Wind Waker"), None);
+        assert_eq!(folder("Four Swords").as_deref(), Some("gc/Zelda/Minish"));
+        // Mario holds only Sunshine's folder: Sunshine's own folder is the nearer one.
+        assert_eq!(folder("Sunshine").as_deref(), Some("gc/Mario/Sunshine"));
+        // Flat in the system folder: no folder.
+        assert_eq!(folder("Pikmin"), None);
     }
 
     #[test]

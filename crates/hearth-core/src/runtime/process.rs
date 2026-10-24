@@ -197,6 +197,7 @@ mod tests {
             title: "Sleep".into(),
             system: SystemId::new("test"),
             path: PathBuf::from("/dev/null"),
+            folder: None,
         }
     }
 

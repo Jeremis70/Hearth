@@ -22,6 +22,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use super::cache::{ArtCache, GameArt};
 use super::identity::{ArtKey, Identity, identify, pick_match};
 use super::provider::{ArtKind, MetadataProvider, ProviderError};
+use crate::extras::Extras;
 use crate::library::{ArtStatus, Library, LibraryError, RemovedGame};
 use crate::model::{Game, GameId};
 
@@ -83,6 +84,7 @@ impl ArtService {
                     events: Box::new(events),
                     games: HashMap::new(),
                     warned_no_key: false,
+                    extras: Extras::standard(),
                 };
                 loop {
                     match rx.recv_timeout(QUEUE_CHECK) {
@@ -116,6 +118,8 @@ struct Worker {
     events: Box<dyn Fn(ArtEvent) + Send>,
     games: HashMap<ArtKey, Known>,
     warned_no_key: bool,
+    /// Where a game's own art comes from (ahead of the cache).
+    extras: Extras,
 }
 
 /// What to fetch for one key.
@@ -369,7 +373,7 @@ impl Worker {
             (self.events)(ArtEvent::Art {
                 game: game.id.clone(),
                 key: key.clone(),
-                art: self.cache.resolve(key, &game.path),
+                art: self.cache.resolve(key, &self.extras.art(game)),
                 match_name: match_name.clone(),
             });
         }
@@ -478,6 +482,7 @@ mod tests {
             title: title.into(),
             system: SystemId::new(system),
             path,
+            folder: None,
         })
         .collect::<Vec<_>>();
         let db = dir.path().join("library.sqlite3");
@@ -519,6 +524,7 @@ mod tests {
             events: Box::new(move |e| sink.lock().unwrap().push(e)),
             games: HashMap::new(),
             warned_no_key: false,
+            extras: Extras::standard(),
         };
         worker.load(s.games.clone());
         let events = events.lock().unwrap().clone();
@@ -544,7 +550,7 @@ mod tests {
 
     fn oot_art(s: &Setup) -> GameArt {
         s.cache
-            .resolve(&ArtKey::from_stored("n64/CZLE"), &s.games[1].path)
+            .resolve(&ArtKey::from_stored("n64/CZLE"), &GameArt::default())
     }
 
     #[test]
@@ -746,6 +752,7 @@ mod tests {
             events: Box::new(move |e| sink.lock().unwrap().push(e)),
             games: HashMap::new(),
             warned_no_key: false,
+            extras: Extras::standard(),
         };
         worker.load(s.games.clone());
         let events = events.lock().unwrap().clone();

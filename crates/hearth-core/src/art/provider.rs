@@ -175,8 +175,8 @@ pub const FIXTURE_ASSETS: u64 = 6;
 /// APNG, the second a GIF that claims [`FIXTURE_BIG`] bytes (bigger than any automatic
 /// download, so it downloads only when picked).
 pub const FIXTURE_ANIMATED: u64 = 2;
-/// The size the second animated fixture claims.
-pub const FIXTURE_BIG: u64 = 12_000_000;
+/// The size the second animated fixture claims (over the 30 MiB automatic limit).
+pub const FIXTURE_BIG: u64 = 40_000_000;
 
 /// In-memory provider: never touches the network.
 ///

@@ -9,7 +9,7 @@
 //! - **Full:** when all frames fit the track's cap ([`cap`]), all are decoded once and kept.
 //! - **Window:** otherwise [`WINDOW`] frames at most wait decoded ahead of the one shown; the
 //!   thread decodes the next as each is shown (from the `.anim` file, or from the source when
-//!   the file would be over [`FILE_CAP`]).
+//!   the cache has no room for it, see [`DISK_CAP`]).
 //! - **Still:** when even the window doesn't fit, or decoding fails: the still stays.
 //!
 //! The caps add up to under [`TOTAL_CAP`], so the tracks that can play at once (hero and logo,
@@ -33,10 +33,12 @@ pub const HERO_CAP: u64 = 96 * MB;
 pub const LOGO_CAP: u64 = 48 * MB;
 /// All animations together.
 pub const TOTAL_CAP: u64 = 160 * MB;
-/// The largest `.anim` file written; bigger animations stream from their source.
-pub const FILE_CAP: u64 = 64 * MB;
-/// The `.anim` files together; the least recently played games' go first.
+/// The `.anim` files together; the least recently played games' go first. One file may take
+/// all of it (a 27 MB animated hero makes a few hundred MB); only a bigger one streams from
+/// its source.
 pub const DISK_CAP: u64 = 2_000 * MB;
+/// The largest `.anim` file written.
+pub const FILE_CAP: u64 = DISK_CAP;
 /// Frames decoded ahead in window mode.
 pub const WINDOW: usize = 8;
 

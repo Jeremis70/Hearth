@@ -27,8 +27,9 @@ use crate::library::{ArtCandidate, ArtStatus, art_retry_delay};
 
 /// How many games "Wrong game?" offers.
 const MAX_GAMES: usize = 8;
-/// The largest animated image fetched as its own preview.
-pub const THUMB_ANIMATED_MAX: u64 = super::AUTO_ANIMATED_HERO_MAX;
+/// The largest animated image fetched as its own preview (bigger ones download when picked:
+/// the strip shouldn't pull 30 MB per tile).
+pub const THUMB_ANIMATED_MAX: u64 = 10_000_000;
 
 /// Which list of candidates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

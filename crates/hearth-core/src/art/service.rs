@@ -14,9 +14,9 @@
 //! search.
 //!
 //! With animated art on ([`ArtService::set_animated`]), a matched game also gets the best
-//! animated hero and logo beside their stills (one more lookup each, same queue and backoff):
-//! logos up to the usual download limit, heroes only under [`AUTO_ANIMATED_HERO_MAX`] (bigger
-//! ones stay among the Customize page's candidates and download when picked). A kind looked
+//! animated hero and logo beside their stills (one more lookup each, same queue and backoff),
+//! up to [`AUTO_ANIMATED_HERO_MAX`] / [`AUTO_ANIMATED_LOGO_MAX`] (bigger ones stay among the
+//! Customize page's candidates and download when picked). A kind looked
 //! up once isn't looked up again, whether one was taken or not; turning animation off never
 //! deletes them, so turning it back on needs no download.
 //!
@@ -40,9 +40,10 @@ use crate::model::{Game, GameId};
 
 /// How often the queue is looked at while Hearth runs.
 pub const QUEUE_CHECK: Duration = Duration::from_secs(60);
-/// The largest animated hero downloaded without being picked (10 MB). Animated heroes run
-/// from ~0.2 MB to ~30 MB on SteamGridDB.
-pub const AUTO_ANIMATED_HERO_MAX: u64 = 10_000_000;
+/// The largest animated hero downloaded without being picked: the provider's own cap (30 MiB).
+/// Animated heroes run from ~0.2 MB to ~30 MB on SteamGridDB; a console has the room, so
+/// there is no lower limit of its own.
+pub const AUTO_ANIMATED_HERO_MAX: u64 = 30 * 1024 * 1024;
 /// The largest animated logo downloaded without being picked (the provider's own cap).
 pub const AUTO_ANIMATED_LOGO_MAX: u64 = 30 * 1024 * 1024;
 /// The kinds that animate.

@@ -12,6 +12,8 @@
 //!
 //! (Not to be confused with [`crate::profiles`], which drives emulators.)
 
+pub mod migrate;
+
 use std::fmt;
 use std::fs;
 use std::io;

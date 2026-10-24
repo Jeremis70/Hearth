@@ -1,19 +1,25 @@
-//! Decoding animated heroes and logos for Home, off the UI thread (README §6 "Animated art").
+//! Decoding animated heroes and logos, off the UI thread (README §6 "Animated art").
 //!
-//! One thread per track (the focused game's hero, its logo; the Customize page's preview)
-//! turns the source into display-sized frames and hands them to the UI thread one by one
-//! ([`Delivery`]); `session/anim.rs` flips them with each frame's own delay.
+//! One thread per track (a [`Slot`]: Home's hero or logo, the Customize page's focused
+//! candidate or its background hero) turns the source into display-sized frames for the UI
+//! thread ([`Delivery`]); `session/anim.rs` shows them with each frame's own delay.
 //!
 //! - The first play writes the `.anim` file (`hearth_core::art::animation`), so later plays
 //!   only decode QOI frames.
-//! - **Full:** when all frames fit the track's cap ([`cap`]), all are decoded once and kept.
+//! - **Sheet:** when all frames fit the track's cap ([`cap`]) and one texture
+//!   ([`SHEET_MAX`]), they are decoded once into one sprite sheet. The UI uploads it once and
+//!   flips by moving its clip, so a flip costs a redraw, not an upload.
 //! - **Window:** otherwise [`WINDOW`] frames at most wait decoded ahead of the one shown; the
-//!   thread decodes the next as each is shown (from the `.anim` file, or from the source when
-//!   the cache has no room for it, see [`DISK_CAP`]).
+//!   thread decodes the next as each is shown (from the `.anim` file, or straight from the
+//!   source when the cache has no room for it, see [`DISK_CAP`]). Each frame is uploaded.
+//! - **Stream:** the Customize strip's previews, scaled to the tile, never cached.
 //! - **Still:** when even the window doesn't fit, or decoding fails: the still stays.
 //!
+//! Slint's GPU renderer redraws the whole window for any change, so flips can't be made
+//! cheaper by redrawing less.
+//!
 //! The caps add up to under [`TOTAL_CAP`], so the tracks that can play at once (hero and logo,
-//! or the Customize preview) never go over it together.
+//! or the Customize page's two) never go over it together.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -41,10 +47,35 @@ pub const DISK_CAP: u64 = 2_000 * MB;
 pub const FILE_CAP: u64 = DISK_CAP;
 /// Frames decoded ahead in window mode.
 pub const WINDOW: usize = 8;
+/// A sprite sheet's largest side: every GPU Hearth targets takes 8192 × 8192 textures.
+pub const SHEET_MAX: u32 = 8192;
 
 const _: () = assert!(HERO_CAP + LOGO_CAP <= TOTAL_CAP);
 
-/// The most decoded frames a track may keep.
+/// Where an animation shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Slot {
+    /// Home's focused game.
+    HomeHero,
+    HomeLogo,
+    /// The Customize page's focused candidate, in its strip tile.
+    Strip,
+    /// The Customize page's background (the hero in use, as Home shows it).
+    Page,
+}
+
+impl Slot {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::HomeHero => "hero",
+            Self::HomeLogo => "logo",
+            Self::Strip => "strip",
+            Self::Page => "page",
+        }
+    }
+}
+
+/// The most decoded frames a track of `kind` may keep.
 pub fn cap(kind: ArtKind) -> u64 {
     if kind == ArtKind::Logo {
         LOGO_CAP
@@ -56,25 +87,63 @@ pub fn cap(kind: ArtKind) -> u64 {
 /// How a track plays.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
-    /// Every frame decoded once and kept.
-    Full,
+    /// Every frame decoded once into one sprite sheet.
+    Sheet,
     /// A few frames decoded ahead, from the `.anim` file.
     Window,
-    /// A few frames decoded ahead, straight from the source (too large for the file cache).
+    /// A few frames decoded ahead, straight from the source.
     Stream,
 }
 
 impl Mode {
     pub fn name(self) -> &'static str {
         match self {
-            Self::Full => "full",
+            Self::Sheet => "sheet",
             Self::Window => "window",
             Self::Stream => "stream",
         }
     }
 }
 
-/// What a track found before its first frame.
+/// Where frames sit in a sprite sheet: row by row, `cols` to a row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SheetLayout {
+    pub frame: (u32, u32),
+    pub cols: u32,
+}
+
+impl SheetLayout {
+    /// The layout for `count` frames of `frame` size, if the sheet fits [`SHEET_MAX`].
+    pub fn new(frame: (u32, u32), count: usize) -> Option<Self> {
+        let (w, h) = frame;
+        let count = u32::try_from(count).ok()?.max(1);
+        let cols = (SHEET_MAX / w.max(1)).min(count);
+        if cols == 0 {
+            return None;
+        }
+        let rows = count.div_ceil(cols);
+        (rows * h <= SHEET_MAX).then_some(Self { frame, cols })
+    }
+
+    /// Frame `i`'s top-left corner.
+    pub fn origin(self, i: usize) -> (u32, u32) {
+        let i = u32::try_from(i).unwrap_or(0);
+        (
+            (i % self.cols) * self.frame.0,
+            (i / self.cols) * self.frame.1,
+        )
+    }
+
+    fn sheet_size(self, count: usize) -> (u32, u32) {
+        let count = u32::try_from(count).unwrap_or(1).max(1);
+        (
+            self.cols.min(count) * self.frame.0,
+            count.div_ceil(self.cols) * self.frame.1,
+        )
+    }
+}
+
+/// What a track found before its frames.
 #[derive(Debug, Clone)]
 pub struct TrackInfo {
     pub source: PathBuf,
@@ -95,22 +164,28 @@ pub enum Delivery {
     /// About to send frames.
     Start {
         generation: u64,
-        kind: ArtKind,
+        slot: Slot,
         info: TrackInfo,
     },
-    /// The next frame.
+    /// Sheet mode: every frame, and the delay after each.
+    Sheet {
+        generation: u64,
+        slot: Slot,
+        pixels: SharedPixelBuffer<Rgba8Pixel>,
+        layout: SheetLayout,
+        delays: Vec<u32>,
+    },
+    /// Window and stream modes: the next frame.
     Frame {
         generation: u64,
-        kind: ArtKind,
+        slot: Slot,
         pixels: SharedPixelBuffer<Rgba8Pixel>,
         delay_ms: u32,
     },
-    /// Full mode: every frame was sent.
-    Complete { generation: u64, kind: ArtKind },
     /// It can't animate: the still stays.
     Still {
         generation: u64,
-        kind: ArtKind,
+        slot: Slot,
         reason: String,
     },
 }
@@ -161,14 +236,17 @@ impl Credits {
 
 /// One track to play.
 pub struct TrackJob {
+    pub slot: Slot,
     pub kind: ArtKind,
     pub key: ArtKey,
     pub source: PathBuf,
     pub class: DisplayClass,
     pub cache: ArtCache,
+    /// Stream at this size instead of the class's, never caching (the strip's previews).
+    pub bounds: Option<(u32, u32)>,
     /// Last played time by art key, for evicting `.anim` files.
     pub last_played: Arc<HashMap<String, i64>>,
-    /// The play this track belongs to; it ends when this changes.
+    /// The play this track belongs to; it ends when `current` changes.
     pub generation: u64,
     pub current: Arc<AtomicU64>,
     pub credits: Arc<Credits>,
@@ -176,14 +254,14 @@ pub struct TrackJob {
 
 /// Starts a track's thread. `deliver` hands each [`Delivery`] to the UI thread.
 pub fn spawn(job: TrackJob, deliver: Arc<dyn Fn(Delivery) + Send + Sync>) {
-    let name = format!("hearth-anim-{}", job.kind.name());
+    let name = format!("hearth-anim-{}", job.slot.name());
     let spawned = thread::Builder::new().name(name).spawn(move || {
-        let (generation, kind) = (job.generation, job.kind);
+        let (generation, slot) = (job.generation, job.slot);
         if let Err(reason) = run(&job, &*deliver) {
-            tracing::info!(kind = kind.name(), source = %job.source.display(), "still: {reason}");
+            tracing::info!(slot = slot.name(), source = %job.source.display(), "still: {reason}");
             deliver(Delivery::Still {
                 generation,
-                kind,
+                slot,
                 reason,
             });
         }
@@ -194,103 +272,149 @@ pub fn spawn(job: TrackJob, deliver: Arc<dyn Fn(Delivery) + Send + Sync>) {
 }
 
 fn run(job: &TrackJob, deliver: &dyn Fn(Delivery)) -> Result<(), String> {
-    let alive = || job.current.load(Ordering::Relaxed) == job.generation;
-    let (generation, kind) = (job.generation, job.kind);
     let started = Instant::now();
+    if let Some(bounds) = job.bounds {
+        let stream = FrameStream::open_in(&job.source, bounds)
+            .map_err(|err| format!("can't decode: {err}"))?;
+        return play_stream(job, stream, started, deliver);
+    }
     let sized = job
         .cache
-        .sized_anim(&job.key, kind, &job.source, job.class, FILE_CAP)
+        .sized_anim(&job.key, job.kind, &job.source, job.class, FILE_CAP)
         .map_err(|err| format!("can't decode: {err}"))?;
-    let format = animation::probe(&job.source);
     match sized {
         SizedAnim::Still => Err("not animated".into()),
         SizedAnim::File(path) => {
             let disk = job.cache.trim_anim(DISK_CAP, &job.last_played, Some(&path));
-            let mut reader = AnimReader::open(&path).map_err(|err| err.to_string())?;
+            tracing::debug!(
+                slot = job.slot.name(),
+                disk_mb = disk / MB,
+                "animation cache"
+            );
+            let reader = AnimReader::open(&path).map_err(|err| err.to_string())?;
             let file_bytes = std::fs::metadata(&path).map_or(0, |m| m.len());
-            let mode = if reader.decoded_bytes() <= cap(kind) {
-                Mode::Full
-            } else if reader.frame_bytes() * WINDOW as u64 <= cap(kind) {
-                Mode::Window
-            } else {
-                return Err(format!(
-                    "{} MB a frame is too large",
-                    reader.frame_bytes() / MB
-                ));
-            };
-            tracing::debug!(kind = kind.name(), disk_mb = disk / MB, "animation cache");
-            deliver(Delivery::Start {
-                generation,
-                kind,
-                info: TrackInfo {
-                    source: job.source.clone(),
-                    format,
-                    mode,
-                    frames: Some(reader.len()),
-                    frame_bytes: reader.frame_bytes(),
-                    size: reader.size(),
-                    prepare: started.elapsed(),
-                    file_bytes,
-                },
-            });
-            if mode == Mode::Full {
-                for i in 0..reader.len() {
-                    if !alive() {
-                        return Ok(());
-                    }
-                    let frame = reader.frame(i).map_err(|err| err.to_string())?;
-                    deliver(frame_delivery(job, frame, reader.delay_ms(i)));
-                }
-                deliver(Delivery::Complete { generation, kind });
-                return Ok(());
-            }
-            let mut i = 0;
-            while job.credits.take(&alive) {
-                let frame = reader.frame(i).map_err(|err| err.to_string())?;
-                deliver(frame_delivery(job, frame, reader.delay_ms(i)));
-                i = (i + 1) % reader.len();
-            }
-            Ok(())
+            play_file(job, reader, file_bytes, started, deliver)
         }
         SizedAnim::TooLarge => {
-            let mut stream = FrameStream::open(&job.source, kind, job.class)
+            let stream = FrameStream::open(&job.source, job.kind, job.class)
                 .map_err(|err| format!("can't decode: {err}"))?;
-            let (first, delay) = stream.next_frame().map_err(|err| err.to_string())?;
-            let frame_bytes = u64::from(first.width()) * u64::from(first.height()) * 4;
-            if frame_bytes * WINDOW as u64 > cap(kind) {
-                return Err(format!("{} MB a frame is too large", frame_bytes / MB));
-            }
-            deliver(Delivery::Start {
-                generation,
-                kind,
-                info: TrackInfo {
-                    source: job.source.clone(),
-                    format,
-                    mode: Mode::Stream,
-                    frames: None,
-                    frame_bytes,
-                    size: first.dimensions(),
-                    prepare: started.elapsed(),
-                    file_bytes: 0,
-                },
-            });
-            let mut next = Some((first, delay));
-            while job.credits.take(&alive) {
-                let (frame, delay) = match next.take() {
-                    Some(frame) => frame,
-                    None => stream.next_frame().map_err(|err| err.to_string())?,
-                };
-                deliver(frame_delivery(job, frame, delay));
-            }
-            Ok(())
+            play_stream(job, stream, started, deliver)
         }
     }
+}
+
+fn play_file(
+    job: &TrackJob,
+    mut reader: AnimReader,
+    file_bytes: u64,
+    started: Instant,
+    deliver: &dyn Fn(Delivery),
+) -> Result<(), String> {
+    let alive = || job.current.load(Ordering::Relaxed) == job.generation;
+    let (generation, slot) = (job.generation, job.slot);
+    let layout = SheetLayout::new(reader.size(), reader.len());
+    let mode = match layout {
+        Some(_) if reader.decoded_bytes() <= cap(job.kind) => Mode::Sheet,
+        _ if reader.frame_bytes() * WINDOW as u64 <= cap(job.kind) => Mode::Window,
+        _ => {
+            return Err(format!(
+                "{} MB a frame is too large",
+                reader.frame_bytes() / MB
+            ));
+        }
+    };
+    deliver(Delivery::Start {
+        generation,
+        slot,
+        info: TrackInfo {
+            source: job.source.clone(),
+            format: animation::probe(&job.source),
+            mode,
+            frames: Some(reader.len()),
+            frame_bytes: reader.frame_bytes(),
+            size: reader.size(),
+            prepare: started.elapsed(),
+            file_bytes,
+        },
+    });
+    if let (Mode::Sheet, Some(layout)) = (mode, layout) {
+        let (w, h) = layout.sheet_size(reader.len());
+        let mut sheet = SharedPixelBuffer::<Rgba8Pixel>::new(w, h);
+        let stride = w as usize * 4;
+        let mut delays = Vec::with_capacity(reader.len());
+        for i in 0..reader.len() {
+            if !alive() {
+                return Ok(());
+            }
+            let frame = reader.frame(i).map_err(|err| err.to_string())?;
+            let (x, y) = layout.origin(i);
+            let row_bytes = frame.width() as usize * 4;
+            let bytes = sheet.make_mut_bytes();
+            for (r, row) in frame.as_raw().chunks_exact(row_bytes).enumerate() {
+                let at = (y as usize + r) * stride + x as usize * 4;
+                bytes[at..at + row_bytes].copy_from_slice(row);
+            }
+            delays.push(reader.delay_ms(i));
+        }
+        deliver(Delivery::Sheet {
+            generation,
+            slot,
+            pixels: sheet,
+            layout,
+            delays,
+        });
+        return Ok(());
+    }
+    let mut i = 0;
+    while job.credits.take(&alive) {
+        let frame = reader.frame(i).map_err(|err| err.to_string())?;
+        deliver(frame_delivery(job, frame, reader.delay_ms(i)));
+        i = (i + 1) % reader.len();
+    }
+    Ok(())
+}
+
+fn play_stream(
+    job: &TrackJob,
+    mut stream: FrameStream,
+    started: Instant,
+    deliver: &dyn Fn(Delivery),
+) -> Result<(), String> {
+    let alive = || job.current.load(Ordering::Relaxed) == job.generation;
+    let (first, delay) = stream.next_frame().map_err(|err| err.to_string())?;
+    let frame_bytes = u64::from(first.width()) * u64::from(first.height()) * 4;
+    if frame_bytes * WINDOW as u64 > cap(job.kind) {
+        return Err(format!("{} MB a frame is too large", frame_bytes / MB));
+    }
+    deliver(Delivery::Start {
+        generation: job.generation,
+        slot: job.slot,
+        info: TrackInfo {
+            source: job.source.clone(),
+            format: animation::probe(&job.source),
+            mode: Mode::Stream,
+            frames: None,
+            frame_bytes,
+            size: first.dimensions(),
+            prepare: started.elapsed(),
+            file_bytes: 0,
+        },
+    });
+    let mut next = Some((first, delay));
+    while job.credits.take(&alive) {
+        let (frame, delay) = match next.take() {
+            Some(frame) => frame,
+            None => stream.next_frame().map_err(|err| err.to_string())?,
+        };
+        deliver(frame_delivery(job, frame, delay));
+    }
+    Ok(())
 }
 
 fn frame_delivery(job: &TrackJob, frame: image::RgbaImage, delay_ms: u32) -> Delivery {
     Delivery::Frame {
         generation: job.generation,
-        kind: job.kind,
+        slot: job.slot,
         pixels: SharedPixelBuffer::clone_from_slice(frame.as_raw(), frame.width(), frame.height()),
         delay_ms,
     }
@@ -328,7 +452,13 @@ mod tests {
     }
 
     /// Plays `bytes` as `kind` until `frames` frames arrived (or the track ends).
-    fn play(kind: ArtKind, bytes: &[u8], frames: usize, release: bool) -> Played {
+    fn play(
+        kind: ArtKind,
+        bytes: &[u8],
+        frames: usize,
+        release: bool,
+        bounds: Option<(u32, u32)>,
+    ) -> Played {
         let dir = tempdir();
         let cache = ArtCache::new(dir.path().join("art"));
         let key = ArtKey::new(&SystemId::new("n64"), Some("CZLE"), "");
@@ -341,11 +471,17 @@ mod tests {
         });
         spawn(
             TrackJob {
+                slot: if kind == ArtKind::Logo {
+                    Slot::HomeLogo
+                } else {
+                    Slot::HomeHero
+                },
                 kind,
                 key,
                 source,
                 class: DisplayClass::default(),
                 cache,
+                bounds,
                 last_played: Arc::default(),
                 generation: 1,
                 current: current.clone(),
@@ -355,7 +491,7 @@ mod tests {
         );
         let mut deliveries = Vec::new();
         while let Ok(d) = rx.recv_timeout(Duration::from_secs(10)) {
-            let done = matches!(d, Delivery::Complete { .. } | Delivery::Still { .. });
+            let done = matches!(d, Delivery::Sheet { .. } | Delivery::Still { .. });
             if matches!(d, Delivery::Frame { .. }) && release {
                 credits.release();
             }
@@ -377,27 +513,64 @@ mod tests {
     }
 
     #[test]
-    fn small_animations_are_decoded_once_in_full() {
+    fn small_animations_are_decoded_once_into_a_sheet() {
         let gif = animation::samples::gif(320, 120, 5, 60);
-        let played = play(ArtKind::Logo, &gif, usize::MAX, false);
-        assert_eq!(played.mode(), Some(Mode::Full));
-        assert_eq!(played.frames(), 5);
-        assert!(matches!(
-            played.deliveries.last(),
-            Some(Delivery::Complete { .. })
-        ));
+        let played = play(ArtKind::Logo, &gif, usize::MAX, false, None);
+        assert_eq!(played.mode(), Some(Mode::Sheet));
+        let Some(Delivery::Sheet {
+            pixels,
+            layout,
+            delays,
+            ..
+        }) = played.deliveries.last()
+        else {
+            panic!("no sheet");
+        };
+        // Within the 1x logo box already: never enlarged.
+        assert_eq!(layout.frame, (320, 120));
+        assert_eq!(delays, &[60; 5]);
+        assert_eq!((pixels.width(), pixels.height()), (5 * 320, 120));
+        // Frame 3 is where the layout says: its left edge is opaque (the band grows).
+        let (x, y) = layout.origin(3);
+        let px = pixels.as_slice()[(y * pixels.width() + x) as usize];
+        assert_eq!(px.a, 255);
+    }
+
+    #[test]
+    fn sheets_wrap_into_rows_and_stay_within_a_texture() {
+        let layout = SheetLayout::new((260, 260), 74).unwrap();
+        assert_eq!(layout.cols, 31);
+        assert_eq!(layout.sheet_size(74), (31 * 260, 3 * 260));
+        assert_eq!(layout.origin(32), (260, 260));
+        assert!(SheetLayout::new((1920, 620), 20).is_some());
+        assert!(
+            SheetLayout::new((1920, 620), 60).is_none(),
+            "4 × 15 rows is too tall"
+        );
+        assert!(SheetLayout::new((9000, 10), 2).is_none());
     }
 
     #[test]
     fn large_animations_play_through_a_window_that_waits_for_room() {
         // 13 frames of 1920 × 1080 (8.3 MB each, 108 MB) are over the hero's cap.
         let gif = animation::samples::apng(1920, 1080, 13, 60);
-        let played = play(ArtKind::Hero, &gif, usize::MAX, false);
+        let played = play(ArtKind::Hero, &gif, usize::MAX, false, None);
         assert_eq!(played.mode(), Some(Mode::Window));
         assert_eq!(played.frames(), WINDOW, "stops once the window is full");
         // Shown frames make room: it keeps going, past the end (looping).
-        let played = play(ArtKind::Hero, &gif, 20, true);
+        let played = play(ArtKind::Hero, &gif, 20, true, None);
         assert_eq!(played.frames(), 20);
+    }
+
+    #[test]
+    fn previews_stream_at_their_own_size() {
+        let gif = animation::samples::gif(400, 130, 3, 60);
+        let played = play(ArtKind::Hero, &gif, 5, true, Some((200, 100)));
+        assert_eq!(played.mode(), Some(Mode::Stream));
+        assert!(played.deliveries.iter().any(|d| matches!(
+            d,
+            Delivery::Frame { pixels, .. } if (pixels.width(), pixels.height()) == (200, 65)
+        )));
     }
 
     #[test]
@@ -406,7 +579,7 @@ mod tests {
         image::RgbaImage::new(8, 8)
             .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
             .unwrap();
-        let played = play(ArtKind::Hero, &png, usize::MAX, false);
+        let played = play(ArtKind::Hero, &png, usize::MAX, false, None);
         assert!(matches!(
             played.deliveries.as_slice(),
             [Delivery::Still { reason, .. }] if reason == "not animated"

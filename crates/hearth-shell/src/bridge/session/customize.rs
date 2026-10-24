@@ -30,7 +30,7 @@ const START_STEP: f32 = 1.0;
 /// Focus stays on an audio file this long before it plays.
 const PREVIEW_SETTLE: Duration = Duration::from_millis(500);
 /// Thumbnails are decoded this size (twice the largest tile, for sharpness).
-const THUMB_MAX: (u32, u32) = (720, 360);
+pub(super) const THUMB_MAX: (u32, u32) = (720, 360);
 
 /// The page's sections, in order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -116,6 +116,17 @@ pub(super) struct CustomizeState {
     busy: Option<(&'static str, Option<usize>)>,
 }
 
+/// What a tile of the strip shows.
+pub(super) enum StripItem {
+    /// The "In use" tile (the art in use isn't among the candidates).
+    InUse,
+    /// A SteamGridDB candidate: its thumbnail (the image itself when animated).
+    Candidate {
+        thumb: Option<PathBuf>,
+        animated: bool,
+    },
+}
+
 impl CustomizeState {
     /// True while `game`'s hero is being positioned.
     pub(super) fn positioning(&self, game: &GameId) -> bool {
@@ -131,6 +142,7 @@ pub(super) fn wire(app: &AppWindow) {
         defer(move |c| c.customize_section(&key));
     });
     data.on_pane_focused(|in_pane| defer(move |c| c.customize_pane(in_pane)));
+    data.on_candidate_focused(|index| defer(move |c| c.customize_strip_focused(index)));
     data.on_candidate(|index| {
         let index = usize::try_from(index).unwrap_or(0);
         defer(move |c| c.customize_candidate(index));
@@ -154,6 +166,25 @@ pub(super) fn wire(app: &AppWindow) {
     });
     data.on_files_closed(|| defer(Controller::customize_files_closed));
     data.on_closed(|| defer(Controller::customize_closed));
+}
+
+/// "27 MB".
+fn format_size(bytes: u64) -> String {
+    #[allow(clippy::cast_precision_loss)]
+    let mb = bytes as f64 / 1e6;
+    if mb >= 10.0 {
+        format!("{mb:.0} MB")
+    } else {
+        format!("{mb:.1} MB")
+    }
+}
+
+/// The art kind of an art section (the hero otherwise; only art sections have a strip).
+fn kind_of(section: Section) -> ArtKind {
+    match section {
+        Section::Art(kind) => kind,
+        Section::Theme | Section::Match => ArtKind::Hero,
+    }
 }
 
 /// "12 s", "1:05".
@@ -236,6 +267,8 @@ impl Controller {
         self.decode_current();
         self.fill_customize();
         self.keep_theme();
+        // Home stops; the page's background plays instead.
+        self.anim_sync();
         let index = SECTIONS.iter().position(|s| *s == section).unwrap_or(0);
         if let Some(app) = self.app.upgrade() {
             app.invoke_open_customize(i32::try_from(index).unwrap_or(0));
@@ -252,6 +285,8 @@ impl Controller {
         if self.preview.take().is_some() {
             self.sync_music(director::FADE_LAUNCH);
         }
+        self.customize_strip_focused(-1);
+        self.anim_sync();
     }
 
     fn customize_section(&mut self, key: &str) {
@@ -266,6 +301,7 @@ impl Controller {
         }
         state.section = section;
         state.in_pane = false;
+        self.customize_strip_focused(-1);
         self.request_candidates();
         self.decode_current();
         self.fill_customize();
@@ -699,6 +735,40 @@ impl Controller {
 
     // --- filling the page ------------------------------------------------------------
 
+    /// The game whose page is open.
+    pub(super) fn customize_game(&self) -> Option<GameId> {
+        self.customize.as_ref().map(|s| s.game.id.clone())
+    }
+
+    /// Strip tile `index` of the open section: the game's art key, the kind, what it shows.
+    pub(super) fn customize_strip_item(
+        &self,
+        index: usize,
+    ) -> Option<(ArtKey, ArtKind, StripItem)> {
+        let state = self.customize.as_ref()?;
+        let Section::Art(kind) = state.section else {
+            return None;
+        };
+        let item = if self.in_use_tile(state) {
+            match index.checked_sub(1) {
+                None => return Some((state.key.clone(), kind, StripItem::InUse)),
+                Some(i) => i,
+            }
+        } else {
+            index
+        };
+        let (items, _) = state.lists.get(&CandidateSet::Art(kind))?;
+        let listed = items.get(item)?;
+        Some((
+            state.key.clone(),
+            kind,
+            StripItem::Candidate {
+                thumb: listed.thumb.clone(),
+                animated: listed.animated,
+            },
+        ))
+    }
+
     fn current_art_path(&self) -> Option<PathBuf> {
         let state = self.customize.as_ref()?;
         let Section::Art(kind) = state.section else {
@@ -877,6 +947,12 @@ impl Controller {
                                 .and_then(|p| state.thumbs.get(p).cloned())
                                 .unwrap_or_default(),
                             current: i.current,
+                            animated: i.animated,
+                            // A size only where there's no preview to show (too big for one).
+                            size: match (i.animated, &i.thumb, i.size) {
+                                (true, None, Some(bytes)) => format_size(bytes).into(),
+                                _ => "".into(),
+                            },
                         })
                         .collect();
                     let note = note_for(set, *availability, shown.is_empty());
@@ -891,6 +967,12 @@ impl Controller {
                                 detail: "".into(),
                                 thumb: current_thumb.clone(),
                                 current: true,
+                                animated: self.display_settings.animates()
+                                    && self
+                                        .art_paths
+                                        .get(&state.game.id)
+                                        .is_some_and(|a| a.animated(kind_of(section)).is_some()),
+                                size: "".into(),
                             },
                         );
                     }

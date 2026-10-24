@@ -1,7 +1,7 @@
 import { Theme } from "../theme.slint";
 import { Icons } from "../icons.slint";
 import { UiAction, NavResult, Nav } from "../input.slint";
-import { CustomizeData, CustomSection, Candidate, CustomRow } from "../data.slint";
+import { CustomizeData, CustomSection, Candidate, CustomRow, AnimFrame } from "../data.slint";
 import { HintBar } from "../components/hint_bar.slint";
 import { ListRow } from "../components/list_row.slint";
 import { FocusRing } from "../components/focus.slint";
@@ -133,10 +133,39 @@ component CandidateStrip inherits Rectangle {
                 source: item.thumb;
                 image-fit: section == "logo" || section == "icon" ? contain : cover;
             }
+            // The focused animated candidate plays over its thumbnail.
+            if i == CustomizeData.strip-anim-index && CustomizeData.strip-anim.width > 0: Image {
+                width: parent.width;
+                height: parent.height;
+                source: CustomizeData.strip-anim;
+                source-clip-x: CustomizeData.strip-anim-frame.x;
+                source-clip-y: CustomizeData.strip-anim-frame.y;
+                source-clip-width: CustomizeData.strip-anim-frame.w > 0 ? CustomizeData.strip-anim-frame.w : CustomizeData.strip-anim.width;
+                source-clip-height: CustomizeData.strip-anim-frame.h > 0 ? CustomizeData.strip-anim-frame.h : CustomizeData.strip-anim.height;
+                image-fit: section == "logo" || section == "icon" ? contain : cover;
+                opacity: CustomizeData.strip-anim-on ? 1 : 0;
+                animate opacity { duration: Theme.fast; easing: ease-out; }
+            }
             if item.thumb.width == 0: Text {
-                text: "…";
-                font-size: Theme.heading;
-                color: Theme.text-disabled;
+                text: item.size != "" ? item.size : "…";
+                font-size: item.size != "" ? Theme.caption : Theme.heading;
+                color: item.size != "" ? Theme.text-secondary : Theme.text-disabled;
+            }
+            // Animated: a small play badge in the bottom-left corner.
+            if item.animated: Rectangle {
+                x: Theme.sp-8;
+                y: parent.height - self.height - Theme.sp-8;
+                width: 32px * Theme.scale;
+                height: self.width;
+                border-radius: self.width / 2;
+                background: #000000A0;
+                Image {
+                    x: (parent.width - self.width) / 2 + 1px * Theme.scale;
+                    width: parent.width * 0.5;
+                    height: self.width;
+                    source: Icons.play;
+                    colorize: Theme.text-primary;
+                }
             }
             // Being applied: a little darker, an ember dot breathing where the check goes.
             if i == busy-index: Rectangle {
@@ -302,6 +331,9 @@ export component CustomizeScreen inherits Rectangle {
         }
     }
     changed pane => { CustomizeData.pane-focused(pane == 1); }
+    // The strip tile focus rests on (-1 elsewhere): Rust plays it if it animates.
+    property <int> strip-focus: pane == 1 && on-strip && !files-open && !positioning && !fading ? strip-index : -1;
+    changed strip-focus => { CustomizeData.candidate-focused(strip-focus); }
 
     // Opens on section `section-index` (Rust knows which is which).
     public function open(section-index: int) {
@@ -450,6 +482,16 @@ export component CustomizeScreen inherits Rectangle {
         height: parent.height;
         source: CustomizeData.hero;
         position: CustomizeData.hero-x;
+    }
+    // The animated hero plays over its still, as on Home (also while positioning it).
+    if CustomizeData.hero.width > 0 && CustomizeData.hero-anim.width > 0: HeroImage {
+        width: parent.width;
+        height: parent.height;
+        source: CustomizeData.hero-anim;
+        frame: CustomizeData.hero-anim-frame;
+        position: CustomizeData.hero-x;
+        opacity: CustomizeData.hero-anim-on ? 1 : 0;
+        animate opacity { duration: Theme.base; easing: ease-out; }
     }
     Rectangle {
         background: #000000C8;

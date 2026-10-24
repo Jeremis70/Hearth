@@ -72,6 +72,15 @@ export struct WifiRow {
     connected: bool,
 }
 
+// Which part of an animation's image is the frame shown: a sprite sheet holds every frame and
+// flips by moving this (so it's uploaded once); `w == 0` means the whole image.
+export struct AnimFrame {
+    x: int,
+    y: int,
+    w: int,
+    h: int,
+}
+
 export global HomeData {
     in property <[HomeTile]> tiles;
     in property <GameProperties> properties;
@@ -93,10 +102,13 @@ export global HomeData {
     // still once the first is there, and out when it stops.
     in property <string> anim-id;
     in property <image> anim-hero;
+    in property <AnimFrame> anim-hero-frame;
     in property <bool> anim-hero-on;
     in property <image> anim-logo;
+    in property <AnimFrame> anim-logo-frame;
     in property <bool> anim-logo-on;
 }
+
 
 // One section of the Customize page (Cover, Hero, Logo, Icon, Theme music, Wrong game?):
 // key "grid" / "hero" / "logo" / "icon" / "theme" / "match"; status "Automatic", "Picked"…
@@ -112,6 +124,8 @@ export struct Candidate {
     detail: string,     // games: the search that found it
     thumb: image,       // empty while it loads
     current: bool,      // what is used now
+    animated: bool,     // an animated image (a badge on its tile)
+    size: string,       // "27 MB": an animated image too big to preview before it's picked
 }
 
 // An action row under the candidates ("file", "reset", "position", "start", "remove").
@@ -156,6 +170,17 @@ export global CustomizeData {
     // Focus entered (true) or left (false) the right pane (the theme previews meanwhile).
     callback pane-focused(/* in pane */ bool);
     callback candidate(/* index */ int);
+    // Focus rests on strip tile `index` (-1: focus isn't in the strip).
+    callback candidate-focused(/* index */ int);
+    // The focused tile's animation (`strip-anim-index`, -1 for none) and the background's
+    // (the hero in use), from Rust, like Home's.
+    in property <int> strip-anim-index: -1;
+    in property <image> strip-anim;
+    in property <AnimFrame> strip-anim-frame;
+    in property <bool> strip-anim-on;
+    in property <image> hero-anim;
+    in property <AnimFrame> hero-anim-frame;
+    in property <bool> hero-anim-on;
     callback row(/* key */ string);
     callback step(/* key */ string, /* -1 or 1 */ int);
     callback position-done(/* save */ bool);

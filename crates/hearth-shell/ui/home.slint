@@ -1,7 +1,7 @@
 import { Theme } from "theme.slint";
 import { Icons } from "icons.slint";
 import { UiAction, NavResult, Nav } from "input.slint";
-import { HomeData, HomeTile, TileKind, Session, Status } from "data.slint";
+import { HomeData, HomeTile, TileKind, Session, Status, AnimFrame } from "data.slint";
 import { Tile } from "components/tile.slint";
 import { TopBar } from "components/top_bar.slint";
 import { HButton } from "components/button.slint";
@@ -27,18 +27,26 @@ component Glow inherits Rectangle {
 
 // The hero full-bleed (cover), cropped at `position`: 0 shows its left edge, 1 its right edge
 // (heroes are about 3.1:1, the screen 16:9). Vertically centered.
+// `frame`: the part of `source` to show (an animation's sprite sheet), the whole by default.
 export component HeroImage inherits Rectangle {
     in property <image> source;
     in property <float> position: 0.5;
+    in property <AnimFrame> frame;
     clip: true;
 
-    property <float> scale: max(root.width / (source.width * 1px), root.height / (source.height * 1px));
+    property <int> frame-w: frame.w > 0 ? frame.w : source.width;
+    property <int> frame-h: frame.h > 0 ? frame.h : source.height;
+    property <float> scale: max(root.width / (frame-w * 1px), root.height / (frame-h * 1px));
     Image {
-        width: source.width * 1px * scale;
-        height: source.height * 1px * scale;
+        width: frame-w * 1px * scale;
+        height: frame-h * 1px * scale;
         x: (root.width - self.width) * clamp(position, 0, 1);
         y: (root.height - self.height) / 2;
         source: source;
+        source-clip-x: frame.x;
+        source-clip-y: frame.y;
+        source-clip-width: frame-w;
+        source-clip-height: frame-h;
         image-fit: fill;
     }
 }
@@ -50,6 +58,7 @@ export component Backdrop inherits Rectangle {
     in property <HomeTile> tile;
     // The animated hero's frames over the still, faded in while `anim-on`.
     in property <image> anim;
+    in property <AnimFrame> anim-frame;
     in property <bool> anim-on;
 
     if tile.hero.width == 0: Glow { }
@@ -63,6 +72,7 @@ export component Backdrop inherits Rectangle {
         width: root.width;
         height: root.height;
         source: anim;
+        frame: anim-frame;
         position: tile.hero-x;
         opacity: anim-on ? 1 : 0;
         animate opacity { duration: Theme.base; easing: ease-out; }
@@ -449,6 +459,7 @@ export component Home inherits Rectangle {
     Backdrop {
         tile: backdrop-a;
         anim: backdrop-a.id == HomeData.anim-id ? HomeData.anim-hero : @image-url("");
+        anim-frame: HomeData.anim-hero-frame;
         anim-on: HomeData.anim-hero-on && backdrop-a.id == HomeData.anim-id;
         opacity: show-a && tab == 0 ? 1 : 0;
         animate opacity { duration: Theme.slow; easing: ease-in-out; }
@@ -456,6 +467,7 @@ export component Home inherits Rectangle {
     Backdrop {
         tile: backdrop-b;
         anim: backdrop-b.id == HomeData.anim-id ? HomeData.anim-hero : @image-url("");
+        anim-frame: HomeData.anim-hero-frame;
         anim-on: HomeData.anim-hero-on && backdrop-b.id == HomeData.anim-id;
         opacity: !show-a && tab == 0 ? 1 : 0;
         animate opacity { duration: Theme.slow; easing: ease-in-out; }
@@ -564,6 +576,10 @@ export component Home inherits Rectangle {
             width: logo-box-width;
             height: logo-box-height;
             source: HomeData.anim-logo;
+            source-clip-x: HomeData.anim-logo-frame.x;
+            source-clip-y: HomeData.anim-logo-frame.y;
+            source-clip-width: HomeData.anim-logo-frame.w > 0 ? HomeData.anim-logo-frame.w : HomeData.anim-logo.width;
+            source-clip-height: HomeData.anim-logo-frame.h > 0 ? HomeData.anim-logo-frame.h : HomeData.anim-logo.height;
             image-fit: contain;
             horizontal-alignment: left;
             vertical-alignment: bottom;

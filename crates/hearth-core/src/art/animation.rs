@@ -663,9 +663,14 @@ impl std::fmt::Debug for FrameStream {
 impl FrameStream {
     /// Opens `source`, frames scaled into `class`'s bounds for `kind`.
     pub fn open(source: &Path, kind: ArtKind, class: DisplayClass) -> Result<Self, ImageError> {
+        Self::open_in(source, class.anim_bounds(kind))
+    }
+
+    /// Opens `source`, frames scaled into `bounds` (aspect kept, never enlarged).
+    pub fn open_in(source: &Path, bounds: (u32, u32)) -> Result<Self, ImageError> {
         Ok(Self {
             source: source.to_path_buf(),
-            bounds: class.anim_bounds(kind),
+            bounds,
             frames: frames(source)?,
             played: 0,
         })

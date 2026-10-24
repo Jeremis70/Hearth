@@ -9,7 +9,7 @@ use std::time::Duration;
 use serde::Deserialize;
 use ureq::Agent;
 
-use super::provider::{ArtKind, AssetRef, CatalogGame, MetadataProvider, ProviderError};
+use super::provider::{ArtKind, Asset, AssetRef, CatalogGame, MetadataProvider, ProviderError};
 
 const API: &str = "https://www.steamgriddb.com/api/v2";
 /// Square grids, our tile shape.
@@ -18,6 +18,8 @@ const SQUARE_GRIDS: &str = "512x512,1024x1024";
 const HERO_4K: &str = "3840x1240";
 /// Larger images aren't art anyone uploads on purpose.
 const MAX_DOWNLOAD: u64 = 30 * 1024 * 1024;
+/// How many images of one kind are offered to choose from.
+const MAX_CANDIDATES: usize = 24;
 
 /// The real provider. Holds the API key; never log it.
 pub struct SteamGridDb {
@@ -46,7 +48,11 @@ struct SearchHit {
 
 #[derive(Debug, Clone, Deserialize)]
 struct Image {
+    #[serde(default)]
+    id: u64,
     url: String,
+    #[serde(default)]
+    thumb: String,
     #[serde(default)]
     score: i64,
     #[serde(default)]
@@ -161,6 +167,16 @@ impl MetadataProvider for SteamGridDb {
         }))
     }
 
+    fn assets(&self, id: u64, kind: ArtKind) -> Result<Vec<Asset>, ProviderError> {
+        let mut images = self.images(id, kind, None)?;
+        // Best first: the highest score (the API's order breaks ties); grids square first,
+        // as Home shows them square.
+        let squarish = |i: &Image| kind != ArtKind::Grid || (i.width > 0 && i.width == i.height);
+        images.sort_by_key(|i| (!squarish(i), std::cmp::Reverse(i.score)));
+        images.truncate(MAX_CANDIDATES);
+        Ok(images.into_iter().map(asset).collect())
+    }
+
     fn download(&self, asset: &AssetRef) -> Result<Vec<u8>, ProviderError> {
         // Image URLs are on SteamGridDB's CDN: no key needed, so don't send it.
         let mut response = self
@@ -241,6 +257,27 @@ fn closest_to_square(images: Vec<Image>) -> Option<Image> {
     )
 }
 
+fn asset(image: Image) -> Asset {
+    let thumb_url = if image.thumb.is_empty() {
+        image.url.clone()
+    } else {
+        image.thumb.clone()
+    };
+    Asset {
+        id: image.id,
+        thumb: AssetRef {
+            extension: extension("", &thumb_url),
+            url: thumb_url,
+        },
+        full: AssetRef {
+            extension: extension(&image.mime, &image.url),
+            url: image.url,
+        },
+        width: image.width,
+        height: image.height,
+    }
+}
+
 fn extension(mime: &str, url: &str) -> String {
     match mime {
         "image/png" => "png".into(),
@@ -273,7 +310,9 @@ mod tests {
 
     fn image(url: &str, score: i64, width: u32, height: u32) -> Image {
         Image {
+            id: 0,
             url: url.into(),
+            thumb: String::new(),
             score,
             width,
             height,
@@ -344,6 +383,9 @@ mod tests {
         let envelope: Envelope<Image> = serde_json::from_str(json).unwrap();
         assert!(envelope.success);
         assert_eq!(envelope.data[0].width, 512);
+        let offered = asset(envelope.data[0].clone());
+        assert_eq!((offered.id, offered.thumb.url.as_str()), (5, "t"));
+        assert_eq!(offered.full.extension, "png");
         let hits: Envelope<SearchHit> = serde_json::from_str(
             r#"{"success":true,"data":[{"id":1,"name":"Pikmin","types":["steam"],"verified":true}]}"#,
         )

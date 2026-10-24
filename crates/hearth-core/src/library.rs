@@ -67,6 +67,17 @@ pub enum ArtStatus {
     NoMatch,
 }
 
+/// A SteamGridDB game the matcher found for an art key (for "Wrong game?").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtCandidate {
+    /// SteamGridDB game id.
+    pub sgdb_id: u64,
+    /// Its name there.
+    pub name: String,
+    /// The search that found it (the ROM header's name or the file name).
+    pub query: String,
+}
+
 /// A key waiting for the network.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueuedArt {
@@ -109,7 +120,7 @@ impl Library {
             );",
         )?;
         // Schema version 0: games only; 1: favorites, art keys, art result and queue tables;
-        // 2: the game's own folder.
+        // 2: the game's own folder; 3: the matcher's candidates.
         // The version is read under the write lock, so two threads opening the database at
         // once (library and art worker) don't both migrate.
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -139,6 +150,19 @@ impl Library {
             tx.execute_batch(
                 "ALTER TABLE games ADD COLUMN folder TEXT;
                  PRAGMA user_version = 2;",
+            )?;
+        }
+        if version < 3 {
+            tx.execute_batch(
+                "CREATE TABLE IF NOT EXISTS art_candidates (
+                     art_key TEXT NOT NULL,
+                     rank INTEGER NOT NULL,
+                     sgdb_id INTEGER NOT NULL,
+                     name TEXT NOT NULL,
+                     query TEXT NOT NULL,
+                     PRIMARY KEY (art_key, sgdb_id)
+                 );
+                 PRAGMA user_version = 3;",
             )?;
         }
         tx.commit()?;
@@ -353,7 +377,55 @@ impl Library {
     pub fn forget_art(&self, key: &ArtKey) -> Result<(), LibraryError> {
         self.conn
             .execute("DELETE FROM art WHERE art_key = ?1", [key.as_str()])?;
+        self.conn.execute(
+            "DELETE FROM art_candidates WHERE art_key = ?1",
+            [key.as_str()],
+        )?;
         self.dequeue_art(key)
+    }
+
+    /// Replaces the games the matcher found for `key` (best first; repeats of one game keep
+    /// the first).
+    pub fn set_art_candidates(
+        &self,
+        key: &ArtKey,
+        candidates: &[ArtCandidate],
+    ) -> Result<(), LibraryError> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "DELETE FROM art_candidates WHERE art_key = ?1",
+            [key.as_str()],
+        )?;
+        for (rank, candidate) in candidates.iter().enumerate() {
+            tx.execute(
+                "INSERT OR IGNORE INTO art_candidates (art_key, rank, sgdb_id, name, query)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    key.as_str(),
+                    i64::try_from(rank).unwrap_or(i64::MAX),
+                    i64::try_from(candidate.sgdb_id).unwrap_or(i64::MAX),
+                    candidate.name,
+                    candidate.query
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// The games the matcher found for `key`, best first.
+    pub fn art_candidates(&self, key: &ArtKey) -> Result<Vec<ArtCandidate>, LibraryError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT sgdb_id, name, query FROM art_candidates WHERE art_key = ?1 ORDER BY rank",
+        )?;
+        let rows = stmt.query_map([key.as_str()], |r| {
+            Ok(ArtCandidate {
+                sgdb_id: u64::try_from(r.get::<_, i64>(0)?).unwrap_or(0),
+                name: r.get(1)?,
+                query: r.get(2)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<_, _>>()?)
     }
 
     /// Puts `key` on the queue after a network or HTTP error, or bumps its attempt count;
@@ -634,6 +706,41 @@ mod tests {
         assert_eq!(lib.art_status(&key).unwrap(), Some(ArtStatus::NoMatch));
         lib.forget_art(&key).unwrap();
         assert_eq!(lib.art_status(&key).unwrap(), None);
+    }
+
+    #[test]
+    fn candidates_keep_their_order_and_go_with_the_art() {
+        let dir = tempdir();
+        let lib = Library::open(&dir.path().join("l.sqlite3")).unwrap();
+        let key = ArtKey::from_stored("n64/CZLE");
+        let found = |id, name: &str, query: &str| ArtCandidate {
+            sgdb_id: id,
+            name: name.into(),
+            query: query.into(),
+        };
+        lib.set_art_candidates(
+            &key,
+            &[
+                found(9, "Ocarina of Time", "THE LEGEND OF ZELDA"),
+                found(3, "Zelda", "THE LEGEND OF ZELDA"),
+                found(
+                    9,
+                    "Ocarina of Time",
+                    "Legend of Zelda, The - Ocarina of Time",
+                ),
+                found(1, "Majora", "Legend of Zelda, The - Ocarina of Time"),
+            ],
+        )
+        .unwrap();
+        let ids: Vec<u64> = lib
+            .art_candidates(&key)
+            .unwrap()
+            .iter()
+            .map(|c| c.sgdb_id)
+            .collect();
+        assert_eq!(ids, [9, 3, 1]);
+        lib.forget_art(&key).unwrap();
+        assert!(lib.art_candidates(&key).unwrap().is_empty());
     }
 
     #[test]

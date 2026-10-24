@@ -70,6 +70,11 @@ struct Args {
     /// keep cached art or placeholders and wait in the needs-art queue.
     #[arg(long)]
     mock_network: bool,
+    /// A fake SteamGridDB: `fixtures` matches every game and offers several generated images
+    /// of each kind. Only with a throwaway HEARTH_HOME (one holding a `.throwaway` file, as
+    /// made by scripts/test-home.sh), so fixture art never mixes with real art.
+    #[arg(long, value_enum, value_name = "MOCK")]
+    mock_sgdb: Option<MockSgdb>,
     /// No sound output (tests, headless runs); the audio engine still runs. Same as
     /// HEARTH_AUDIO=null.
     #[arg(long)]
@@ -82,9 +87,30 @@ fn assets_dir() -> PathBuf {
     PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets"))
 }
 
-/// The artwork provider: SteamGridDB with an API key, a mock with `--mock-network`, else
-/// none (placeholders, logged once by the art worker).
-fn art_provider(mock_network: bool, config: &Config) -> Option<Box<dyn MetadataProvider>> {
+/// `HEARTH_HOME` is set and marked as disposable test data.
+fn is_throwaway_home() -> bool {
+    std::env::var_os(paths::HEARTH_HOME_ENV)
+        .is_some_and(|home| PathBuf::from(home).join(".throwaway").is_file())
+}
+
+/// Fake SteamGridDB providers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum MockSgdb {
+    /// Generated candidates for every game.
+    Fixtures,
+}
+
+/// The artwork provider: SteamGridDB with an API key, a mock with `--mock-network` or
+/// `--mock-sgdb`, else none (placeholders, logged once by the art worker).
+fn art_provider(
+    mock_network: bool,
+    mock_sgdb: Option<MockSgdb>,
+    config: &Config,
+) -> Option<Box<dyn MetadataProvider>> {
+    if mock_sgdb == Some(MockSgdb::Fixtures) {
+        tracing::info!("--mock-sgdb=fixtures: generated artwork candidates");
+        return Some(Box::new(MockMetadataProvider::fixtures()));
+    }
     if mock_network {
         tracing::info!("--mock-network: artwork comes from the cache only");
         return Some(Box::new(MockMetadataProvider::offline()));
@@ -178,6 +204,12 @@ fn main() -> anyhow::Result<()> {
     bridge::frames::init();
 
     let dirs = DataDirs::from_env().context("resolving data directories")?;
+    if args.mock_sgdb.is_some() && !is_throwaway_home() {
+        anyhow::bail!(
+            "--mock-sgdb needs a throwaway HEARTH_HOME (with a .throwaway file; see \
+             scripts/test-home.sh), so fixture art never lands in real data"
+        );
+    }
     dirs.create_all()?;
     tracing::info!(data = %dirs.data().display(), "using data directories");
     let games_dir = args
@@ -304,7 +336,7 @@ fn main() -> anyhow::Result<()> {
             .and_then(|name| DisplayClass::from_name(&name))
             .unwrap_or_default(),
         display_class_file: display_class_file(&dirs),
-        art_provider: art_provider(args.mock_network, &config),
+        art_provider: art_provider(args.mock_network, args.mock_sgdb, &config),
         icons,
         config_file: dirs.config_file(),
         config_problem,

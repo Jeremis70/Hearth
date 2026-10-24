@@ -13,6 +13,8 @@
 #   HEARTH_GS_ARGS="..."    extra gamescope flags, e.g. "--backend sdl"
 #   HEARTH_GS_RELEASE=1     run the optimised build (target/release); day to day:
 #                           HEARTH_GS_RELEASE=1 HEARTH_GS_FULLSCREEN=1 scripts/run-gamescope.sh
+#   HEARTH_HOME=dir         Hearth's data (default ./.dev-data; scripts/test-home.sh sets a
+#                           throwaway one)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -45,5 +47,5 @@ fi
 cargo build "${build_args[@]}"
 echo "gamescope ${gamescope_args[*]} ($profile build)" >&2
 exec gamescope "${gamescope_args[@]}" -- \
-    env -u WAYLAND_DISPLAY HEARTH_HOME=./.dev-data \
+    env -u WAYLAND_DISPLAY HEARTH_HOME="${HEARTH_HOME:-./.dev-data}" \
     "target/$profile/hearth-shell" --fullscreen "$@"

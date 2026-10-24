@@ -24,7 +24,7 @@ use super::identity::{ArtKey, Identity, identify, pick_match};
 use super::provider::{ArtKind, MetadataProvider, ProviderError};
 use crate::custom::CustomStore;
 use crate::extras::Extras;
-use crate::library::{ArtStatus, Library, LibraryError, RemovedGame};
+use crate::library::{ArtCandidate, ArtStatus, Library, LibraryError, RemovedGame};
 use crate::model::{Game, GameId};
 
 /// How often the queue is looked at while Hearth runs.
@@ -315,12 +315,22 @@ impl Worker {
             } => (sgdb_id, sgdb_name, kinds),
             Job::Full => {
                 let mut found = None;
+                let mut considered = Vec::new();
                 for name in &known.identity.search_names {
                     let results = provider.search(name)?;
+                    considered.extend(results.iter().map(|g| ArtCandidate {
+                        sgdb_id: g.id,
+                        name: g.name.clone(),
+                        query: name.clone(),
+                    }));
                     if let Some(hit) = pick_match(&results, name, |g| g.name.as_str()) {
                         found = Some(hit.clone());
                         break;
                     }
+                }
+                // Kept for "Wrong game?".
+                if let Err(err) = self.library.set_art_candidates(key, &considered) {
+                    tracing::warn!("can't save the match candidates of {key}: {err}");
                 }
                 let Some(hit) = found else {
                     tracing::info!(
@@ -593,6 +603,13 @@ mod tests {
             oot_match.as_deref(),
             Some("The Legend of Zelda: Ocarina of Time")
         );
+        // What the matcher saw is kept for "Wrong game?".
+        let considered = worker
+            .library
+            .art_candidates(&ArtKey::from_stored("n64/CZLE"))
+            .unwrap();
+        assert!(considered.iter().any(|c| c.sgdb_id == 1));
+        assert!(considered.iter().any(|c| c.sgdb_id == 2));
         let (hb, _) = last_art(&events, "hb");
         assert!(hb.is_empty());
         assert_eq!(
@@ -747,6 +764,13 @@ mod tests {
                 });
             }
             self.0.best_asset(id, kind)
+        }
+        fn assets(
+            &self,
+            id: u64,
+            kind: ArtKind,
+        ) -> Result<Vec<crate::art::provider::Asset>, ProviderError> {
+            self.0.assets(id, kind)
         }
         fn download(
             &self,

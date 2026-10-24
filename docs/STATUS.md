@@ -70,10 +70,11 @@ Round C.1 (per-game customization), 2026-10-23, oldest first:
   only), the controller (dev socket only), the real SteamGridDB inside Hearth (only through
   `art_probe`), the Game themes-off warning line (code path only), a long title without a
   logo in the header after the fix.
-- `.dev-data/games` links point at `~/Games/<system>/<rom>`, but the user moved the ROMs into
-  `~/Games/<system>/<title>/` (21:04): the dev games root has no OoT/TP now. Left as is; the
-  test runs use `.dev-data/test-games` (links to the new places, empty dummies, a copy of
-  OoT's `theme.ogg`).
+- `.dev-data/games` (2026-10-24): the OoT and TP folders hold links to the ROMs and the real
+  `theme.mp3` in `~/Games/<system>/<title>/`, next to the 15 dummies; `theme_probe` finds both
+  games and both folder themes. The 8 s test theme is now `.dev-data/downloads/OoT test
+  theme.ogg`. The test runs use `.dev-data/test-games` (links to the new places, empty
+  dummies, a copy of the test `theme.ogg`).
 
 Round B (audio), 2026-10-23, oldest first:
 - `3efe5e6`: `pack.toml` `[sounds]` (logical name → file inside the pack) and

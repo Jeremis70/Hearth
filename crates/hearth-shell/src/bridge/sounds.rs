@@ -67,6 +67,7 @@ pub fn sound_file(resolved: Resolved) -> SoundFile {
             Origin::Default => "default".into(),
         },
         loop_spec: resolved.loop_spec,
+        auto_loop: None,
         gain_db: resolved.gain_db,
     }
 }

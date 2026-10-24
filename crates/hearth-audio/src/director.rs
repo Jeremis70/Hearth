@@ -43,18 +43,23 @@ pub struct Scene<'a> {
     pub ambient: Option<&'a SoundFile>,
     /// The theme of the game focused (and settled) on Home.
     pub focused_theme: Option<&'a SoundFile>,
+    /// A file previewed on the Customize page: wins outside a running game and the overlay,
+    /// even with game themes off (it was asked for).
+    pub preview: Option<&'a SoundFile>,
     pub music_in_overlay: bool,
     pub game_themes: bool,
 }
 
 /// The music for a scene.
 pub fn choose(scene: &Scene<'_>) -> Option<Music> {
+    let track = |kind: &str, file: &SoundFile| Music {
+        key: track_key(kind, file),
+        file: file.clone(),
+        resume: false,
+    };
     let theme = |file: Option<&SoundFile>| {
-        file.filter(|_| scene.game_themes).map(|file| Music {
-            key: format!("theme:{}", file.path.display()),
-            file: file.clone(),
-            resume: false,
-        })
+        file.filter(|_| scene.game_themes)
+            .map(|file| track("theme", file))
     };
     let ambient = || {
         scene.ambient.map(|file| Music {
@@ -72,7 +77,19 @@ pub fn choose(scene: &Scene<'_>) -> Option<Music> {
         }
         return ambient();
     }
+    if let Some(preview) = scene.preview {
+        return Some(track("preview", preview));
+    }
     theme(scene.focused_theme).or_else(ambient)
+}
+
+/// `theme:<path>`, plus `@<ms>` for a "Start at" offset (a new offset is a new track, so it
+/// restarts there).
+fn track_key(kind: &str, file: &SoundFile) -> String {
+    match file.auto_loop.as_ref().map(|a| a.offset_ms) {
+        Some(offset) if offset > 0 => format!("{kind}:{}@{offset}", file.path.display()),
+        _ => format!("{kind}:{}", file.path.display()),
+    }
 }
 
 /// Sends the engine the music for each new scene, with the right fade.
@@ -121,6 +138,7 @@ mod tests {
             path: name.into(),
             origin: "test".into(),
             loop_spec: None,
+            auto_loop: None,
             gain_db: 0,
         }
     }
@@ -134,6 +152,7 @@ mod tests {
             overlay: false,
             ambient: Some(&ambient),
             focused_theme: None,
+            preview: None,
             music_in_overlay: true,
             game_themes: true,
         };
@@ -192,6 +211,36 @@ mod tests {
                 ..overlay
             }),
             None
+        );
+        // A preview wins on Hearth's screens, even with themes off, but never over a game or
+        // in the overlay; a new start offset is a new track.
+        let mut song = file("song.mp3");
+        let previewing = Scene {
+            preview: Some(&song),
+            game_themes: false,
+            ..focused
+        };
+        assert_eq!(key(&previewing).as_deref(), Some("preview:song.mp3"));
+        assert_eq!(
+            key(&Scene {
+                overlay: true,
+                game: GameScene::Frozen,
+                ..previewing
+            })
+            .as_deref(),
+            Some("ambient")
+        );
+        song.auto_loop = Some(crate::AutoLoop {
+            offset_ms: 12_000,
+            cache_dir: None,
+        });
+        assert_eq!(
+            key(&Scene {
+                preview: Some(&song),
+                ..home
+            })
+            .as_deref(),
+            Some("preview:song.mp3@12000")
         );
         // No ambient anywhere: silence rather than an error.
         assert_eq!(

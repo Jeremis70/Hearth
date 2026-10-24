@@ -121,6 +121,9 @@ pub struct LoopSpec {
     pub end_ms: Option<u64>,
     /// How long the end fades into the start.
     pub crossfade_ms: u32,
+    /// Where the first play starts (ms; later passes start at `start_ms`). Themes skip their
+    /// leading silence with it.
+    pub intro_ms: u64,
 }
 
 impl LoopToml {
@@ -130,6 +133,7 @@ impl LoopToml {
             start_ms: self.start.map(ms).unwrap_or(0),
             end_ms: self.end.map(ms),
             crossfade_ms: self.crossfade_ms.unwrap_or(0),
+            intro_ms: 0,
         }
     }
 }
@@ -491,7 +495,8 @@ mod tests {
             Some(LoopSpec {
                 start_ms: 1000,
                 end_ms: Some(884_400),
-                crossfade_ms: 2000
+                crossfade_ms: 2000,
+                intro_ms: 0,
             })
         );
         assert_eq!(ambient.gain_db, -24, "music gain, clamped");

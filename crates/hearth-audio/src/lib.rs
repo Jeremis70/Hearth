@@ -12,6 +12,7 @@
 //! Crates: cpal (output), symphonia (decoding, MPL-2.0), rubato (resampling), rtrb (lock-free
 //! queues into the callback).
 
+pub mod analyze;
 mod decode;
 pub mod director;
 mod engine;
@@ -30,6 +31,7 @@ use std::time::{Duration, Instant};
 use hearth_core::packs::LoopSpec;
 use serde::Serialize;
 
+pub use analyze::{Analysis, AutoLoop};
 pub use gain::volume_to_gain;
 #[doc(hidden)]
 pub use stream::loop_seam;
@@ -63,6 +65,9 @@ pub struct SoundFile {
     /// Loop points (music only).
     #[serde(skip)]
     pub loop_spec: Option<LoopSpec>,
+    /// Loop it by analysing it instead ([`analyze`]; themes). Wins over `loop_spec`.
+    #[serde(skip)]
+    pub auto_loop: Option<AutoLoop>,
     /// Gain correction in dB (a pack's `[gain]`), on top of the volumes.
     pub gain_db: i32,
 }

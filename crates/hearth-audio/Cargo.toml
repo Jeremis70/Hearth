@@ -13,6 +13,7 @@ rtrb = "0.4"
 rubato = "5"
 symphonia = { version = "0.6", default-features = false, features = ["ogg", "vorbis", "wav", "pcm", "flac", "mp3"] }
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 

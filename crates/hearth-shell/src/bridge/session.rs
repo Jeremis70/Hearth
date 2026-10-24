@@ -677,6 +677,7 @@ impl Controller {
             path: theme.path,
             origin: theme.source.to_owned(),
             loop_spec: None,
+            auto_loop: None,
             gain_db: 0,
         })
     }
@@ -720,6 +721,7 @@ impl Controller {
             overlay: self.mode == Mode::Overlay,
             ambient: self.ambient.as_ref(),
             focused_theme: self.focused_theme.as_ref(),
+            preview: None,
             music_in_overlay: self.audio_settings.music_in_overlay,
             game_themes: self.audio_settings.game_themes,
         };

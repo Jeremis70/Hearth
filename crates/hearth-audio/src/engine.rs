@@ -249,8 +249,12 @@ impl Engine {
     fn start_track(&mut self, music: Music, frames: u32) {
         let id = self.next_id;
         self.next_id += 1;
-        let (stream, ring) =
-            MusicStream::start(music.file.path.clone(), music.file.loop_spec, self.rate);
+        let (stream, ring) = MusicStream::start(
+            music.file.path.clone(),
+            music.file.loop_spec,
+            music.file.auto_loop.clone(),
+            self.rate,
+        );
         tracing::info!(key = %music.key, path = %music.file.path.display(), origin = %music.file.origin, "music");
         self.command(Command::Music { id, ring });
         self.command(Command::Fade {
@@ -514,6 +518,7 @@ mod tests {
                     path,
                     origin: "test".into(),
                     loop_spec: None,
+                    auto_loop: None,
                     gain_db: 0,
                 },
                 resume: true,
@@ -580,6 +585,7 @@ mod tests {
             path: path.to_path_buf(),
             origin: "test".into(),
             loop_spec: None,
+            auto_loop: None,
             gain_db: 0,
         };
         audio.set_sounds(vec![

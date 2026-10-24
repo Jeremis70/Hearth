@@ -24,6 +24,8 @@ pub(crate) struct Decoder {
     decoder: Box<dyn AudioDecoder>,
     track_id: u32,
     rate: u32,
+    /// Playable frames, when the container says.
+    frames: Option<u64>,
     /// Scratch for one packet in the file's channel layout.
     scratch: Vec<f32>,
 }
@@ -65,12 +67,14 @@ impl Decoder {
             .make_audio_decoder(params, &AudioDecoderOptions::default().gapless(true))
             .map_err(|e| err(e.to_string()))?;
         let track_id = track.id;
+        let frames = track.num_frames;
         Ok(Self {
             path: path.to_path_buf(),
             format,
             decoder,
             track_id,
             rate,
+            frames,
             scratch: Vec::new(),
         })
     }
@@ -144,4 +148,32 @@ pub(crate) fn decode_all(path: &Path, max_frames: usize) -> Result<(Vec<f32>, u3
     while out.len() / 2 < max_frames && decoder.next_into(&mut out)? > 0 {}
     out.truncate(max_frames * 2);
     Ok((out, decoder.rate()))
+}
+
+/// How long `path` plays: from its header, else by adding up its packets (read, not decoded;
+/// audio packet durations are in frames for every format Hearth reads).
+pub(crate) fn duration(path: &Path) -> Result<std::time::Duration, AudioError> {
+    let mut decoder = Decoder::open(path)?;
+    let frames = match decoder.frames {
+        Some(frames) => frames,
+        None => {
+            let mut total = 0u64;
+            loop {
+                match decoder.format.next_packet() {
+                    Ok(Some(packet)) if packet.track_id == decoder.track_id => {
+                        total += packet
+                            .dur
+                            .get()
+                            .saturating_sub(packet.trim_start.get() + packet.trim_end.get());
+                    }
+                    Ok(Some(_)) => {}
+                    Ok(None) | Err(_) => break,
+                }
+            }
+            total
+        }
+    };
+    Ok(std::time::Duration::from_secs_f64(
+        frames as f64 / f64::from(decoder.rate),
+    ))
 }

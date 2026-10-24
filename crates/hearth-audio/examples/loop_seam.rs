@@ -1,7 +1,8 @@
 //! Renders the seconds around a track's loop seam to a WAV and prints levels, to check loop
 //! points without listening to the whole track:
 //! `cargo run --release -p hearth-audio --example loop_seam -- <file> <start> <end> <crossfade_ms> <out.wav>`
-//! (start/end in seconds; `-` for none).
+//! (start/end in seconds; `-` for none), or with the points a theme gets automatically:
+//! `… loop_seam -- <file> auto <out.wav>`.
 
 use std::path::Path;
 
@@ -9,15 +10,28 @@ use hearth_core::packs::LoopSpec;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let [file, start, end, crossfade, out] = &args[..] else {
-        eprintln!("usage: loop_seam <file> <start> <end> <crossfade_ms> <out.wav>");
-        std::process::exit(2);
-    };
-    let secs = |s: &str| s.parse::<f64>().ok().map(|v| (v * 1000.0) as u64);
-    let spec = LoopSpec {
-        start_ms: secs(start).unwrap_or(0),
-        end_ms: secs(end),
-        crossfade_ms: crossfade.parse().unwrap_or(0),
+    let (file, spec, out) = match &args[..] {
+        [file, auto, out] if auto == "auto" => {
+            let analysis = hearth_audio::analyze::analyze(Path::new(file)).expect("analysing");
+            println!("analysis (ms): {analysis:?}");
+            (file, analysis.theme_loop(0), out)
+        }
+        [file, start, end, crossfade, out] => {
+            let secs = |s: &str| s.parse::<f64>().ok().map(|v| (v * 1000.0) as u64);
+            let spec = LoopSpec {
+                start_ms: secs(start).unwrap_or(0),
+                end_ms: secs(end),
+                crossfade_ms: crossfade.parse().unwrap_or(0),
+                intro_ms: 0,
+            };
+            (file, spec, out)
+        }
+        _ => {
+            eprintln!(
+                "usage: loop_seam <file> <start> <end> <crossfade_ms> <out.wav> | <file> auto <out.wav>"
+            );
+            std::process::exit(2);
+        }
     };
     let (samples, rate, seam) =
         hearth_audio::loop_seam(Path::new(file), Some(spec), 5.0).expect("decoding");

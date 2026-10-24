@@ -749,7 +749,7 @@ impl<'a> Migrator<'a> {
         user.ensure()?;
         let legacy = self.legacy();
         if exists(&legacy.db) {
-            Library::open(&legacy.db)?;
+            Library::open_upgrading(&legacy.db)?;
         }
         let stale = scan_stale(&user.emulators(), &legacy.names)?;
         let (backed_up_files, backed_up_bytes, not_backed_up, unattributed) = match plan {

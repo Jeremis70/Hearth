@@ -32,6 +32,10 @@ pub enum LibraryError {
     /// SQLite failed.
     #[error("library database error: {0}")]
     Sqlite(#[from] rusqlite::Error),
+    /// The library is from before profiles and holds games: only the move into profiles
+    /// (`crate::users::migrate`, after its backup) may upgrade it.
+    #[error("the library is from before profiles; it is upgraded by the move into profiles")]
+    NeedsProfileUpgrade,
 }
 
 /// A game plus one profile's play history.
@@ -111,7 +115,22 @@ pub struct Library {
 
 impl Library {
     /// Opens (creating if needed) the database at `path`.
+    ///
+    /// A library from before profiles (version < 4) that holds games is refused
+    /// ([`LibraryError::NeedsProfileUpgrade`]) and left untouched: its history moves to the
+    /// default profile only through the migration, which backs it up first
+    /// ([`Library::open_upgrading`]).
     pub fn open(path: &Path) -> Result<Self, LibraryError> {
+        Self::open_with(path, false)
+    }
+
+    /// Like [`Library::open`], also upgrading a library from before profiles (its history
+    /// goes to the default profile). For the migration, after its backup.
+    pub fn open_upgrading(path: &Path) -> Result<Self, LibraryError> {
+        Self::open_with(path, true)
+    }
+
+    fn open_with(path: &Path, profile_upgrade: bool) -> Result<Self, LibraryError> {
         let mut conn = Connection::open(path)?;
         conn.busy_timeout(Duration::from_secs(5))?;
         conn.execute_batch(
@@ -172,6 +191,11 @@ impl Library {
             )?;
         }
         if version < 4 {
+            let games: i64 = tx.query_row("SELECT COUNT(*) FROM games", [], |r| r.get(0))?;
+            if games > 0 && !profile_upgrade {
+                // Dropping the transaction rolls back the earlier steps too.
+                return Err(LibraryError::NeedsProfileUpgrade);
+            }
             tx.execute_batch(
                 "CREATE TABLE IF NOT EXISTS profile_games (
                      profile_id TEXT NOT NULL,
@@ -764,7 +788,7 @@ mod tests {
             )
             .unwrap();
         }
-        let lib = Library::open(&path).unwrap();
+        let lib = Library::open_upgrading(&path).unwrap();
         let entries = lib.recent(&ProfileId::default()).unwrap();
         assert_eq!(entries[0].playtime, Duration::from_secs(60));
         assert!(!entries[0].favorite);
@@ -890,7 +914,7 @@ mod tests {
         let threads: Vec<_> = (0..4)
             .map(|_| {
                 let path = path.clone();
-                std::thread::spawn(move || Library::open(&path).map(|_| ()))
+                std::thread::spawn(move || Library::open_upgrading(&path).map(|_| ()))
             })
             .collect();
         for t in threads {
@@ -929,7 +953,7 @@ mod tests {
         let dir = tempdir();
         let path = dir.path().join("l.sqlite3");
         version_3_db(&path);
-        let lib = Library::open(&path).unwrap();
+        let lib = Library::open_upgrading(&path).unwrap();
         let default = ProfileId::default();
         let entries = lib.recent(&default).unwrap();
         let summary: Vec<_> = entries
@@ -1038,5 +1062,26 @@ mod tests {
             )
             .unwrap();
         assert_eq!(rows, 0);
+    }
+
+    #[test]
+    fn a_library_from_before_profiles_is_only_upgraded_by_the_migration() {
+        let dir = tempdir();
+        let path = dir.path().join("l.sqlite3");
+        version_3_db(&path);
+        assert!(matches!(
+            Library::open(&path),
+            Err(LibraryError::NeedsProfileUpgrade)
+        ));
+        let conn = Connection::open(&path).unwrap();
+        let version: i32 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 3, "left untouched");
+        drop(conn);
+        Library::open_upgrading(&path).unwrap();
+        assert!(Library::open(&path).is_ok());
+        // A new, empty library needs no migration.
+        assert!(Library::open(&dir.path().join("new.sqlite3")).is_ok());
     }
 }

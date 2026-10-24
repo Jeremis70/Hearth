@@ -706,7 +706,6 @@ impl Controller {
 
     /// Tells the music director what Hearth shows now (see `hearth_audio::director`).
     fn sync_music(&mut self, silence_fade: Duration) {
-        let running_theme = self.active.as_ref().and_then(|a| self.theme_of(&a.game));
         let game = match &self.active {
             None => GameScene::None,
             Some(active) if active.frozen => GameScene::Frozen,
@@ -717,7 +716,6 @@ impl Controller {
             overlay: self.mode == Mode::Overlay,
             ambient: self.ambient.as_ref(),
             focused_theme: self.focused_theme.as_ref(),
-            running_theme: running_theme.as_ref(),
             music_in_overlay: self.audio_settings.music_in_overlay,
             game_themes: self.audio_settings.game_themes,
         };

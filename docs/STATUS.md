@@ -80,6 +80,8 @@ Round B (audio), 2026-10-23, oldest first:
     cached art with `--mock-network`; OoT's `theme.ogg` played from its folder.
   - Only the test theme in `.dev-data/games` and the user's TP `-theme.mp3` used the old
     names; no local art files existed.
+- The overlay plays the ambient, never the running game's theme (user's call: it's brief,
+  and a theme would restart from the top at every Guide press).
 - Not verified (the user's to do): hearing it (nothing here was listened to); real
   controller input (dev socket only, so the pad's own path isn't in the latency numbers);
   turning the TV/HDMI off and on or switching the output device (not allowed here: only

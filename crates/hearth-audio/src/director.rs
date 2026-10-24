@@ -3,8 +3,8 @@
 //!
 //! - A game running and not frozen (playing, starting, or left running because its suspend
 //!   policy is off): silence. The game is the one making sound.
-//! - The overlay over a frozen game: only with "Music in overlay"; that game's theme if it has
-//!   one (and "Game themes" is on), else the ambient.
+//! - The overlay over a frozen game: the ambient, only with "Music in overlay" (it carries on
+//!   where it left off; game themes belong to browsing Home).
 //! - Hearth's screens: the settled focused game's theme (with "Game themes"), else the ambient.
 
 use std::time::Duration;
@@ -43,8 +43,6 @@ pub struct Scene<'a> {
     pub ambient: Option<&'a SoundFile>,
     /// The theme of the game focused (and settled) on Home.
     pub focused_theme: Option<&'a SoundFile>,
-    /// The theme of the running game.
-    pub running_theme: Option<&'a SoundFile>,
     pub music_in_overlay: bool,
     pub game_themes: bool,
 }
@@ -72,7 +70,7 @@ pub fn choose(scene: &Scene<'_>) -> Option<Music> {
         if !scene.music_in_overlay {
             return None;
         }
-        return theme(scene.running_theme).or_else(ambient);
+        return ambient();
     }
     theme(scene.focused_theme).or_else(ambient)
 }
@@ -131,13 +129,11 @@ mod tests {
     fn music_follows_the_rules() {
         let ambient = file("ambient.ogg");
         let oot = file("oot-theme.ogg");
-        let tp = file("tp-theme.ogg");
         let home = Scene {
             game: GameScene::None,
             overlay: false,
             ambient: Some(&ambient),
             focused_theme: None,
-            running_theme: None,
             music_in_overlay: true,
             game_themes: true,
         };
@@ -174,22 +170,14 @@ mod tests {
             .as_deref(),
             Some("ambient")
         );
-        // The overlay over a frozen game: its theme, else the ambient; nothing when turned off.
+        // The overlay over a frozen game: the ambient, even when a game with a theme is
+        // focused on Home behind it; nothing when turned off.
         let overlay = Scene {
             game: GameScene::Frozen,
             overlay: true,
-            running_theme: Some(&tp),
             ..focused
         };
-        assert_eq!(key(&overlay).as_deref(), Some("theme:tp-theme.ogg"));
-        assert_eq!(
-            key(&Scene {
-                running_theme: None,
-                ..overlay
-            })
-            .as_deref(),
-            Some("ambient")
-        );
+        assert_eq!(key(&overlay).as_deref(), Some("ambient"));
         assert_eq!(
             key(&Scene {
                 music_in_overlay: false,

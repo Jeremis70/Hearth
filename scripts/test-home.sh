@@ -17,6 +17,8 @@
 # Physical controllers are ignored (--no-pad-input): only the keyboard and the dev socket
 # drive it, so a pad in use elsewhere never presses anything here.
 #
+# The user profile is HEARTH_TEST_PROFILE (default: default), passed as --profile.
+#
 # HEARTH_TEST_SGDB=real: the real SteamGridDB with the dev config's key instead of the
 # fixtures, in its own home (./.dev-data/test-home-real by default), so fixture art and real
 # art never share a cache.
@@ -65,7 +67,7 @@ games="${HEARTH_TEST_GAMES:-./.dev-data/test-games}"
 if [[ ! -d "$games" ]]; then
     games=./.dev-data/games
 fi
-args=(--no-pad-input --games-dir "$games" "$@")
+args=(--no-pad-input --profile "${HEARTH_TEST_PROFILE:-default}" --games-dir "$games" "$@")
 if [[ "$sgdb" == "fixtures" ]]; then
     args=(--mock-sgdb=fixtures "${args[@]}")
 fi

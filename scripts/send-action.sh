@@ -24,6 +24,9 @@
 #     anim_state            what animates now as JSON: per track (hero, logo, preview) the
 #                           source, format, mode (full/window/stream), frames, decoded bytes,
 #                           flips and late flips; stills and why; caps; .anim disk use
+#   Profiles:
+#     profile_state         the active profile (id, name) and its folders (saves, controls,
+#                           emulators), the startup migration's result, whether games may start
 set -euo pipefail
 cd "$(dirname "$0")/.."
 SOCKET="${HEARTH_DEV_SOCKET:-./.dev-data/actions.sock}"

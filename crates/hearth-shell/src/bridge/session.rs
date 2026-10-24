@@ -2296,6 +2296,18 @@ impl Controller {
         self.sync_music(director::FADE_LAUNCH);
     }
 
+    /// Sets Animated artwork (`animated_art`) or Reduce motion (`reduce_motion`) to `on`.
+    pub(super) fn set_display_toggle(&mut self, key: &str, on: bool) {
+        let now = match key {
+            "animated_art" => self.display_settings.animated_art,
+            "reduce_motion" => self.display_settings.reduce_motion,
+            _ => return,
+        };
+        if now != on {
+            self.display_change(key);
+        }
+    }
+
     /// Toggles Animated artwork or Reduce motion, applied at once and saved.
     fn display_change(&mut self, key: &str) {
         let d = &mut self.display_settings;

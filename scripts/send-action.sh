@@ -15,6 +15,12 @@
 #     reset:<kind>      back to automatic (grid, hero, logo, icon)
 #     theme_start:<s>   theme_remove
 #     custom_state      the page and the game's picks as JSON
+#   Animated art:
+#     anim:on|off           Animated artwork (saved, like the Settings toggle)
+#     reduce_motion:on|off  Reduce motion (saved)
+#     anim_state            what animates now as JSON: per track (hero, logo, preview) the
+#                           source, format, mode (full/window/stream), frames, decoded bytes,
+#                           flips and late flips; stills and why; caps; .anim disk use
 set -euo pipefail
 cd "$(dirname "$0")/.."
 SOCKET="${HEARTH_DEV_SOCKET:-./.dev-data/actions.sock}"

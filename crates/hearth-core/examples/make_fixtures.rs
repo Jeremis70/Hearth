@@ -1,10 +1,13 @@
 //! Fills a folder with fixture "downloads" for the Customize page's file list: images of
-//! each shape and themes with leading silence and fades.
+//! each shape (animated ones too: a GIF, an APNG, and an animated WebP named `.png` like
+//! SteamGridDB's) and themes with leading silence and fades.
 //! `cargo run -p hearth-core --example make_fixtures -- [./.dev-data/downloads]`
 //! Point Hearth at it with `HEARTH_DOWNLOADS` (scripts/test-home.sh does).
 
 use std::f32::consts::TAU;
 use std::path::{Path, PathBuf};
+
+use hearth_core::art::animation;
 
 const RATE: u32 = 44_100;
 
@@ -46,6 +49,52 @@ fn main() {
     image(&dir, "Photo.jpg", 1280, 720, |x, y, w, h| {
         [(x * 200 / w) as u8, (y * 200 / h) as u8, 150, 255]
     });
+
+    // Animated: told apart by content, whatever the name says.
+    let bars = |w: u32, h: u32, n: u32| -> Vec<image::RgbaImage> {
+        (0..n)
+            .map(|i| {
+                image::RgbaImage::from_fn(w, h, |x, y| {
+                    let lit = ((x + w - w * i / n) * 7 / w).is_multiple_of(2)
+                        && y > h / 3
+                        && y < h * 2 / 3;
+                    if lit {
+                        image::Rgba([250, 230, 200, 255])
+                    } else {
+                        image::Rgba([0, 0, 0, 0])
+                    }
+                })
+            })
+            .collect()
+    };
+    let write = |name: &str, bytes: Vec<u8>| {
+        std::fs::write(dir.join(name), bytes).expect("writing an animation");
+    };
+    write(
+        "Logo animated.gif",
+        animation::samples::gif_from(bars(900, 300, 12), 80),
+    );
+    write(
+        "Hero animated.png",
+        animation::samples::apng_from(
+            &bars(1920, 620, 12)
+                .into_iter()
+                .map(|mut f| {
+                    for p in f.pixels_mut() {
+                        if p[3] == 0 {
+                            *p = image::Rgba([40, 60, 90, 255]);
+                        }
+                    }
+                    f
+                })
+                .collect::<Vec<_>>(),
+            80,
+        ),
+    );
+    write(
+        "Logo-fakepng.png",
+        include_bytes!("../tests/fixtures/animated.webp").to_vec(),
+    );
 
     // 3 s of silence, then music: should start at once and loop without the silence.
     wav(&dir, "Theme leading silence.wav", 23.0, |t| {

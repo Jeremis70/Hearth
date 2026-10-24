@@ -1142,7 +1142,7 @@ fn measure_durations(paths: Vec<PathBuf>) {
 
 /// Dev socket words for the Customize page (`scripts/send-action.sh`); their reply is "ok", an
 /// error, or (`custom_state`) JSON.
-const DEV_WORDS: [&str; 11] = [
+const DEV_WORDS: [&str; 13] = [
     "customize:",
     "pick:",
     "pick_file:",
@@ -1154,6 +1154,8 @@ const DEV_WORDS: [&str; 11] = [
     "theme_remove",
     "custom_state",
     "anim_state",
+    "anim:",
+    "reduce_motion:",
 ];
 
 /// Wraps the dev socket's command handler with the Customize page's words, run on the UI
@@ -1203,6 +1205,17 @@ impl Controller {
             }
             "custom_state" => return self.custom_state(),
             "anim_state" => return self.anim_state().to_string(),
+            // anim:on|off and reduce_motion:on|off, like the Display & sound toggles.
+            "anim" | "reduce_motion" => {
+                let key = if name == "anim" { "animated_art" } else { name };
+                match arg {
+                    "on" | "off" => {
+                        self.set_display_toggle(key, arg == "on");
+                        Ok(())
+                    }
+                    _ => Err(format!("error: {name}:on or {name}:off")),
+                }
+            }
             _ if self.customize.is_none() => Err("error: the Customize page isn't open".into()),
             "pick" => number().map(|n| self.customize_candidate(n)),
             "rematch" => number().map(|n| {

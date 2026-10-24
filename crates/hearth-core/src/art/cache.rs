@@ -82,7 +82,7 @@ impl GameArt {
 /// The art cache folder (`<cache>/art`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArtCache {
-    root: PathBuf,
+    pub(super) root: PathBuf,
 }
 
 impl ArtCache {

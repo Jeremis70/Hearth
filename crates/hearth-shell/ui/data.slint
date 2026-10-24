@@ -88,6 +88,14 @@ export global HomeData {
     callback request-properties(/* game id */ string);
     // Opens the Customize page on a section ("art", "theme" or "match").
     callback customize(/* game id */ string, /* section */ string);
+    // The focused game's animated hero and logo (README §6 "Animated art"): frames flip from
+    // Rust; `anim-id` is the game they belong to. Each `-on` fades its frames in over the
+    // still once the first is there, and out when it stops.
+    in property <string> anim-id;
+    in property <image> anim-hero;
+    in property <bool> anim-hero-on;
+    in property <image> anim-logo;
+    in property <bool> anim-logo-on;
 }
 
 // One section of the Customize page (Cover, Hero, Logo, Icon, Theme music, Wrong game?):

@@ -48,6 +48,9 @@ export component HeroImage inherits Rectangle {
 // and buttons stay readable. Without a hero (Welcome, Library, games without art): the glow.
 export component Backdrop inherits Rectangle {
     in property <HomeTile> tile;
+    // The animated hero's frames over the still, faded in while `anim-on`.
+    in property <image> anim;
+    in property <bool> anim-on;
 
     if tile.hero.width == 0: Glow { }
     if tile.hero.width > 0: HeroImage {
@@ -55,6 +58,14 @@ export component Backdrop inherits Rectangle {
         height: root.height;
         source: tile.hero;
         position: tile.hero-x;
+    }
+    if tile.hero.width > 0 && anim.width > 0: HeroImage {
+        width: root.width;
+        height: root.height;
+        source: anim;
+        position: tile.hero-x;
+        opacity: anim-on ? 1 : 0;
+        animate opacity { duration: Theme.base; easing: ease-out; }
     }
     // Strong on the left, gone by 60 % of the width.
     if tile.hero.width > 0: Rectangle {
@@ -437,11 +448,15 @@ export component Home inherits Rectangle {
     // Background: the current cell's hero, crossfading between two layers.
     Backdrop {
         tile: backdrop-a;
+        anim: backdrop-a.id == HomeData.anim-id ? HomeData.anim-hero : @image-url("");
+        anim-on: HomeData.anim-hero-on && backdrop-a.id == HomeData.anim-id;
         opacity: show-a && tab == 0 ? 1 : 0;
         animate opacity { duration: Theme.slow; easing: ease-in-out; }
     }
     Backdrop {
         tile: backdrop-b;
+        anim: backdrop-b.id == HomeData.anim-id ? HomeData.anim-hero : @image-url("");
+        anim-on: HomeData.anim-hero-on && backdrop-b.id == HomeData.anim-id;
         opacity: !show-a && tab == 0 ? 1 : 0;
         animate opacity { duration: Theme.slow; easing: ease-in-out; }
     }
@@ -529,6 +544,8 @@ export component Home inherits Rectangle {
 
         // Logo (fit inside the box, bottom-left), else the title on up to two lines; the
         // greeting on Welcome.
+        // The animated logo replaces the still (crossfading: both have transparency).
+        property <bool> logo-animates: HomeData.anim-logo-on && current.id == HomeData.anim-id;
         if current.logo.width > 0: Image {
             x: Theme.safe-x;
             y: logo-bottom - logo-box-height;
@@ -538,6 +555,20 @@ export component Home inherits Rectangle {
             image-fit: contain;
             horizontal-alignment: left;
             vertical-alignment: bottom;
+            opacity: logo-animates ? 0 : 1;
+            animate opacity { duration: Theme.base; easing: ease-out; }
+        }
+        if current.logo.width > 0 && HomeData.anim-logo.width > 0: Image {
+            x: Theme.safe-x;
+            y: logo-bottom - logo-box-height;
+            width: logo-box-width;
+            height: logo-box-height;
+            source: HomeData.anim-logo;
+            image-fit: contain;
+            horizontal-alignment: left;
+            vertical-alignment: bottom;
+            opacity: logo-animates ? 1 : 0;
+            animate opacity { duration: Theme.base; easing: ease-out; }
         }
         if current.logo.width == 0: Text {
             x: Theme.safe-x;

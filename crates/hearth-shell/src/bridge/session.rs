@@ -21,7 +21,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use hearth_core::art::{
-    ArtCache, ArtKind, ArtService, DisplayClass, MetadataProvider, remove_orphaned_art,
+    ArtCache, ArtKey, ArtKind, ArtService, DisplayClass, MetadataProvider, remove_orphaned_art,
 };
 use hearth_core::config::{self, PackCategory};
 use hearth_core::controls::edit::{Editor, Scope};
@@ -48,6 +48,7 @@ use std::rc::Rc;
 
 use super::art::{self as art_ui, ArtLoader, ArtMap, ConsoleIcons};
 
+mod anim;
 mod customize;
 
 use super::controls_page::{
@@ -253,6 +254,10 @@ pub struct Controller {
     art_service: Option<ArtService>,
     /// Each game's art files (the art worker's last report).
     art_paths: std::collections::HashMap<GameId, hearth_core::art::GameArt>,
+    /// Each game's art key (the art worker's last report).
+    art_keys: std::collections::HashMap<GameId, ArtKey>,
+    /// The focused game's animated hero and logo.
+    anim: anim::AnimPlayer,
     /// The Customize page, while open.
     customize: Option<customize::CustomizeState>,
     /// A theme previewed on the Customize page (wins over Home's music).
@@ -508,6 +513,8 @@ pub fn install(setup: Setup) {
         audio_cache: setup.audio_cache,
         art_service,
         art_paths: std::collections::HashMap::new(),
+        art_keys: std::collections::HashMap::new(),
+        anim: anim::AnimPlayer::default(),
         customize: None,
         preview: None,
         preview_timer: slint::Timer::default(),
@@ -712,6 +719,8 @@ impl Controller {
             Mode::Game => director::FADE_RESUME,
             Mode::Shell | Mode::Launching | Mode::Overlay => director::FADE_LAUNCH,
         });
+        // Animation only on Hearth's own screens, never over or beside a running game.
+        self.anim_sync();
     }
 
     // --- music -------------------------------------------------------------------------
@@ -742,6 +751,7 @@ impl Controller {
     /// once focus has stayed put for [`THEME_SETTLE`], so scrolling past games doesn't start
     /// and stop music; leaving Home goes back to the ambient at once.
     fn music_focus_changed(&mut self, id: Option<GameId>) {
+        self.anim_focus_changed(id.clone());
         self.theme_timer.stop();
         let Some(id) = id else {
             // The Customize page keeps its game's theme.
@@ -1676,10 +1686,12 @@ impl Controller {
     pub fn set_art_meta(
         &mut self,
         game: &GameId,
+        key: ArtKey,
         match_name: Option<String>,
         hero_position: f32,
         paths: hearth_core::art::GameArt,
     ) {
+        self.art_keys.insert(game.clone(), key);
         let art = self.art.entry(game.clone()).or_default();
         art.match_name = match_name;
         // While the hero is being positioned, the page's position wins.
@@ -1688,7 +1700,8 @@ impl Controller {
         if !positioning {
             art.hero_position = Some(hero_position);
         }
-        self.art_paths.insert(game.clone(), paths);
+        let old = self.art_paths.insert(game.clone(), paths);
+        self.anim_art_changed(game, old.as_ref());
         if moved {
             self.refresh_tiles();
         }
@@ -1722,6 +1735,7 @@ impl Controller {
         if let Err(err) = std::fs::write(&self.display_class_file, class.name()) {
             tracing::warn!("can't remember the screen class: {err}");
         }
+        self.anim_restart();
     }
 
     /// Startup timing: the first game's hero, and art for every game in view.
@@ -2280,6 +2294,7 @@ impl Controller {
         }
         self.fill_audio_rows();
         self.apply_motion();
+        self.anim_sync();
     }
 
     /// Reduce motion: every transition off in both windows (`Theme.motion-scale`).

@@ -335,7 +335,7 @@ pub fn start(
                 } => {
                     super::startup::note("first art event");
                     loader.submit(&game, &key, &art);
-                    defer(move |c| c.set_art_meta(&game, match_name, hero_position, art));
+                    defer(move |c| c.set_art_meta(&game, key, match_name, hero_position, art));
                 }
                 // The Customize page's answers.
                 other => defer(move |c| c.on_customize_event(other)),

@@ -539,6 +539,88 @@ impl ArtCache {
     }
 }
 
+/// One `.anim` file in the cache.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnimFile {
+    /// The file.
+    pub path: PathBuf,
+    /// The game's art key (`<system>/<id>`).
+    pub key: String,
+    /// Its size.
+    pub bytes: u64,
+    /// When it was written.
+    pub modified: std::time::SystemTime,
+}
+
+impl ArtCache {
+    /// Every `.anim` file in the cache (`<root>/<system>/<id>/sized/<class>/*.anim`).
+    pub fn anim_files(&self) -> Vec<AnimFile> {
+        let read = |dir: &Path| fs::read_dir(dir).into_iter().flatten().flatten();
+        let mut files = Vec::new();
+        for system in read(&self.root) {
+            for game in read(&system.path()) {
+                for class in read(&game.path().join("sized")) {
+                    for file in read(&class.path()) {
+                        let path = file.path();
+                        let Ok(meta) = file.metadata() else { continue };
+                        if path.extension().is_some_and(|e| e == "anim") && meta.is_file() {
+                            files.push(AnimFile {
+                                key: format!(
+                                    "{}/{}",
+                                    system.file_name().to_string_lossy(),
+                                    game.file_name().to_string_lossy()
+                                ),
+                                bytes: meta.len(),
+                                modified: meta.modified().unwrap_or(std::time::UNIX_EPOCH),
+                                path,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        files
+    }
+
+    /// Deletes `.anim` files until they take at most `cap` bytes in all: those of the least
+    /// recently played games first (`last_played` by art key; never played goes first), the
+    /// oldest file first among equals. `keep` (the one about to play) stays. Returns the bytes
+    /// left. The sources stay, so a deleted file is simply made again when needed.
+    pub fn trim_anim(
+        &self,
+        cap: u64,
+        last_played: &std::collections::HashMap<String, i64>,
+        keep: Option<&Path>,
+    ) -> u64 {
+        let mut files = self.anim_files();
+        let mut total: u64 = files.iter().map(|f| f.bytes).sum();
+        if total <= cap {
+            return total;
+        }
+        files.sort_by_key(|f| (last_played.get(&f.key).copied(), f.modified));
+        for file in files {
+            if total <= cap {
+                break;
+            }
+            if Some(file.path.as_path()) == keep {
+                continue;
+            }
+            match fs::remove_file(&file.path) {
+                Ok(()) => {
+                    total -= file.bytes;
+                    tracing::info!(
+                        path = %file.path.display(),
+                        bytes = file.bytes,
+                        "animation cache over its cap: evicted"
+                    );
+                }
+                Err(err) => tracing::warn!(path = %file.path.display(), "can't evict: {err}"),
+            }
+        }
+        total
+    }
+}
+
 /// Plays frames straight from the source, scaled on the fly, looping forever: for animations
 /// too large for the `.anim` cache. Sequential only.
 pub struct FrameStream {
@@ -848,6 +930,39 @@ mod tests {
             .unwrap();
         let sized = cache.sized_anim(&key(), ArtKind::Hero, &png, class, u64::MAX);
         assert_eq!(sized.unwrap(), SizedAnim::Still);
+    }
+
+    #[test]
+    fn the_anim_cache_evicts_the_least_recently_played_first() {
+        let dir = tempdir();
+        let cache = ArtCache::new(dir.path().join("art"));
+        let class = DisplayClass::default();
+        let mut made = Vec::new();
+        for id in ["AAAA", "BBBB", "CCCC"] {
+            let key = ArtKey::new(&SystemId::new("n64"), Some(id), "");
+            let source = cache
+                .store(&key, ArtKind::Logo, "gif", &samples::gif(64, 32, 4, 50))
+                .unwrap();
+            let SizedAnim::File(path) = cache
+                .sized_anim(&key, ArtKind::Logo, &source, class, u64::MAX)
+                .unwrap()
+            else {
+                panic!("no file");
+            };
+            made.push(path);
+        }
+        let files = cache.anim_files();
+        assert_eq!(files.len(), 3);
+        let one = files[0].bytes;
+        let played: std::collections::HashMap<String, i64> =
+            [("n64/AAAA".to_owned(), 300), ("n64/BBBB".to_owned(), 100)].into();
+        // CCCC was never played: it goes first; then BBBB (played longest ago)…
+        let left = cache.trim_anim(one * 2, &played, None);
+        assert!(left <= one * 2);
+        assert!(!made[2].exists() && made[0].exists() && made[1].exists());
+        // …unless it is the one about to play.
+        cache.trim_anim(one, &played, Some(&made[1]));
+        assert!(made[1].exists() && !made[0].exists());
     }
 
     #[test]

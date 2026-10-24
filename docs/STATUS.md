@@ -75,8 +75,8 @@ Round D (profile-ready storage), 2026-10-24, oldest first:
   recording that session's playtime (`Controller::shutdown`).
 - Not done yet: the user's real `.dev-data` is still in the old layout, waiting for the OK
   (`migration_plan`: 8 moves, backup 28 files / 1,147,806 bytes, BIOS 2.0 MiB and Dolphin cache
-  7.2 MiB moved unchanged). Until then a Hearth built from this round shows the notice there
-  and starts no game.
+  7.2 MiB moved unchanged). Starting a Hearth built from this round on `.dev-data` runs the
+  migration.
 
 Round C.2 (animated art + polish), 2026-10-24, oldest first:
 - `b9336cb`: `.dev-data/games` links the moved ROMs and their `theme.mp3` (see below).

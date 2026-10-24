@@ -27,7 +27,7 @@ use hearth_platform::gamescope::{self, Compositor};
 use hearth_platform::input::dev_socket::DevSocketBackend;
 use hearth_platform::input::gilrs::GilrsBackend;
 use hearth_platform::input::inputplumber::InputPlumberBackend;
-use hearth_platform::input::{InputBackend, InputControl, PadActivity};
+use hearth_platform::input::{Action, InputBackend, InputControl, InputError, PadActivity};
 use hearth_platform::network::MockNetworkBackend;
 use hearth_platform::process;
 use nix::sys::signal::{SigSet, Signal};
@@ -66,6 +66,11 @@ struct Args {
     /// and allows Hearth to use it, else gilrs).
     #[arg(long, value_enum, default_value_t = InputChoice::Auto)]
     input: InputChoice,
+    /// Ignore physical controllers: no controller backend at all (InputPlumber is left alone,
+    /// gilrs isn't opened), so only the keyboard and --dev-socket drive Hearth. For scripted
+    /// runs on a machine whose controllers are in use.
+    #[arg(long)]
+    no_pad_input: bool,
     /// Never use the network for artwork: a mock provider that is always offline, so games
     /// keep cached art or placeholders and wait in the needs-art queue.
     #[arg(long)]
@@ -155,6 +160,15 @@ struct Input {
     control: InputControl,
     /// With InputPlumber: gilrs watching the virtual pad, for the button test's raw values.
     observer: Option<GilrsBackend>,
+}
+
+/// `--no-pad-input`: a backend that never sends anything.
+struct NoPads;
+
+impl InputBackend for NoPads {
+    fn start(&mut self, _tx: std::sync::mpsc::Sender<Action>) -> Result<(), InputError> {
+        Ok(())
+    }
 }
 
 /// Picks the controller backend. `auto` falls back to gilrs and says why.
@@ -312,7 +326,17 @@ fn main() -> anyhow::Result<()> {
             .on_input(bridge::sounds::on_input);
     }
 
-    let input = select_input(args.input, dirs.runtime())?;
+    let input = if args.no_pad_input {
+        tracing::info!("--no-pad-input: physical controllers are ignored");
+        Input {
+            activity: PadActivity::new(),
+            control: InputControl::detached(),
+            backend: Box::new(NoPads),
+            observer: None,
+        }
+    } else {
+        select_input(args.input, dirs.runtime())?
+    };
     // Hands the controllers back even if Hearth is killed (SIGKILL included).
     let guard = input.control.is_live().then(guard::Guard::spawn).flatten();
     bridge::session::install(bridge::session::Setup {

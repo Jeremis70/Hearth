@@ -254,6 +254,9 @@ pub struct Controller {
     art_service: Option<ArtService>,
     /// Each game's art files (the art worker's last report).
     art_paths: std::collections::HashMap<GameId, hearth_core::art::GameArt>,
+    /// The game the Home row puts first (the running one), changed only while Home can't be
+    /// seen: once a launched game is on screen, and after the library reloads when it ends.
+    row_first: Option<GameId>,
     /// Each game's art key (the art worker's last report).
     art_keys: std::collections::HashMap<GameId, ArtKey>,
     /// The focused game's animated hero and logo.
@@ -513,6 +516,7 @@ pub fn install(setup: Setup) {
         art_service,
         art_paths: std::collections::HashMap::new(),
         art_keys: std::collections::HashMap::new(),
+        row_first: None,
         anim: anim::AnimPlayer::default(),
         customize: None,
         preview: None,
@@ -750,6 +754,11 @@ impl Controller {
     /// once focus has stayed put for [`THEME_SETTLE`], so scrolling past games doesn't start
     /// and stop music; leaving Home goes back to the ambient at once.
     fn music_focus_changed(&mut self, id: Option<GameId>) {
+        // Home's row changes under it while a game is in front (it moves to the front): what
+        // that leaves focused was never chosen. Going back to Home focuses again.
+        if self.mode != Mode::Shell {
+            return;
+        }
         self.anim_focus_changed(id.clone());
         self.theme_timer.stop();
         let Some(id) = id else {
@@ -1402,6 +1411,12 @@ impl Controller {
         self.hide_overlay();
         self.thaw();
         self.set_mode(Mode::Game);
+        // Home is hidden now: the running game moves to the front of the row unseen.
+        let running = self.active.as_ref().map(|a| a.game.id.clone());
+        if self.row_first != running {
+            self.row_first = running;
+            self.refresh_tiles();
+        }
         if !self.compositor.controls_focus() {
             return;
         }
@@ -1663,6 +1678,10 @@ impl Controller {
 
     fn set_entries(&mut self, entries: Vec<LibraryEntry>) {
         self.entries = entries;
+        // A game that just ended is the most recently played now: it stays first by itself.
+        if self.active.is_none() {
+            self.row_first = None;
+        }
         self.refresh();
     }
 
@@ -1785,11 +1804,10 @@ impl Controller {
         let Some(app) = self.app.upgrade() else {
             return;
         };
-        let running = self.active.as_ref().map(|a| &a.game.id);
         let tiles = models::home_tiles(
             &self.entries,
             &self.systems,
-            running,
+            self.row_first.as_ref(),
             unix_now(),
             &self.art,
             &mut self.icons,

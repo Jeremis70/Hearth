@@ -6,13 +6,13 @@
 
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use toml_edit::{DocumentMut, Item, Table, value};
 
 use super::device::ControllerKind;
 use super::key::GameKey;
-use super::layers::{Resolved, UserLayers, game_file, resolve_layers, system_file};
+use super::layers::{Resolved, UserControls, UserLayers, resolve_layers};
 use super::model::{InputKind, Mapping, PadInput, Target, TriggerMode};
 use crate::systems::{ControlKind, System};
 
@@ -93,7 +93,7 @@ pub struct Assigned {
 pub struct Editor {
     system: System,
     key: GameKey,
-    user_dir: PathBuf,
+    user: UserControls,
     /// Controller type, for its default bindings.
     pad: ControllerKind,
     scope: Scope,
@@ -105,7 +105,7 @@ impl Editor {
     pub fn new(
         system: &System,
         key: GameKey,
-        user_dir: &Path,
+        user: &UserControls,
         pad: ControllerKind,
         scope: Scope,
     ) -> Result<Self, EditError> {
@@ -115,7 +115,7 @@ impl Editor {
         Ok(Self {
             system: system.clone(),
             key,
-            user_dir: user_dir.to_path_buf(),
+            user: user.clone(),
             pad,
             scope,
         })
@@ -134,8 +134,8 @@ impl Editor {
     /// The file edits go to.
     pub fn path(&self) -> PathBuf {
         match self.scope {
-            Scope::System => system_file(&self.system, &self.user_dir),
-            Scope::Game => game_file(&self.key, &self.user_dir),
+            Scope::System => self.user.system_file(&self.system),
+            Scope::Game => self.user.game_file(&self.key),
         }
     }
 
@@ -153,7 +153,7 @@ impl Editor {
     }
 
     fn resolve(&self, layers: UserLayers) -> Resolved {
-        resolve_layers(&self.system, &self.key, &self.user_dir, self.pad, layers)
+        resolve_layers(&self.system, &self.key, &self.user, self.pad, layers)
             .expect("the system has controls (checked in new)")
     }
 
@@ -475,7 +475,7 @@ mod tests {
         Editor::new(
             &f.gc,
             f.key.clone(),
-            &f.user,
+            &UserControls::test_at(&f.user),
             ControllerKind::Generic,
             scope,
         )

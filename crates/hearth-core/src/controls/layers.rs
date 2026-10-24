@@ -1,5 +1,8 @@
 //! Resolving a game's mapping: shipped default → controller type default → user system
 //! override → user game override. Every value remembers which layer set it.
+//!
+//! The user layers belong to a profile ([`UserControls`]), so a mapping is keyed by
+//! (profile, system, game).
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -13,6 +16,7 @@ use super::file::{Layer, Problem, StickChanges, parse_layer};
 use super::key::GameKey;
 use super::model::{Mapping, PadInput, StickOptions, Target};
 use crate::systems::System;
+use crate::users::{ProfileDirs, ProfileId};
 
 /// Where a value came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,10 +72,68 @@ impl Resolved {
     }
 }
 
-/// Folder of the user's controls files: `<config>/controls`, holding `systems/<system>.toml`
-/// and `games/<system>/<serial>.toml`.
-pub fn user_dir(config: &Path) -> PathBuf {
-    config.join("controls")
+/// One profile's controls files: `<profile>/controls`, holding `systems/<system>.toml` and
+/// `games/<system>/<serial>.toml`. A profile without them gets the shipped defaults.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserControls {
+    profile: ProfileId,
+    dir: PathBuf,
+}
+
+impl UserControls {
+    /// The controls files of `profile`.
+    pub fn of(profile: &ProfileDirs) -> Self {
+        Self::new(profile.id().clone(), profile.controls())
+    }
+
+    /// The controls files of `profile`, in `dir`.
+    pub fn new(profile: ProfileId, dir: impl Into<PathBuf>) -> Self {
+        Self {
+            profile,
+            dir: dir.into(),
+        }
+    }
+
+    /// Whose files these are.
+    pub fn profile(&self) -> &ProfileId {
+        &self.profile
+    }
+
+    /// No files: the shipped defaults only.
+    pub fn none() -> Self {
+        Self::new(ProfileId::default(), PathBuf::new())
+    }
+
+    /// `dir` as the default profile's controls folder, for tests.
+    #[cfg(test)]
+    pub(crate) fn test_at(dir: impl Into<PathBuf>) -> Self {
+        Self::new(ProfileId::default(), dir)
+    }
+
+    /// The folder.
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
+    /// The per-game file that applies to `key`: the first candidate that exists, else the
+    /// full-serial one (where a new override is created).
+    pub fn game_file(&self, key: &GameKey) -> PathBuf {
+        let candidates: Vec<_> = key
+            .candidates()
+            .into_iter()
+            .map(|rel| self.dir.join("games").join(rel))
+            .collect();
+        candidates
+            .iter()
+            .find(|p| p.is_file())
+            .unwrap_or(&candidates[0])
+            .clone()
+    }
+
+    /// The file for every game of `system`.
+    pub fn system_file(&self, system: &System) -> PathBuf {
+        self.dir.join("systems").join(format!("{}.toml", system.id))
+    }
 }
 
 /// Which user layers to apply on top of the shipped defaults (console and controller type).
@@ -96,42 +158,22 @@ impl UserLayers {
     };
 }
 
-/// The per-game file that applies to `key`: the first candidate that exists, else the
-/// full-serial one (where a new override is created).
-pub fn game_file(key: &GameKey, user_dir: &Path) -> PathBuf {
-    let candidates: Vec<_> = key
-        .candidates()
-        .into_iter()
-        .map(|rel| user_dir.join("games").join(rel))
-        .collect();
-    candidates
-        .iter()
-        .find(|p| p.is_file())
-        .unwrap_or(&candidates[0])
-        .clone()
-}
-
-/// The user's file for every game of `system`.
-pub fn system_file(system: &System, user_dir: &Path) -> PathBuf {
-    user_dir.join("systems").join(format!("{}.toml", system.id))
-}
-
 /// Resolves the mapping of a game of `system` with per-game `key` for a `pad` controller,
-/// reading user files under `user_dir`. `None` if the system declares no controls.
+/// with `user`'s files on top. `None` if the system declares no controls.
 pub fn resolve(
     system: &System,
     key: &GameKey,
-    user_dir: &Path,
+    user: &UserControls,
     pad: ControllerKind,
 ) -> Option<Resolved> {
-    resolve_layers(system, key, user_dir, pad, UserLayers::ALL)
+    resolve_layers(system, key, user, pad, UserLayers::ALL)
 }
 
 /// Like [`resolve`], applying only the chosen user layers.
 pub fn resolve_layers(
     system: &System,
     key: &GameKey,
-    user_dir: &Path,
+    user: &UserControls,
     pad: ControllerKind,
     layers: UserLayers,
 ) -> Option<Resolved> {
@@ -148,8 +190,8 @@ pub fn resolve_layers(
     if let Some((name, text)) = pad_defaults(pad, &system.controls) {
         files.push((Source::Pad(format!("data/controls/pads/{name}.toml")), text));
     }
-    let system_file = system_file(system, user_dir);
-    let game_file = game_file(key, user_dir);
+    let system_file = user.system_file(system);
+    let game_file = user.game_file(key);
     let mut problems = Vec::new();
     for (path, source, wanted) in [
         (
@@ -316,7 +358,13 @@ mod tests {
         let dir = tempdir();
         for id in ["gc", "n64"] {
             let key = GameKey::for_rom(&SystemId::new(id), &dir.path().join("none"), "x");
-            let r = resolve(&system(id), &key, dir.path(), ControllerKind::Generic).unwrap();
+            let r = resolve(
+                &system(id),
+                &key,
+                &UserControls::test_at(dir.path()),
+                ControllerKind::Generic,
+            )
+            .unwrap();
             assert!(r.problems.is_empty(), "{id}: {:?}", r.problems);
             assert_eq!(r.applied.len(), 1);
         }
@@ -324,11 +372,44 @@ mod tests {
             resolve(
                 &system("wii"),
                 &GameKey::for_rom(&SystemId::new("wii"), Path::new("/x"), "x"),
-                dir.path(),
+                &UserControls::test_at(dir.path()),
                 ControllerKind::Generic,
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn each_profile_has_its_own_files() {
+        let dir = tempdir();
+        let profiles = dir.path().join("profiles");
+        let emulators = dir.path().join("emulators");
+        let me = UserControls::of(&ProfileDirs::new(
+            ProfileId::default(),
+            &profiles,
+            &emulators,
+        ));
+        let guest = UserControls::of(&ProfileDirs::new(
+            ProfileId::new("guest").unwrap(),
+            &profiles,
+            &emulators,
+        ));
+        assert_eq!(guest.profile().as_str(), "guest");
+        let gc = system("gc");
+        write(
+            me.system_file(&gc),
+            "[player1.sticks.\"C-stick\"]\ninvert_x = true\n",
+        );
+        assert!(
+            me.system_file(&gc)
+                .starts_with(profiles.join("default/controls"))
+        );
+        let key = tp_key(dir.path());
+        let mine = resolve(&gc, &key, &me, ControllerKind::Generic).unwrap();
+        let theirs = resolve(&gc, &key, &guest, ControllerKind::Generic).unwrap();
+        assert!(mine.mapping.stick_options("C-stick").invert_x);
+        assert!(!theirs.mapping.stick_options("C-stick").invert_x);
+        assert_eq!(theirs.applied.len(), 1, "shipped defaults only");
     }
 
     #[test]
@@ -342,7 +423,7 @@ mod tests {
         let r = resolve(
             &system("gc"),
             &tp_key(dir.path()),
-            &user,
+            &UserControls::test_at(&user),
             ControllerKind::Generic,
         )
         .unwrap();
@@ -372,7 +453,7 @@ mod tests {
         let r = resolve(
             &system("gc"),
             &tp_key(dir.path()),
-            &user,
+            &UserControls::test_at(&user),
             ControllerKind::Generic,
         )
         .unwrap();
@@ -396,7 +477,7 @@ mod tests {
         let r = resolve(
             &system("gc"),
             &tp_key(dir.path()),
-            &user,
+            &UserControls::test_at(&user),
             ControllerKind::Generic,
         )
         .unwrap();
@@ -423,7 +504,7 @@ mod tests {
         let r = resolve(
             &system("gc"),
             &tp_key(dir.path()),
-            &user,
+            &UserControls::test_at(&user),
             ControllerKind::Generic,
         )
         .unwrap();
@@ -443,7 +524,7 @@ mod tests {
         let r = resolve(
             &system("gc"),
             &tp_key(dir.path()),
-            &user,
+            &UserControls::test_at(&user),
             ControllerKind::DualSense,
         )
         .unwrap();
@@ -461,7 +542,7 @@ mod tests {
         let r = resolve(
             &system("gc"),
             &tp_key(dir.path()),
-            &user,
+            &UserControls::test_at(&user),
             ControllerKind::Generic,
         )
         .unwrap();
@@ -482,7 +563,7 @@ mod tests {
         let r = resolve(
             &system("gc"),
             &tp_key(dir.path()),
-            &user,
+            &UserControls::test_at(&user),
             ControllerKind::DualSense,
         )
         .unwrap();

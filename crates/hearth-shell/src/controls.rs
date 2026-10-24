@@ -5,7 +5,9 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use hearth_core::controls::layers::stick_setting;
-use hearth_core::controls::{ControllerIdentity, GameKey, PadInput, Resolved, resolve};
+use hearth_core::controls::{
+    ControllerIdentity, GameKey, PadInput, Resolved, UserControls, resolve,
+};
 use hearth_core::model::Game;
 use hearth_core::profiles::input::Translation;
 use hearth_core::profiles::inputplumber_profile::{self, Profile, VirtualLayout};
@@ -45,8 +47,9 @@ pub struct GameInput {
     pub autoconfig: Option<std::path::PathBuf>,
 }
 
-/// Player 1's controller: the first connected pad, else the fallback; then `device.toml`.
-pub fn device(pads: &[PadInfo], controls_dir: &Path) -> ControllerIdentity {
+/// Player 1's controller: the first connected pad, else the fallback; then `device.toml` in
+/// `device_dir` (shared by every profile).
+pub fn device(pads: &[PadInfo], device_dir: &Path) -> ControllerIdentity {
     let identity = match pads.first() {
         Some(pad) => ControllerIdentity::from_pad(&pad.os_name, pad.vendor_id, pad.product_id),
         None => {
@@ -54,21 +57,22 @@ pub fn device(pads: &[PadInfo], controls_dir: &Path) -> ControllerIdentity {
             ControllerIdentity::fallback()
         }
     };
-    identity.with_overrides(controls_dir)
+    identity.with_overrides(device_dir)
 }
 
-/// Resolves and translates `game`'s controls for `kind`, for the emulator reading `pad`.
+/// Resolves and translates `game`'s controls for `kind` with `user`'s files, for the emulator
+/// reading `pad`.
 pub fn game_input(
     system: &System,
     game: &Game,
     kind: EmulatorKind,
-    controls_dir: &Path,
+    user: &UserControls,
     device: ControllerIdentity,
     retroarch: &RetroArchProfile,
     pad: PadTarget,
 ) -> GameInput {
     let key = GameKey::for_rom(&system.id, &game.path, &game.title);
-    let resolved = resolve(system, &key, controls_dir, device.kind);
+    let resolved = resolve(system, &key, user, device.kind);
     let user_mapping = resolved.as_ref().map(|r| &r.mapping);
     let actions = match kind {
         EmulatorKind::Dolphin => dolphin_input::CAPABILITIES.actions,

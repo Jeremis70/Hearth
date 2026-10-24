@@ -25,6 +25,7 @@ use hearth_core::art::{
 };
 use hearth_core::config::{self, PackCategory};
 use hearth_core::controls::edit::{Editor, Scope};
+use hearth_core::controls::layers::UserControls;
 use hearth_core::controls::{ControllerKind, GameKey, HearthAction, PadInput, Target, defaults};
 use hearth_core::custom::CustomStore;
 use hearth_core::library::{Library, LibraryEntry};
@@ -180,7 +181,10 @@ pub struct Controller {
     user: ProfileDirs,
     profile: RetroArchProfile,
     dolphin: DolphinProfile,
-    controls_dir: PathBuf,
+    /// Shared controls files (`device.toml`).
+    device_dir: PathBuf,
+    /// The active profile's controls files.
+    controls: UserControls,
     activity: PadActivity,
     raw_activity: Option<PadActivity>,
     input: InputControl,
@@ -300,8 +304,8 @@ pub struct Setup {
     pub profile: RetroArchProfile,
     /// Dolphin profile.
     pub dolphin: DolphinProfile,
-    /// The user's controls files (`<config>/controls`).
-    pub controls_dir: PathBuf,
+    /// Controls files shared by every profile (`<config>/controls/device.toml`).
+    pub device_dir: PathBuf,
     /// Files read by other processes (the game's InputPlumber profile).
     pub runtime_dir: PathBuf,
     /// Live controller state: connected pads, disarming held buttons.
@@ -471,10 +475,11 @@ pub fn install(setup: Setup) {
         compositor: setup.compositor,
         runtime: Arc::new(ProcessRuntime::new()),
         systems: setup.systems,
+        controls: UserControls::of(&setup.user),
         user: setup.user,
         profile: setup.profile,
         dolphin: setup.dolphin,
-        controls_dir: setup.controls_dir,
+        device_dir: setup.device_dir,
         activity: setup.activity,
         raw_activity: setup.raw_activity,
         input: setup.input,
@@ -1376,7 +1381,7 @@ impl Controller {
         game: &hearth_core::model::Game,
         kind: EmulatorKind,
     ) -> controls::GameInput {
-        let device = controls::device(&self.activity.pads(), &self.controls_dir);
+        let device = controls::device(&self.activity.pads(), &self.device_dir);
         let pad = if self.input.is_live() {
             controls::PadTarget::Virtual
         } else {
@@ -1386,7 +1391,7 @@ impl Controller {
             system,
             game,
             kind,
-            &self.controls_dir,
+            &self.controls,
             device,
             &self.profile,
             pad,
@@ -1937,7 +1942,7 @@ impl Controller {
 
     /// Player 1's controller type, as launches see it (see `controls::device`).
     fn pad_kind(&self) -> ControllerKind {
-        controls::device(&self.activity.pads(), &self.controls_dir).kind
+        controls::device(&self.activity.pads(), &self.device_dir).kind
     }
 
     /// Player 1's extra inputs (touchpad, share, paddles, mute) that the input backend reads:
@@ -1976,7 +1981,7 @@ impl Controller {
 
     fn pad_extras(&self) -> Vec<PadInput> {
         let live = self.input.is_live();
-        controls::device(&self.activity.pads(), &self.controls_dir)
+        controls::device(&self.activity.pads(), &self.device_dir)
             .extra_inputs()
             .into_iter()
             .filter(|i| live || *i != PadInput::Mute)
@@ -2027,13 +2032,8 @@ impl Controller {
         };
         let started = Instant::now();
         let key = GameKey::for_rom(&system.id, std::path::Path::new(""), "");
-        let editor = match Editor::new(
-            &system,
-            key,
-            &self.controls_dir,
-            self.pad_kind(),
-            Scope::System,
-        ) {
+        let editor = match Editor::new(&system, key, &self.controls, self.pad_kind(), Scope::System)
+        {
             Ok(editor) => editor,
             Err(err) => {
                 self.toast(&err.to_string());
@@ -2095,13 +2095,7 @@ impl Controller {
             return;
         };
         let key = GameKey::for_rom(&system.id, &game.path, &game.title);
-        let editor = match Editor::new(
-            &system,
-            key,
-            &self.controls_dir,
-            self.pad_kind(),
-            Scope::Game,
-        ) {
+        let editor = match Editor::new(&system, key, &self.controls, self.pad_kind(), Scope::Game) {
             Ok(editor) => editor,
             Err(err) => {
                 self.toast(&err.to_string());
@@ -2559,9 +2553,7 @@ impl Controller {
             .iter()
             .filter(|s| !s.controls.is_empty())
             .map(|system| {
-                let customized =
-                    hearth_core::controls::layers::system_file(system, &self.controls_dir)
-                        .is_file();
+                let customized = self.controls.system_file(system).is_file();
                 SettingsCategory {
                     key: format!("system:{}", system.id).into(),
                     label: system.name.as_str().into(),
@@ -2612,7 +2604,7 @@ impl Controller {
             return;
         };
         self.testing = true;
-        let device = controls::device(&self.activity.pads(), &self.controls_dir);
+        let device = controls::device(&self.activity.pads(), &self.device_dir);
         let live = self.input.is_live();
         let page = TestPage::new(&self.test_extras());
         let pad_id = pad_id.to_owned();

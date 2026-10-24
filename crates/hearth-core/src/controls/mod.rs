@@ -15,7 +15,7 @@ pub mod model;
 pub use device::{ControllerIdentity, ControllerKind};
 pub use file::Problem;
 pub use key::GameKey;
-pub use layers::{Resolved, Source, resolve, user_dir};
+pub use layers::{Resolved, Source, UserControls, resolve};
 pub use model::{
     EmulatorAction, HearthAction, Mapping, PadInput, StickOptions, Target, TriggerMode,
 };

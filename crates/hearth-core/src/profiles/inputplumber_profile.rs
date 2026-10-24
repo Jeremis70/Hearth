@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::Path;
 
-use crate::controls::layers::{UserLayers, resolve_layers};
+use crate::controls::layers::{UserControls, UserLayers, resolve_layers};
 use crate::controls::model::InputKind;
 use crate::controls::{
     ControllerKind, EmulatorAction, GameKey, HearthAction, Mapping, PadInput, Target,
@@ -68,7 +68,7 @@ impl VirtualLayout {
         let shipped = resolve_layers(
             system,
             &key,
-            Path::new(""),
+            &UserControls::none(),
             ControllerKind::Generic,
             UserLayers::NONE,
         )?;
@@ -470,7 +470,13 @@ mod tests {
             std::fs::write(user.join(format!("systems/{}.toml", system.id)), text).unwrap();
         }
         let key = GameKey::for_rom(&system.id, Path::new("none"), "game");
-        let resolved = resolve(system, &key, &user, ControllerKind::DualSense).unwrap();
+        let resolved = resolve(
+            system,
+            &key,
+            &UserControls::test_at(user),
+            ControllerKind::DualSense,
+        )
+        .unwrap();
         assert!(resolved.problems.is_empty(), "{:?}", resolved.problems);
         resolved.mapping
     }

@@ -18,6 +18,7 @@ use hearth_core::art::{
     ArtCache, DisplayClass, MetadataProvider, MockMetadataProvider, SteamGridDb,
 };
 use hearth_core::config::{self, Config};
+use hearth_core::controls::UserControls;
 use hearth_core::custom::CustomStore;
 use hearth_core::packs::Resolver;
 use hearth_core::paths::{self, DataDirs};
@@ -232,14 +233,16 @@ fn main() -> anyhow::Result<()> {
         .or_else(paths::default_games_dir)
         .context("no home directory; pass --games-dir")?;
     let systems = Systems::builtin()?;
-    let controls_dir = hearth_core::controls::user_dir(dirs.config());
+    let device_dir = dirs.shared_controls();
+    let user = dirs.profile(&ProfileId::default());
 
     if let Some(query) = args.print_controls {
         return print_controls(
             &query,
             &games_dir,
             &systems,
-            &controls_dir,
+            &device_dir,
+            &UserControls::of(&user),
             &dirs,
             args.input,
         );
@@ -345,10 +348,10 @@ fn main() -> anyhow::Result<()> {
         overlay,
         compositor,
         systems,
-        user: dirs.profile(&ProfileId::default()),
+        user,
         profile: RetroArchProfile::new(dirs.legacy_retroarch()),
         dolphin: DolphinProfile::new(dirs.legacy_dolphin(), dolphin),
-        controls_dir,
+        device_dir,
         runtime_dir: dirs.runtime().to_path_buf(),
         activity: input.activity.clone(),
         raw_activity: input.observer.as_ref().map(GilrsBackend::activity),
@@ -438,7 +441,8 @@ fn print_controls(
     query: &str,
     games_dir: &std::path::Path,
     systems: &Systems,
-    controls_dir: &std::path::Path,
+    device_dir: &std::path::Path,
+    user: &UserControls,
     dirs: &DataDirs,
     input: InputChoice,
 ) -> anyhow::Result<()> {
@@ -506,9 +510,9 @@ fn print_controls(
     } else {
         controls::PadTarget::Physical
     };
-    let device = controls::device(&pads, controls_dir);
+    let device = controls::device(&pads, device_dir);
     let retroarch = RetroArchProfile::new(dirs.legacy_retroarch());
-    let input = controls::game_input(system, game, kind, controls_dir, device, &retroarch, pad);
+    let input = controls::game_input(system, game, kind, user, device, &retroarch, pad);
     print!("{}", input.describe(game));
     Ok(())
 }

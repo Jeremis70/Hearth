@@ -565,7 +565,7 @@ fn bind_hotkey(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::controls::{GameKey, resolve};
+    use crate::controls::{GameKey, UserControls, resolve};
     use crate::model::SystemId;
     use crate::profiles::input::assert_golden;
     use crate::systems::Systems;
@@ -583,7 +583,13 @@ mod tests {
         let systems = Systems::builtin().unwrap();
         let n64 = systems.get(&SystemId::new("n64")).unwrap();
         let key = GameKey::for_rom(&n64.id, &dir.path().join("none"), "OoT");
-        let resolved = resolve(n64, &key, &user, crate::controls::ControllerKind::Generic).unwrap();
+        let resolved = resolve(
+            n64,
+            &key,
+            &UserControls::test_at(user),
+            crate::controls::ControllerKind::Generic,
+        )
+        .unwrap();
         assert!(resolved.problems.is_empty(), "{:?}", resolved.problems);
         resolved.mapping
     }

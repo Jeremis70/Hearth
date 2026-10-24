@@ -236,7 +236,7 @@ mod tests {
     use std::path::Path;
 
     use super::*;
-    use crate::controls::{GameKey, resolve};
+    use crate::controls::{GameKey, UserControls, resolve};
     use crate::model::SystemId;
     use crate::profiles::input::assert_golden;
     use crate::systems::Systems;
@@ -256,7 +256,13 @@ mod tests {
         let systems = Systems::builtin().unwrap();
         let gc = systems.get(&SystemId::new("gc")).unwrap();
         let key = GameKey::for_rom(&gc.id, &iso, "TP");
-        let resolved = resolve(gc, &key, &user, crate::controls::ControllerKind::Generic).unwrap();
+        let resolved = resolve(
+            gc,
+            &key,
+            &UserControls::test_at(user),
+            crate::controls::ControllerKind::Generic,
+        )
+        .unwrap();
         assert!(resolved.problems.is_empty(), "{:?}", resolved.problems);
         resolved.mapping
     }

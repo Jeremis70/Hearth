@@ -153,10 +153,31 @@ Respect a future "Reduce motion" setting: all durations multiply by a `Theme.mot
   - The logo/greeting block, meta line, buttons and pill move up by 260. Focus goes to Play, or to the first widget on Welcome.
   - Up or Back restores the row.
 - Navigation: Left/Right in the row; Up from the row → top bar; L1/R1 switch Games/Media; Options on a game cell (or ⋯) opens the game menu.
-- **Game menu:** opens to the right of the focused cell, or under the buttons when opened from them. Items: Play or Close game (whichever applies), Controls for this game, Favorite (toggle with a check mark; the menu stays open), Properties. Back, Options or Left closes it. Uninstall comes later.
+- **Game menu:** opens to the right of the focused cell, or under the buttons when opened from them. Items: Play or Close game (whichever applies), Controls for this game, Favorite (toggle with a check mark; the menu stays open), Artwork, Theme music, Wrong game? (each opens the Customize page on that section), Properties. Back, Options or Left closes it. Uninstall comes later.
 - **Starting a game while another runs** (Play on Home, Options → Play, later the Library): a `ConfirmDialog` (720 wide; titles wrap, two lines at most) "Close <running game>?", "<new game> will start. Unsaved progress will be lost.", [Close and play] (danger) and [Cancel] (focused). The plain Close game confirmation says only "Unsaved progress will be lost." Confirm closes the running game the usual way (a frozen game is continued first so it can quit), waits for its session to end, then launches the new one. Cancel or Back leaves everything as it was.
 - **Problems Hearth works around** (e.g. `hearth.toml` unreadable): a one-line notice at the bottom center, warning icon + "Couldn't read hearth.toml (line 3) · Using default settings", for 20 s. It never quotes the file (it may hold the API key).
-- **Properties:** a modal card with title, console, file path, size and the SteamGridDB match; "Change artwork" and "Wrong game?" are shown disabled ("Coming later"). Back closes it.
+- **Properties:** a modal card with title, console, file path, size and the SteamGridDB match, then three focusable rows: Artwork, Theme music, Wrong game? (Up/Down, Accept opens the Customize page; Back from there returns here). Back closes it.
+
+### Customize (a game's artwork, match and theme)
+
+```
+[logo] Customize
+┌ sections (480) ─────┐   ┌ Hero ─────────────────────────────── [preview of the one in use] ┐
+│ ▣ Cover  Automatic  │   │ Now: picked from SteamGridDB                                       │
+│ ▣ Hero   Picked     │   │ [thumb][thumb ✓][thumb][thumb][thu…      ← strip, Left/Right       │
+│ ▣ Logo   Your file  │   │ ↔ Position                                            20 %         │
+│ ▣ Icon   Automatic  │   │ 🗋 Use a file…                                                     │
+│ ♪ Theme  Game folder│   │ ↺ Reset to automatic                                               │
+│ ? Wrong game?  TP   │   └────────────────────────────────────────────────────────────────────┘
+└─────────────────────┘                                              Ⓐ Use this  Ⓑ Back
+```
+
+- Full screen over the game's hero (as Home crops it), dimmed. Two panes like Settings: Right/Accept enter the pane, Left at its edge or Back return to the sections, Back from the sections leaves (to Home, or to Properties when opened from there). Each section's second line says where it comes from now: Automatic, Picked (SteamGridDB), Your file, Game folder or None; Wrong game? shows the match.
+- **Cover, Hero, Logo, Icon:** a strip of the matched game's SteamGridDB images (static, safe; the best first, square covers first), fetched when the section is focused and cached, so they show offline ("Offline · saved results"; "Can't reach SteamGridDB" without saved ones). The one in use has an accent check; Accept uses the focused one and Home changes at once. Then Use a file… (the file list), Reset to automatic, and for the hero Position.
+- **Position:** heroes (~3.1:1) are cropped to the screen. Accept fades the page to the bare hero exactly as Home draws it; Left/Right move the crop by 5 % (live on Home too), Accept saves, Back cancels. 0 % shows the hero's left edge, 100 % its right edge, Center by default.
+- **Theme music:** Now (Your file / Game folder / None), a warning line when Game themes is off in Settings, then Choose a file…, Start at (Left/Right in 1 s steps, restarting the preview there) and Remove theme (a picked file is deleted and the game folder's theme plays again; a game-folder theme is ignored, never deleted). While focus is in this pane the theme previews (crossfading from the ambient), even with Game themes off.
+- **Wrong game?:** Keep current match (focused first), then up to 8 games the matcher's searches returned (header name, then file name), each with its best cover's thumbnail and the search that found it. Choosing one matches the game to it: its automatic art is fetched again, SteamGridDB picks made from the old match go (picks from files stay), the hero is centered and the old candidates are dropped.
+- **File list** (`components/file_list.slint`, the Downloads inbox later): wide, the sections collapse to a rail. Images or music files from Downloads and the game's own folder, newest first: a thumbnail for images, the duration for audio, "Downloads · 2 h ago". Focusing a music file for 500 ms previews it. Accept copies the file into the game's data (the original is only read); Back returns.
 
 ### Media tab and Search (from `search.md`)
 
@@ -222,7 +243,10 @@ Settings
 - Cache: `<cache>/art/<art key>/` (`~/.cache/hearth/art/`, or `$HEARTH_HOME/cache/art/`), where the art key is `<system>/<serial>` or `<system>/name-<hash of the cleaned title>`. Never re-fetched unless files are missing (or a later "Refresh artwork").
 - Display copies: Home never decodes the originals. Next to them, `sized/<class>/{hero,logo,grid}.qoi` are made for the screen's class (its height rounded up to 720/1080/1440/2160): hero as tall as the screen, logo inside 2× the 640×260 box, grid 2× `tile-focused`, all scaled with the class and never enlarged. Made on first use (already-cached art included), remade when the original is newer or the screen class changes (the class is remembered in `<data>/display-class`). Originals stay for "Change artwork" and other screens.
 - Loading order: the focused cell's hero and logo, the grids in view, the neighbours' heroes and logos, then the rest, on up to 3 threads.
-- A game's own art wins over the cache: `grid`, `hero`, `logo`, `icon` (`.png`, `.jpg` or `.webp`) in its game folder (see "Game folders" below).
+- A game's own art wins over the cache: `grid`, `hero`, `logo`, `icon` (`.png`, `.jpg`, `.jpeg` or `.webp`) in its game folder (see "Game folders" below). The user's picks win over both.
+- **Picks** (the Customize page) are the user's data, in `<data>/games/<art key>/` (`.dev-data/data/games/gc/GZ2E01/`): copies of the chosen files (`hero.png`, `theme.mp3`…) and `custom.toml` (per kind: `source = "sgdb"` with its `asset` id, or `"file"` with the `from` path for information; the hero's `position`; the theme's `start`, or `source = "none"` to play none). Keyed by art key like the cache, so dumps of one game share them, moves keep them, and every profile sees them. They are never deleted with the library's clean-up of vanished games (only by deleting the game from Hearth, later); orphans stay (Storage can offer "Leftover customizations" later). **A game without a header serial is keyed by its cleaned file name** (`<system>/name-<hash>`): renaming its file (beyond No-Intro/Redump tags) loses its picks, match and cached art.
+- Candidates for the Customize page come through the art worker (one request at a time, like the art fetch). After a network error its requests back off like the art queue (5 min doubling to 6 h; a success ends it) and answer from the cache: `<cache>/art/<key>/candidates/<kind>.json` and thumbnails beside it; the matcher's games are kept in the library (`art_candidates`). `cargo run -p hearth-core --example art_probe -- --candidates <system> <rom>` lists them read-only.
+- `--mock-sgdb=fixtures` serves generated candidates (look-alike games, six images per kind, wide heroes with bars that show the crop). It only runs with a throwaway `HEARTH_HOME` (holding `.throwaway`): `scripts/test-home.sh` makes `.dev-data/test-home` (a copy of the dev config and library, an empty cache) and points `HEARTH_DOWNLOADS` at `.dev-data/downloads` (fixtures from `cargo run -p hearth-core --example make_fixtures`). `--mock-network` is still the always-offline provider.
 - **Game folders.** A game in its own folder under the system folder (a folder whose whole contents are that one game: one ROM; later an `.m3u` with its discs, or a folder-based game) keeps its extras there under fixed names:
 
   ```
@@ -232,7 +256,7 @@ Settings
     hero.png  logo.png  grid.png  icon.png    # or .jpg, .webp
   ```
 
-  A folder holding several games is only a grouping folder (no extras are read from it), and games laid out flat in the system folder simply have none. Nothing is matched by the ROM's file name. Lookups go through one chain (`hearth-core::extras`): a choice stored in Hearth's own per-game data, keyed by game id (Round C's picker, not built yet) > the file in the game folder > the pack or Hearth's default (the ambient) or the art cache. `cargo run -p hearth-core --example theme_probe -- ~/Games [title]` prints each game's folder and the files tried; the same paths are logged at debug (`hearth_core::extras`).
+  A folder holding several games is only a grouping folder (no extras are read from it), and games laid out flat in the system folder simply have none. Nothing is matched by the ROM's file name. Lookups go through one chain (`hearth-core::extras`): the user's pick (`hearth-core::custom`, see "Picks") > the file in the game folder > the pack or Hearth's default (the ambient) or the art cache. A pick of "none" stops the chain (a removed theme). `cargo run -p hearth-core --example theme_probe -- ~/Games [title]` prints each game's folder and the files tried; the same paths are logged at debug (`hearth_core::extras`).
 - **Moving a game keeps it.** A game's id is its path under the system folder, so moving a ROM into its own folder changes it; the next scan sees a game gone and one new with the same system and file name, and moves the row (playtime, last played, favorite, art key; the SteamGridDB match and cached art are keyed by the art key) to the new id. Only an unambiguous pair moves; renaming the file itself still starts it over.
 - No match is remembered and not retried; network or HTTP errors put the game in a retry queue (startup, then with backoff while running).
 - API key: `HEARTH_STEAMGRIDDB_KEY`, else `[art] steamgriddb_key` in `hearth.toml`. Without one, only local and cached art is shown.
@@ -280,7 +304,13 @@ ui_db = 10            # UI sounds
 music_db = -4         # music
 ```
 
-Without loop points the whole file loops with no crossfade (gapless: made for files that loop by construction, like Hearth's own). `cargo run --release -p hearth-audio --example loop_seam -- <file> <start> <end> <ms> out.wav` renders the 10 s around the seam with levels, to check loop points.
+Without loop points the whole file loops with no crossfade (gapless: made for files that loop by construction, like Hearth's own). `cargo run --release -p hearth-audio --example loop_seam -- <file> <start> <end> <ms> out.wav` renders the 10 s around the seam with levels, to check loop points (`<file> auto out.wav`: the points a theme gets automatically).
+
+**Game themes loop by themselves** (`hearth-audio::analyze`, cached per file in `<cache>/audio/`):
+- the first play starts at the first sample above −50 dBFS (leading silence skipped, intros kept), plus the game's "Start at";
+- the loop runs between the first and last 50 ms windows within 10 dB of the track's median level, then moves inward past the rest of a fade (while the level, smoothed over 500 ms, keeps rising toward the middle and is more than 1 dB under the median), so fade-ins and fade-outs stay out and no pass dips;
+- the end crossfades into the start over 2 s (equal power).
+The first play starts at once from a quick scan for the first sound while the analysis runs; loop points that arrive after the loop start went by make the looper decode the head again at the first loop end.
 
 Hearth's bundled sounds (`assets/sounds/`, CC0, generated by `scripts/make-default-sounds.py`) are placeholders. A missing sound is logged once and stays silent. The selection lives in `hearth.toml`:
 
@@ -298,7 +328,7 @@ ui_sounds = "ps5-sounds"
   - `handled` Accept / Back → `accept` / `back` (controller actions fire on release);
   - `quiet`: used, sound comes from elsewhere (Back or Resume in the overlay play `overlay_close`).
 - **Music:** the ambient loop on Hearth's screens, fading in over 300 ms. Silent whenever a game runs unfrozen: launching fades it out over 300 ms while the game starts; Resume unfreezes at once and fades it out over 150 ms. In the overlay over a frozen game it plays only with "Music in overlay" (continuing where it left off; never the game's theme); over a game whose suspend policy is off it stays silent.
-- **Game themes:** `theme.ogg` (or `.mp3`, `.flac`) in the game's own folder (§6 "Game folders"). When a game with a theme stays focused on Home's Games row for 500 ms, the ambient crossfades to it (800 ms), and back once focus settles elsewhere or Home is left. Themes are for browsing Home: the overlay always plays the ambient. Themes extracted from dumps will be another source in the same chain.
+- **Game themes:** the theme picked on the Customize page, else `theme.ogg` (or `.mp3`, `.flac`, `.wav`) in the game's own folder (§6 "Game folders"). When a game with a theme stays focused on Home's Games row for 500 ms, the ambient crossfades to it (800 ms), and back once focus settles elsewhere or Home is left. Themes are for browsing Home: the overlay always plays the ambient. Themes extracted from dumps will be another source in the same chain.
 - **Volumes** (Settings → Display & sound): UI sounds (default 80) and Music (default 70), 0–100 in steps of 10 on a dB scale (100 = 0 dB, each step −5 dB, 0 = silent); music always sits a further 6 dB under the UI sounds, so it stays a backdrop; Mute all; Music in overlay; Game themes. Changes apply at once (the UI volume plays a move at its new level) and are saved under `[audio]` in `hearth.toml`. System volume (PipeWire, the overlay's Volume button) is separate and later.
 
 ## 8. Assets and licenses

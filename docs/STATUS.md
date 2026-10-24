@@ -1,6 +1,6 @@
 # Hearth status
 
-Last updated: 2026-10-23 (round B, audio). Read this first, then `AGENTS.md` (rules, commands),
+Last updated: 2026-10-23 (round C.1, per-game customization). Read this first, then `AGENTS.md` (rules, commands),
 `.github/instructions/rust.instructions.md` and `docs/plan.md` (architecture).
 
 ## 0. Where we are, and how we work
@@ -18,6 +18,62 @@ Last updated: 2026-10-23 (round B, audio). Read this first, then `AGENTS.md` (ru
   only).
 - Round B, audio (2026-10-23): UI sounds from packs, the ambient loop, per-game themes,
   volumes in Settings. Design: `docs/design/README.md` §7 "Sound".
+- Round C.1, per-game customization (2026-10-23): the Customize page (artwork from
+  SteamGridDB candidates or a file, hero position, Wrong game?, theme music with Start at),
+  picks in `<data>/games/<art key>/`, themes that loop by themselves. Design: README §4
+  "Customize", §6 "Picks", §7 "Game themes loop by themselves".
+
+Round C.1 (per-game customization), 2026-10-23, oldest first:
+- `3575472`: `hearth-core::custom` (`CustomStore`, `custom.toml`, copies of chosen files);
+  `Picked` goes first in the extras chain; a source can block the rest (`Lookup::Blocked`).
+- `cff707f`: `MetadataProvider::assets` (all images of a kind, with thumbs); library v3
+  `art_candidates` (the matcher's games); `--mock-sgdb=fixtures` (only with a HEARTH_HOME
+  holding `.throwaway`); `scripts/test-home.sh`.
+- `716d9df`: the art worker serves the page (candidates, apply, pick file, reset, re-match,
+  position, theme start/remove; all writes there); its own backoff after network errors.
+- `11a82ba`, `4a27666`: `hearth-audio::analyze` (first sound at −50 dBFS, loop region by a
+  loudness envelope, fades walked out), `LoopSpec::intro_ms`, late loop points re-take the
+  head; preview slot in the director; theme keys carry the Start at.
+- `43e29b0`: `hearth-core::files` (read-only list, newest first), `HEARTH_DOWNLOADS`,
+  `examples/make_fixtures`. Themes may be `.wav`, art `.jpeg`.
+- `4bfffc2`: Home's hero cropped at `hero-x`; `hero-rev` so a same-size hero still swaps.
+- `0ed926c`, `087f411`: the Customize page (`ui/customize/`, `components/file_list.slint`,
+  `bridge/session/customize.rs`), Options items and Properties rows.
+- `803b70a`: dev socket words (`customize:`, `pick:`, `rematch:`, `pick_file:`, `position:`,
+  `reset:`, `theme_file:`, `theme_start:`, `theme_remove`, `custom_state`).
+- `9fecb2e`: `art_probe --candidates`.
+- Verified live (debug, nested gamescope 1920×1080 and 1280×720, `.dev-data/test-home` with
+  `--mock-sgdb=fixtures` or `--mock-network`, `--no-audio`, dev socket + screenshots):
+  - TP: hero #3 applied (check mark moves, status "Picked", backdrop and Home change at once),
+    position 0.2 (bare hero over the page, then Home cropped the same), logo from
+    `.dev-data/downloads/Logo transparent.png` (copied in; the original stays). All three
+    were there after a restart.
+  - Dummy Bowling (no match): "Wrong game?" listed 4 fixture games with thumbs; re-matched to
+    "Super Dummy Bowling": its art arrived and shows on Home. Cover and hero picked, then
+    `reset:hero` put only the hero back to automatic.
+  - OoT: Theme section previews the folder `theme.ogg` (`audio_state` current
+    `preview:…`); the file list (durations shown) previews the focused file after 500 ms;
+    picking `Short jingle.wav` replaced the theme; Remove fell back to the folder theme; a
+    second Remove wrote `source = "none"` (folder file untouched). With "Theme leading
+    silence.wav" picked and Start at 5: Home plays `theme:…/theme.wav@5000`; its cached
+    analysis says onset 3000 ms.
+  - Offline (`--mock-network`): hero/cover/logo show saved candidates with "Offline · saved
+    results"; icon (never listed) says "Can't reach SteamGridDB (trying again in 5 min). Use
+    a file meanwhile."
+  - Seams (`loop_seam … auto`, release): "Theme with fades.wav" (3 s fade-out) holds
+    −16 dB through the seam (−13 at most in the crossfade; before the fade walk it dipped to
+    −19); unit tests check onset within 20 ms and no window > 3 dB under the body, also when
+    loop points arrive after the loop start.
+  - Live SteamGridDB (user's key, read-only `art_probe --candidates`): TP's "Wrong game?"
+    list (10 games, match first) and 24 heroes, all 1920×620 or 3840×1240 with thumbs.
+- Not verified: listening (all runs were `--no-audio`; previews checked by `audio_state`
+  only), the controller (dev socket only), the real SteamGridDB inside Hearth (only through
+  `art_probe`), the Game themes-off warning line (code path only), a long title without a
+  logo in the header after the fix.
+- `.dev-data/games` links point at `~/Games/<system>/<rom>`, but the user moved the ROMs into
+  `~/Games/<system>/<title>/` (21:04): the dev games root has no OoT/TP now. Left as is; the
+  test runs use `.dev-data/test-games` (links to the new places, empty dummies, a copy of
+  OoT's `theme.ogg`).
 
 Round B (audio), 2026-10-23, oldest first:
 - `3efe5e6`: `pack.toml` `[sounds]` (logical name → file inside the pack) and
@@ -248,8 +304,11 @@ The working tree is clean.
 - Not tried with the controller yet: the Down state, Options menu and Favorite (dev socket only).
 - `hearth.toml` must quote the key (`steamgriddb_key = "…"`); an unquoted value makes the
   whole file invalid: Hearth runs on defaults and shows "Couldn't read hearth.toml (line N)".
+- Round C.1 follow-ups: typed search for "Wrong game?" and renaming (on-screen keyboard);
+  the Downloads inbox; the art icon isn't shown anywhere but the Customize page; Delete game
+  should remove `<data>/games/<key>/`; "Leftover customizations" in Storage.
 - Art round follow-ups:
-  - "Refresh artwork", "Change artwork", "Wrong game?" (shown disabled in Properties);
+  - "Refresh artwork";
   - a NetworkManager connectivity signal instead of the 60 s queue check;
   - the seam between the sharp and the blurred hero is softened by a gradient, not blended;
   - UI sounds: done in round B.
@@ -421,6 +480,10 @@ The working tree is clean.
 - Themes and a game's own art: `hearth-core::extras` (game folders, fixed names; see the
   design README §6).
 
+**Customize** (round C.1): `hearth-core::custom` (picks), `art/service/customize.rs` (the
+worker's side), `hearth-core::files`, `hearth-audio::analyze`, `ui/customize/`,
+`bridge/session/customize.rs`. README §4 "Customize".
+
 **Art, Home and packs** (art round)
 - `hearth-core::art`: `identity.rs` (art key `<system>/<serial>` or `<system>/name-<fnv64 of the
   cleaned title>`, search names, match selection), `provider.rs` (`MetadataProvider`,
@@ -477,8 +540,11 @@ The working tree is clean.
 - **Real thing:** `scripts/run-gamescope.sh` (options: `HEARTH_GS_SIZE`,
   `HEARTH_GS_FULLSCREEN=1`, `HEARTH_GS_ARGS`, `HEARTH_GS_RELEASE=1`).
 - **Dev socket actions:** up, down, left, right, accept, back, prev_tab, next_tab, options,
-  home_short, home_long, capture. Commands: `sound:<name>`, `audio_state` (printed by
-  `scripts/send-action.sh`).
+  home_short, home_long, capture. Commands: `sound:<name>`, `audio_state`, and the Customize
+  page's words (see `scripts/send-action.sh`; `custom_state` gives JSON). Replies are printed.
+- **Throwaway test home:** `scripts/test-home.sh [--reset] [gamescope|windowed] [args]`
+  (`.dev-data/test-home`, `--mock-sgdb=fixtures`, `HEARTH_DOWNLOADS=.dev-data/downloads`,
+  `--games-dir .dev-data/test-games`). Its dev socket: `HEARTH_DEV_SOCKET=./.dev-data/test-home/actions.sock`.
 - **Audio:** `HEARTH_AUDIO_STATS=1` (latency per UI sound), `--no-audio`. Check the stream:
   `pactl list sink-inputs`. `cargo run --release -p hearth-audio --example audio_probe` and
   `--example loop_seam` (see `AGENTS.md`, design README §7).
@@ -493,7 +559,7 @@ The working tree is clean.
   - library: `.dev-data/data/library.sqlite3`.
 - **FPS counter:** `HEARTH_RETROARCH_ARGS="--appendconfig=data/dev/retroarch-fps.cfg"`.
 - **Checks:** `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
-  `cargo test --workspace` (audio 11, core 138, platform 35, shell 23 tests).
+  `cargo test --workspace` (audio 16, core 155, platform 35, shell 23 tests).
 - **Artwork:** set `HEARTH_STEAMGRIDDB_KEY` or `[art] steamgriddb_key` in
   `.dev-data/config/hearth.toml` (gitignored). Without it: placeholders and one log line.
 

@@ -1,8 +1,9 @@
 //! Launches a ROM exactly the way Hearth does (RetroArch profile, ProcessRuntime, the gamescope
 //! X11 rule) with `--max-frames`, and reports the frame rate. For diagnosing slow games.
+//! Uses the user profile's RetroArch (`HEARTH_PROFILE`, default `default`) in `HEARTH_HOME`.
 //!
 //! ```text
-//! DISPLAY=:1 cargo run -p hearth-core --example launch_timing -- <profile-root> <core> <rom> [frames]
+//! HEARTH_HOME=./.dev-data DISPLAY=:1 cargo run -p hearth-core --example launch_timing -- <core> <rom> [frames]
 //! ```
 
 use std::path::Path;
@@ -10,19 +11,25 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use hearth_core::model::{Game, GameId, SystemId};
+use hearth_core::paths::DataDirs;
 use hearth_core::profiles::RetroArchProfile;
 use hearth_core::profiles::input::Translation;
 use hearth_core::runtime::{LaunchCtx, ProcessRuntime, Runtime};
+use hearth_core::users::ProfileId;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let [root, core, rom, rest @ ..] = args.as_slice() else {
-        return Err("usage: <profile-root> <core> <rom> [frames]".into());
+    let [core, rom, rest @ ..] = args.as_slice() else {
+        return Err("usage: <core> <rom> [frames]".into());
     };
     let frames: u32 = rest.first().map_or(Ok(600), |f| f.parse())?;
-    let profile = RetroArchProfile::new(root);
+    let user = match std::env::var("HEARTH_PROFILE") {
+        Ok(id) => ProfileId::new(&id)?,
+        Err(_) => ProfileId::default(),
+    };
+    let profile = RetroArchProfile::for_profile(&DataDirs::from_env()?.profile(&user));
     // Input mapping doesn't matter for timing: keep whatever remap the last launch wrote.
-    profile.prepare(&Translation::default())?;
+    profile.prepare(&SystemId::new("n64"), &Translation::default())?;
     let mut command = profile.command(Path::new(core), Path::new(rom));
     command
         .args

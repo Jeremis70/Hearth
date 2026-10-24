@@ -24,7 +24,7 @@ use hearth_core::packs::Resolver;
 use hearth_core::paths::{self, DataDirs};
 use hearth_core::profiles::{DolphinInstall, DolphinProfile, RetroArchProfile};
 use hearth_core::systems::Systems;
-use hearth_core::users::ProfileId;
+use hearth_core::users::{ProfileDirs, ProfileId};
 use hearth_platform::gamescope::{self, Compositor};
 use hearth_platform::input::dev_socket::DevSocketBackend;
 use hearth_platform::input::gilrs::GilrsBackend;
@@ -237,15 +237,7 @@ fn main() -> anyhow::Result<()> {
     let user = dirs.profile(&ProfileId::default());
 
     if let Some(query) = args.print_controls {
-        return print_controls(
-            &query,
-            &games_dir,
-            &systems,
-            &device_dir,
-            &UserControls::of(&user),
-            &dirs,
-            args.input,
-        );
+        return print_controls(&query, &games_dir, &systems, &device_dir, &user, args.input);
     }
 
     // Before anything reads the controller or opens a window. (--print-controls only
@@ -348,9 +340,9 @@ fn main() -> anyhow::Result<()> {
         overlay,
         compositor,
         systems,
-        user,
-        profile: RetroArchProfile::new(dirs.legacy_retroarch()),
-        dolphin: DolphinProfile::new(dirs.legacy_dolphin(), dolphin),
+        user: user.clone(),
+        profile: RetroArchProfile::for_profile(&user),
+        dolphin: DolphinProfile::new(&user, dolphin),
         device_dir,
         runtime_dir: dirs.runtime().to_path_buf(),
         activity: input.activity.clone(),
@@ -442,10 +434,10 @@ fn print_controls(
     games_dir: &std::path::Path,
     systems: &Systems,
     device_dir: &std::path::Path,
-    user: &UserControls,
-    dirs: &DataDirs,
+    user_dirs: &ProfileDirs,
     input: InputChoice,
 ) -> anyhow::Result<()> {
+    let user = &UserControls::of(user_dirs);
     let games = hearth_core::scan::scan_roms(games_dir, systems);
     let keys: Vec<_> = games
         .iter()
@@ -511,7 +503,7 @@ fn print_controls(
         controls::PadTarget::Physical
     };
     let device = controls::device(&pads, device_dir);
-    let retroarch = RetroArchProfile::new(dirs.legacy_retroarch());
+    let retroarch = RetroArchProfile::for_profile(user_dirs);
     let input = controls::game_input(system, game, kind, user, device, &retroarch, pad);
     print!("{}", input.describe(game));
     Ok(())

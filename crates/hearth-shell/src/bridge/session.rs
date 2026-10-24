@@ -1252,7 +1252,7 @@ impl Controller {
         let controls_problem = input.report();
         let mut command = match (emulator.kind, emulator.core.as_ref()) {
             (EmulatorKind::Retroarch, Some(core)) if core.is_file() => {
-                if let Err(err) = self.profile.prepare(&input.translation) {
+                if let Err(err) = self.profile.prepare(&game.system, &input.translation) {
                     self.toast(&format!("Couldn't write the RetroArch config: {err}"));
                     return;
                 }

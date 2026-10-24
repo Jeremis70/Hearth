@@ -41,7 +41,9 @@ use hearth_platform::gamescope::{AppId, Compositor, SHELL_APP_ID};
 use hearth_platform::input::{
     Action, InputControl, InputMode, InputStatus, PadActivity, PadInfo, Power,
 };
-use slint::{ComponentHandle, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel};
+use slint::{
+    ComponentHandle, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, SharedString, VecModel,
+};
 use std::rc::Rc;
 
 use super::art::{self as art_ui, ArtLoader, ArtMap, ConsoleIcons};
@@ -57,12 +59,12 @@ use crate::controls;
 use crate::{
     AppWindow, AudioRow, ControllerType, ControlsData, GameProperties, HomeData, HomeTile,
     OverlayPanel, OverlayWindow, PadNotice, PadRow, Session, SettingsCategory, SettingsData,
-    Status, TileKind,
+    Status, Theme, TileKind,
 };
 pub use customize::dev_commands;
 use hearth_audio::director::{self, GameScene, MusicDirector, Scene};
 use hearth_audio::{Audio, SoundFile, Volumes};
-use hearth_core::config::AudioSettings;
+use hearth_core::config::{AudioSettings, DisplaySettings};
 use hearth_core::extras::{Extra, Extras};
 
 /// When the controls page's drawing is rasterized ahead of use (the window has its size).
@@ -231,6 +233,8 @@ pub struct Controller {
     audio: Audio,
     music: MusicDirector,
     audio_settings: AudioSettings,
+    /// Animated art and Reduce motion (`[display]`).
+    display_settings: DisplaySettings,
     /// The ambient loop of the selected sound pack (else Hearth's).
     ambient: Option<SoundFile>,
     /// A game's own extras (its theme).
@@ -315,6 +319,8 @@ pub struct Setup {
     pub audio: Audio,
     /// Volumes and music options from `hearth.toml`.
     pub audio_settings: AudioSettings,
+    /// Animated art and Reduce motion from `hearth.toml`.
+    pub display_settings: DisplaySettings,
     /// Installed asset packs.
     pub packs_dir: PathBuf,
 }
@@ -419,7 +425,7 @@ pub fn install(setup: Setup) {
         setup.picks.clone(),
         setup.library_db.clone(),
         setup.art_provider,
-        true,
+        setup.display_settings.animated_art,
         art_loader.clone(),
     );
     load_library(LibraryLoad {
@@ -492,6 +498,7 @@ pub fn install(setup: Setup) {
         audio: setup.audio,
         music: MusicDirector::default(),
         audio_settings: setup.audio_settings,
+        display_settings: setup.display_settings,
         ambient: sounds::music_file("ambient_loop"),
         extras: Extras::standard(setup.picks.clone()),
         focused_theme: None,
@@ -508,6 +515,7 @@ pub fn install(setup: Setup) {
     CONTROLLER.with(|cell| *cell.borrow_mut() = Some(controller));
     with(Controller::fill_display_items);
     with(Controller::fill_audio_rows);
+    with(Controller::apply_motion);
     with(|c| c.sync_music(director::FADE_IN));
     if let Some((title, text)) = setup.config_problem {
         with(|c| c.show_problem(&title, &text));
@@ -2190,6 +2198,7 @@ impl Controller {
             slider: true,
             value: i32::from(value),
             on: false,
+            detail: SharedString::new(),
         };
         let toggle = |key: &str, label: &str, on: bool| AudioRow {
             key: key.into(),
@@ -2197,13 +2206,21 @@ impl Controller {
             slider: false,
             value: 0,
             on,
+            detail: SharedString::new(),
         };
+        let d = self.display_settings;
+        let mut animated = toggle("animated_art", "Animated artwork", d.animated_art);
+        if d.reduce_motion && d.animated_art {
+            animated.detail = "Off · Reduce motion".into();
+        }
         let rows = vec![
             slider("ui_volume", "UI sounds volume", a.ui_volume),
             slider("music_volume", "Music volume", a.music_volume),
             toggle("mute", "Mute all", a.mute),
             toggle("music_in_overlay", "Music in overlay", a.music_in_overlay),
             toggle("game_themes", "Game themes", a.game_themes),
+            animated,
+            toggle("reduce_motion", "Reduce motion", d.reduce_motion),
         ];
         app.global::<SettingsData>()
             .set_audio_rows(ModelRc::from(Rc::new(VecModel::from(rows))));
@@ -2211,6 +2228,10 @@ impl Controller {
 
     /// A volume step (`step` ±1 = 10) or a toggle (`step` 0), applied at once and saved.
     fn audio_change(&mut self, key: &str, step: i32) {
+        if matches!(key, "animated_art" | "reduce_motion") {
+            self.display_change(key);
+            return;
+        }
         let a = &mut self.audio_settings;
         let volume = |v: u8| (i32::from(v) + step * 10).clamp(0, 100) as u8;
         match key {
@@ -2237,6 +2258,43 @@ impl Controller {
         }
         self.fill_audio_rows();
         self.sync_music(director::FADE_LAUNCH);
+    }
+
+    /// Toggles Animated artwork or Reduce motion, applied at once and saved.
+    fn display_change(&mut self, key: &str) {
+        let d = &mut self.display_settings;
+        match key {
+            "animated_art" => d.animated_art = !d.animated_art,
+            "reduce_motion" => d.reduce_motion = !d.reduce_motion,
+            _ => return,
+        }
+        let d = *d;
+        if let Err(err) = config::save_display(&self.config_file, &d) {
+            tracing::warn!("saving the display settings failed: {err}");
+            self.toast(&format!("Couldn't save the setting: {err}"));
+        }
+        if key == "animated_art"
+            && let Some(art) = &self.art_service
+        {
+            art.set_animated(d.animated_art);
+        }
+        self.fill_audio_rows();
+        self.apply_motion();
+    }
+
+    /// Reduce motion: every transition off in both windows (`Theme.motion-scale`).
+    fn apply_motion(&mut self) {
+        let scale = if self.display_settings.reduce_motion {
+            0.0
+        } else {
+            1.0
+        };
+        if let Some(app) = self.app.upgrade() {
+            app.global::<Theme>().set_motion_scale(scale);
+        }
+        if let Some(overlay) = &self.overlay {
+            overlay.global::<Theme>().set_motion_scale(scale);
+        }
     }
 
     /// The pack list of one category: Hearth default, then the installed packs that have

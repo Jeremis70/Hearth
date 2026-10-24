@@ -45,12 +45,15 @@ export struct SettingsCategory {
 
 // Settings → Display & sound, below the pack rows: a volume (`slider`, 0–100 in steps of 10)
 // or an on/off option.
+// A row of Display & sound under the packs: volumes, music options, then animation.
 export struct AudioRow {
-    key: string,      // ui_volume, music_volume, mute, music_in_overlay, game_themes
+    key: string,      // ui_volume, music_volume, mute, music_in_overlay, game_themes,
+                      // animated_art, reduce_motion
     label: string,
     slider: bool,
     value: int,       // sliders
     on: bool,         // toggles
+    detail: string,   // replaces On/Off when set ("Off · Reduce motion")
 }
 
 // A connected controller (Settings → Controllers).

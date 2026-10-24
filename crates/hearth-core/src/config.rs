@@ -14,6 +14,10 @@
 //! mute = false
 //! music_in_overlay = false  # the overlay pauses the game to talk: silence by default
 //! game_themes = true
+//!
+//! [display]
+//! animated_art = true                   # animated heroes and logos on Home
+//! reduce_motion = false                 # no animation anywhere (stills, no transitions)
 //! ```
 //!
 //! A missing file is an empty config. Settings change it through `toml_edit`, so comments and
@@ -129,6 +133,33 @@ pub struct Config {
     art: ArtConfig,
     packs: PacksConfig,
     audio: AudioSettings,
+    display: DisplaySettings,
+}
+
+/// How things move on screen (`[display]`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct DisplaySettings {
+    /// Animated heroes and logos play on Home (and are fetched).
+    pub animated_art: bool,
+    /// No animation: stills only, transitions off.
+    pub reduce_motion: bool,
+}
+
+impl Default for DisplaySettings {
+    fn default() -> Self {
+        Self {
+            animated_art: true,
+            reduce_motion: false,
+        }
+    }
+}
+
+impl DisplaySettings {
+    /// Whether animated art plays now (on, and motion not reduced).
+    pub fn animates(self) -> bool {
+        self.animated_art && !self.reduce_motion
+    }
 }
 
 /// Hearth's own volumes and music options (`[audio]`).
@@ -230,6 +261,16 @@ impl Config {
     pub fn set_audio(&mut self, audio: AudioSettings) {
         self.audio = audio;
     }
+
+    /// The `[display]` settings.
+    pub fn display(&self) -> DisplaySettings {
+        self.display
+    }
+
+    /// Replaces the display settings, in memory only.
+    pub fn set_display(&mut self, display: DisplaySettings) {
+        self.display = display;
+    }
 }
 
 /// Saves the pack choice for `category` into `path`, keeping everything else in the file.
@@ -257,6 +298,14 @@ pub fn save_audio(path: &Path, audio: &AudioSettings) -> Result<(), ConfigError>
         table.insert("mute", value(audio.mute));
         table.insert("music_in_overlay", value(audio.music_in_overlay));
         table.insert("game_themes", value(audio.game_themes));
+    })
+}
+
+/// Saves `[display]` into `path`, keeping everything else in the file.
+pub fn save_display(path: &Path, display: &DisplaySettings) -> Result<(), ConfigError> {
+    edit_table(path, "display", |table| {
+        table.insert("animated_art", value(display.animated_art));
+        table.insert("reduce_motion", value(display.reduce_motion));
     })
 }
 
@@ -369,6 +418,25 @@ mod tests {
         let config = Config::load(&path).unwrap();
         assert_eq!(config.audio(), audio);
         assert_eq!(config.pack(PackCategory::UiSounds), Some("ps5"));
+    }
+
+    #[test]
+    fn display_defaults_animate_and_reduce_motion_stops_it() {
+        let dir = tempdir();
+        let path = dir.path().join("hearth.toml");
+        let display = Config::load(&path).unwrap().display();
+        assert!(display.animated_art && !display.reduce_motion && display.animates());
+        fs::write(&path, "# mine\n[audio]\nmute = true\n").unwrap();
+        let reduced = DisplaySettings {
+            animated_art: true,
+            reduce_motion: true,
+        };
+        save_display(&path, &reduced).unwrap();
+        let config = Config::load(&path).unwrap();
+        assert_eq!(config.display(), reduced);
+        assert!(!config.display().animates());
+        assert!(config.audio().mute);
+        assert!(fs::read_to_string(&path).unwrap().starts_with("# mine"));
     }
 
     #[test]

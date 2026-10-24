@@ -344,6 +344,7 @@ fn main() -> anyhow::Result<()> {
         packs_dir: dirs.packs().to_path_buf(),
         audio,
         audio_settings: config.audio(),
+        display_settings: config.display(),
     });
 
     let clock = slint::Timer::default();

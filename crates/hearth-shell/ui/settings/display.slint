@@ -42,10 +42,11 @@ component AudioRowView inherits Rectangle {
     height: Theme.row-height;
     ListRow {
         width: parent.width;
-        icon: Icons.volume;
+        icon: data.key == "animated_art" ? Icons.image-play
+            : data.key == "reduce_motion" ? Icons.accessibility : Icons.volume;
         label: data.label;
-        value: data.slider ? data.value : (data.on ? "On" : "Off");
-        value-color: !data.slider && data.on ? Theme.accent : Theme.text-secondary;
+        value: data.slider ? data.value : data.detail != "" ? data.detail : (data.on ? "On" : "Off");
+        value-color: !data.slider && data.on && data.detail == "" ? Theme.accent : Theme.text-secondary;
         show-divider: show-divider;
     }
     if data.slider: LevelBar {

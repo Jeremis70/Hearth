@@ -348,3 +348,138 @@ ui_sounds = "ps5-sounds"
 - Controller icons (top bar, Controllers widget and page, controller cards): Kenney Input Prompts (CC0), in `assets/icons/controllers/` (DualSense, DualShock 4, Xbox, Switch Pro, generic, disconnected).
 - Sounds: Hearth's own, synthesized (CC0), in `assets/sounds/`.
 - PS5 screenshots stay in `docs/reference/` (gitignored) and are never shipped.
+
+## 9. Profiles and storage
+
+Round D made the storage profile-ready: everything that belongs to a person lives under
+`<home>/profiles/<id>/`, so adding profiles (picker, guests, per-controller sign-in) never moves
+data again. There is no profile UI yet; one profile is active per run, `default` unless
+`--profile <id>` says otherwise (an unknown id creates a fresh profile: no saves, the shipped
+controls). Code: `hearth-core::users` (`ProfileId`, `ProfileDirs`, `UserProfile`, `migrate`).
+
+### Layout
+
+```
+<home>/                              (HEARTH_HOME, or the XDG dirs: config, cache, data for the rest)
+  config/hearth.toml                 shared (see "Settings, later" below)
+  config/controls/device.toml        shared: names of this box's pads
+  data/library.sqlite3               shared library; play history per profile (profile_id)
+  data/games/<art key>/              Customize picks, shared
+  data/display-class, hearth.lock    shared
+  cache/ packs/ runtime/             shared (art, audio analyses, packs, InputPlumber profiles)
+  emulators/retroarch/system/        shared: BIOS and core system files
+  profiles/
+    migration.toml                   progress of the move from before profiles
+    <id>/
+      profile.toml                   name, created
+      saves/n64/<rom>.srm            RetroArch battery saves, one flat folder per system
+      saves/gc/Card A/<USA|JPN|EUR>/ GameCube GCI folders (Card B likewise)
+      saves/gc/MemoryCardA.<region>.raw   GameCube raw memory cards (if Dolphin uses them)
+      saves/wii/nand/                the Wii NAND (Wii saves live in it)
+      controls/systems/<system>.toml
+      controls/games/<system>/<serial>.toml
+      emulators/retroarch/           retroarch.cfg (rewritten at launch), states/, config/,
+                                     remaps/, logs/, playlists/, screenshots/
+      emulators/dolphin/             Dolphin's user dir: Config/, StateSaves/, GC/SRAM.raw,
+                                     Cache/, Load/, Logs/, …
+  backup/<YYYYmmdd-HHMMSS>/          copies made before moving data, with SHA256SUMS
+```
+
+`saves/<system>/` holds what the *game* saves (battery saves, memory cards, the NAND); emulator
+save states stay in the emulator's folder (they are emulator-specific).
+
+- **Per profile:** `profile.toml`, saves, controls (systems and games), the RetroArch and
+  Dolphin folders, and in the library: playtime, last played (recents), favorites and play
+  sessions (`profile_games`, `play_sessions`, keyed by profile id).
+- **Shared:** the library itself (games, art status, queue, candidates), the art cache, Customize
+  picks, packs, the SteamGridDB key, network and system settings, `device.toml`, BIOS files,
+  runtime files.
+- **Dolphin's cache is per profile.** Dolphin has no setting for its cache folder: `D_CACHE_IDX`
+  follows the user directory (`-u`), and only `XDG_CACHE_HOME` moves it when there is no `-u`
+  (`UICommon::SetUserDirectory`). The shader cache is rebuilt per profile; it is small (7 MB for
+  TP).
+- **How emulators find the saves:** RetroArch gets `savefile_directory = saves/<system>` with
+  `sort_savefiles_enable = false` and the shared `system_directory`, all absolute, in the config
+  Hearth writes at every launch. Dolphin gets `-u emulators/dolphin` and `-C` overrides
+  `Core.GCIFolderAPath/BPath` (`saves/gc/Card A|B`; Dolphin appends the region, Modern style:
+  `JPN`, not `JAP`), `Core.MemcardAPath/BPath` (`saves/gc/MemoryCardA.raw`; Dolphin inserts
+  `.<region>`) and `General.NANDRootPath`. Both card kinds are always given: the profile's own
+  Dolphin.ini (`Core.SlotA`) decides which one is used. The Flatpak gets the profile's folder.
+- **Controls** resolve per (profile, system, game): `controls::UserControls` is one profile's
+  files; `device.toml` stays shared.
+
+### Settings, later (not moved yet)
+
+| `hearth.toml` | Becomes | Why |
+|---|---|---|
+| `[packs] console_icons`, `ui_sounds` | per profile | a theme is personal (the PS5 does it per user) |
+| `[audio] music_in_overlay`, `game_themes` | per profile | taste |
+| `[audio] ui_volume`, `music_volume`, `mute` | shared | the room's speakers |
+| `[display] animated_art`, `reduce_motion` | per profile | accessibility and taste |
+| `[art] steamgriddb_key` | shared | one account for the box |
+
+### The move from before profiles
+
+At startup, after the single-instance lock and before anything opens the library or an emulator
+folder, `users::migrate` moves an install from before profiles into `profiles/default/`:
+
+1. **Plan** from what exists: battery saves of known RetroArch cores (`Mupen64Plus-Next` → `n64`;
+   other cores' saves stay in the profile's RetroArch folder, logged), Dolphin's GCI folders and
+   raw cards, its Wii NAND, RetroArch's `system/` to the shared folder, then both emulator folders
+   and `config/controls/{systems,games}`. Refused before anything happens if a destination exists,
+   a move would cross filesystems (it must be a rename), or the free space is under twice the
+   backup.
+2. **Backup** of what can't be regenerated: saves, states, controls, emulator config files and
+   the library database (with `-wal`/`-shm`). Not caches (Dolphin `Cache/`, RetroArch `cache/`,
+   `thumbnails/`), logs, dumps, RetroArch's `autoconfig/` (rewritten at launch) or BIOS files:
+   they are moved unchanged and listed in the summary. Copies keep their modification time,
+   symlinks are copied as links. `SHA256SUMS` (the `sha256sum -c` format) is written, and every
+   copy is re-read and compared (size and hash) with its original.
+3. **Moves**, one `rename` at a time, each recorded in `profiles/migration.toml` (written
+   atomically). A killed run resumes at the next start: a move whose source is gone and whose
+   destination exists counts as done; a backup interrupted mid-way is thrown away and redone.
+4. **Finish:** `profile.toml`, the library upgrade (version 4: the history moves to `default`),
+   and a scan of the moved emulator configs for paths naming the old folders (`retroarch.cfg`
+   is rewritten at every launch, so it is only noted).
+
+Any error while moving undoes the moves made, newest first, and records `rolled_back`; Hearth
+then starts with the notice "Couldn't move your saves into your profile · Nothing was changed.
+Games won't start until this is fixed (see the log)", no game launches, and the next start
+tries again. `Library::open` refuses a library from before profiles that holds games
+(`NeedsProfileUpgrade`), so after a failure nothing upgrades it without the backup; only the
+migration's `open_upgrading` does. A finished migration records `done` and later starts do
+nothing. `cargo run -p hearth-core --example migration_plan` prints the plan and the backup
+size without changing anything.
+
+### Emulator settings shared by every profile (design, for the emulator settings round)
+
+Graphics settings, texture packs and other emulator options that belong to the console rather
+than to a person must coexist with per-profile emulator folders.
+
+**Recommended: a shared base merged at launch.** Hearth owns the shared settings in its own files
+(`<home>/emulators/<emulator>/shared.toml`, written by the future Emulators settings page) and
+applies them at every launch, under the profile's settings and under Hearth's enforced keys:
+
+- **RetroArch:** Hearth already writes `retroarch.cfg` at every launch. Order of precedence,
+  lowest first: RetroArch's defaults → the shared settings (video driver options, shaders,
+  scaling) → the profile's own settings (controls translation, per-profile options) → Hearth's
+  enforced keys (paths, hotkeys bound to nothing, fullscreen). Written as one generated file, or
+  as `--appendconfig shared.cfg|profile.cfg` with the enforced keys in the main file. Shared
+  shaders and overlays live in `<home>/emulators/retroarch/` (paths given by
+  `video_shader_dir`, `overlay_directory`), like the BIOS folder.
+- **Dolphin:** shared settings become more `-C` overrides (Dolphin's command-line layer is
+  never saved, so the profile's ini can't drift). Shared assets by path keys, not copies:
+  `General.LoadPath` → `<home>/emulators/dolphin/Load` (texture packs, GraphicMods, Riivolution)
+  and `General.ResourcePackPath` → `<home>/emulators/dolphin/ResourcePacks`. Graphics options
+  (`GFX.ini`) go through `-C Graphics.<Section>.<Key>`.
+- A per-profile override of a shared setting, if ever wanted, is one more layer in the same
+  merge.
+
+**Rejected: shared files linked into each profile's folder.** Emulators save settings by
+writing a temporary file and renaming it over the original, which replaces a symlink with a
+plain file (the profile silently forks); Dolphin rewrites its whole `Dolphin.ini` and `GFX.ini`;
+hard links break the same way; and the Flatpak sandbox needs every link target granted. A merge
+at launch has none of these problems and keeps Hearth the only writer of shared settings.
+
+(Moving a texture pack folder into the shared `Load` later is a move of user files: it will need
+the same backup-and-rename care as round D's migration.)

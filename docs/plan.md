@@ -264,7 +264,7 @@ suspend = "sigstop"
 Emulator detection order: PATH binary → Flatpak (`flatpak info <id>`) → AppImage folder. Missing emulator = game shown greyed with "Install Dolphin to play".
 
 **Profiles** make every emulator behave like part of one console. Checklist for each one:
-- Fullscreen, no emulator UI, pause on focus loss, saves under `~/.local/share/hearth/saves/<system>/`.
+- Fullscreen, no emulator UI, pause on focus loss, saves in the user profile's `saves/<system>/` (`~/.local/share/hearth/profiles/<id>/saves/<system>/`; layout in `docs/design/README.md` §9).
 - Controller: InputPlumber's virtual Xbox Elite 2 pad, laid out like the console's default; emulator actions on its paddles, Share and free buttons, everything else unbound (no pad button reaches the emulator's menu or hotkeys).
 - The emulator only ever sees the InputPlumber virtual pad (device allowlist), never raw pads: a reconnecting controller is visible for a moment before InputPlumber hides it. SDL emulators get `SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT=0x045e/0x0b00`; RetroArch uses its `sdl2` joypad driver for it, and only Hearth's own joypad profile (its autoconfig folder is Hearth's).
 - Prefer non-destructive overrides: RetroArch `--appendconfig=data/profiles/retroarch.cfg`; Dolphin `-C Section.Key=Value` overrides; flags like `-fullscreen` for PCSX2/DuckStation. Only edit INI files (with `rust-ini`) when an emulator has no CLI override.

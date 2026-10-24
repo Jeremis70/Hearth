@@ -1,6 +1,6 @@
 # Hearth status
 
-Last updated: 2026-10-24 (round C.2, animated art + polish). Read this first, then `AGENTS.md` (rules, commands),
+Last updated: 2026-10-24 (round D, profile-ready storage). Read this first, then `AGENTS.md` (rules, commands),
 `.github/instructions/rust.instructions.md` and `docs/plan.md` (architecture).
 
 ## 0. Where we are, and how we work
@@ -27,6 +27,56 @@ Last updated: 2026-10-24 (round C.2, animated art + polish). Read this first, th
   Home and the Customize page, Animated artwork and Reduce motion, Kenney controller icons,
   the controller-disconnected card. Design: README §6 "Animated art", §4 "Customize",
   "In-game overlay".
+
+- Round D, profile-ready storage (2026-10-24): per-person data under
+  `<home>/profiles/<id>/`, today's data moved into `profiles/default/` by a backed-up,
+  resumable migration. No profile UI. Design: README §9 "Profiles and storage".
+
+Round D (profile-ready storage), 2026-10-24, oldest first:
+- `f725497`: `hearth-core::users` (`ProfileId`, `ProfileDirs`, `profile.toml`); `DataDirs`
+  gains `profiles/`, `emulators/` (shared), `backup/`; the old emulator roots are
+  `legacy_retroarch()`/`legacy_dolphin()`.
+- `eb54509`: library v4: `profile_games` (playtime, last played, favorite) and `play_sessions`
+  per profile; v3 history goes to `default`; moved games take every profile's rows.
+- `648292b`: `controls::UserControls` (one profile's files): resolver and editor keyed by
+  (profile, system, game); `device.toml` stays in `config/controls/`.
+- `0422e5e`: RetroArch saves in `saves/<system>/` (`sort_savefiles_enable = false`), shared
+  `emulators/retroarch/system`, absolute paths (the relative-path known issue is gone);
+  Dolphin `-u` per profile plus `-C` GCI folder A/B, raw card A/B and NAND root in the
+  profile's `saves/` (checked in Dolphin's `MainSettings.cpp`, `UICommon.cpp`, `FileUtil.cpp`).
+- `8772091`, `0e99f65`: `users::migrate` (plan, space and filesystem checks, verified backup
+  with `SHA256SUMS`, marker-tracked renames, resume, rollback, stale path scan),
+  `examples/migration_plan` (read-only).
+- `20a4738`: `--profile`, the migration at startup (after the lock), the notice and no launches
+  when it fails, `profile_state`; `HEARTH_TEST_MIGRATION_ABORT_AFTER` (throwaway homes only).
+- `ee52ef6`: `test-home.sh --profile` (`HEARTH_TEST_PROFILE`), `make-migration-home.sh`.
+- `f237419`: `Library::open` refuses a pre-profile library holding games
+  (`NeedsProfileUpgrade`); only the migration upgrades it (found live: after a failed
+  migration the session had upgraded the db without a backup).
+- The user's TP save is a GCI folder (`GC/USA/Card A/01-GZ2E-gczelda2.gci`); raw cards are
+  handled too (unit test only).
+- Verified live (debug, nested gamescope 1920×1080, `--no-pad-input`, `--no-audio`, dev
+  socket, copies made by `make-migration-home.sh`):
+  - fake saves: killed (SIGABRT) after move 4 of 8, the next start resumed (`migration:
+    resumed`), `sha256sum -c` OK (28 files), saves identical to the backup, history in
+    `profile_games` for `default`; a second start: `nothing to do`, 42 hashes and the history
+    rows unchanged;
+  - real saves: Dolphin opened `profiles/default/saves/gc/Card A/USA/01-GZ2E-gczelda2.gci`
+    and wrote the NAND's `fst.bin` there (inotify); RetroArch logged "Redirecting save file to
+    …/profiles/default/saves/n64/…srm" and saved there; TP reached its health screen, OoT its
+    title; no old folder came back; both saves byte-identical to the backup afterwards;
+  - `--profile test2`: shipped controls only (`--print-controls gc/GZ2E01`), a GameCube option
+    changed in Settings went to `profiles/test2/controls/systems/gc.toml`, OoT got a new srm
+    in `profiles/test2/saves/n64/`, a closed session recorded 25 s for `test2` only;
+    `default`'s files (30 hashes) and rows unchanged;
+  - failure (an existing `profiles/default/emulators/retroarch`): refused before any backup,
+    notice on screen, launch refused with a toast, old files unchanged, db still version 3.
+- Found, not fixed (pre-existing): quitting Hearth while a game runs closes the game without
+  recording that session's playtime (`Controller::shutdown`).
+- Not done yet: the user's real `.dev-data` is still in the old layout, waiting for the OK
+  (`migration_plan`: 8 moves, backup 28 files / 1,147,806 bytes, BIOS 2.0 MiB and Dolphin cache
+  7.2 MiB moved unchanged). Until then a Hearth built from this round shows the notice there
+  and starts no game.
 
 Round C.2 (animated art + polish), 2026-10-24, oldest first:
 - `b9336cb`: `.dev-data/games` links the moved ROMs and their `theme.mp3` (see below).
@@ -419,9 +469,11 @@ The working tree is clean.
 
 **Emulators**
 - RetroArch (`profiles/retroarch.rs`, N64 via mupen64plus_next) uses an isolated config in
-  `.dev-data/retroarch/`.
+  the profile's `emulators/retroarch/`; saves in `saves/<system>/`, BIOS in the shared
+  `emulators/retroarch/system/`.
 - Dolphin (`profiles/dolphin.rs`, gc and wii) is the native `dolphin-emu`, else the Flatpak,
-  run with `-u <HEARTH_HOME>/dolphin` and `-C` overrides (reasons listed in the file).
+  run with `-u <profile>/emulators/dolphin` and `-C` overrides (reasons listed in the file;
+  memory cards and NAND in the profile's `saves/`).
 - Dolphin needs `UseDiscordPresence=False`: otherwise it writes outside the repo.
 - The window search counts mapped windows only.
 
@@ -439,8 +491,8 @@ The working tree is clean.
   1. `data/controls/<system>.toml`;
   2. `data/controls/pads/<type>.toml` (PlayStation Create = Capture, touchpad = console Select;
      Xbox/Switch Share = Capture; controls the console lacks are skipped silently);
-  3. `<config>/controls/systems/<system>.toml`;
-  4. `<config>/controls/games/<system>/<serial>.toml`, or the region-free serial. The serial
+  3. `<profile>/controls/systems/<system>.toml`;
+  4. `<profile>/controls/games/<system>/<serial>.toml`, or the region-free serial. The serial
      comes from the ROM header (`gc/GZ2E01`).
 - **Stick options:** `[player1.sticks."C-stick"]` (invert_x, invert_y, deadzone, sensitivity)
   belongs to the console stick and follows it to whichever physical stick drives it.
@@ -565,8 +617,6 @@ worker's side), `hearth-core::files`, `hearth-audio::analyze`, `ui/customize/`,
   - Share and paddle codes.
 - A game calling libwayland directly would still default to `wayland-0`. RetroArch is forced
   to X11 (`video_context_driver = "x"`).
-- `retroarch.cfg` paths are relative with `HEARTH_HOME=./.dev-data`. They work, but should be
-  absolute.
 - N64: mupen64plus's "hold R2 for C buttons" mode is dropped; the right stick drives the C
   buttons.
 - SDL names of non-DualSense pads are unverified (use `device.toml`).
@@ -607,12 +657,12 @@ worker's side), `hearth-core::files`, `hearth-audio::analyze`, `ui/customize/`,
   - F1/F2 = Guide short/long.
 - **Logs:**
   - Hearth: stderr (`RUST_LOG=info,hearth_shell=debug`);
-  - RetroArch: `.dev-data/retroarch/logs/`;
-  - Dolphin: `.dev-data/dolphin/Logs/hearth-launch.log`;
+  - RetroArch: `.dev-data/profiles/default/emulators/retroarch/logs/`;
+  - Dolphin: `.dev-data/profiles/default/emulators/dolphin/Logs/hearth-launch.log`;
   - library: `.dev-data/data/library.sqlite3`.
 - **FPS counter:** `HEARTH_RETROARCH_ARGS="--appendconfig=data/dev/retroarch-fps.cfg"`.
 - **Checks:** `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
-  `cargo test --workspace` (audio 16, core 155, platform 35, shell 23 tests).
+  `cargo test --workspace` (audio 16, core 198, platform 35, shell 28 tests).
 - **Artwork:** set `HEARTH_STEAMGRIDDB_KEY` or `[art] steamgriddb_key` in
   `.dev-data/config/hearth.toml` (gitignored). Without it: placeholders and one log line.
 

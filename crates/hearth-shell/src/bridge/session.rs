@@ -98,10 +98,12 @@ controller until it's back. Hearth's menus still work";
 const SERVICE_BACK: &str = "Controller service is back. Resume when you're ready";
 /// Back this fast: a restart; the game resumes on its own.
 const QUICK_RESTART: Duration = Duration::from_secs(2);
-/// The controller driving the game went away.
-const PAD_LOST: &str = "Reconnect your controller";
+/// The controller driving the game went away (the card's last line). "Or press any button on
+/// another controller" needs telling pads apart in game, which InputPlumber's single virtual
+/// pad doesn't: later, with players.
+const PAD_LOST: &str = "Reconnect it to continue";
 /// It is back, the game still frozen.
-const PAD_BACK: &str = "Controller connected. Resume when you're ready";
+const PAD_BACK: &str = "Controller connected · Resume when you're ready";
 /// How often controllers are checked for coming and going.
 const PAD_POLL: Duration = Duration::from_millis(250);
 /// How long a controller notice stays.
@@ -254,6 +256,8 @@ pub struct Controller {
     art_service: Option<ArtService>,
     /// Each game's art files (the art worker's last report).
     art_paths: std::collections::HashMap<GameId, hearth_core::art::GameArt>,
+    /// The game's controller went away: which, and when (its card stays up meanwhile).
+    pad_lost: Option<(String, Instant)>,
     /// The game the Home row puts first (the running one), changed only while Home can't be
     /// seen: once a launched game is on screen, and after the library reloads when it ends.
     row_first: Option<GameId>,
@@ -517,6 +521,7 @@ pub fn install(setup: Setup) {
         art_paths: std::collections::HashMap::new(),
         art_keys: std::collections::HashMap::new(),
         row_first: None,
+        pad_lost: None,
         anim: anim::AnimPlayer::default(),
         customize: None,
         preview: None,
@@ -636,6 +641,20 @@ fn battery_warning(percent: u8, warned: &mut Vec<u8>) -> Option<u8> {
 }
 
 /// `ControllerType.family` in `ui/components/glyphs.slint`.
+/// What a controller card says (`PadNotice` in Slint).
+#[derive(Debug, Clone, Default)]
+struct PadCard {
+    /// The big line: the controller's name, "Controller disconnected", "15 %".
+    title: String,
+    text: String,
+    /// A third line, if any.
+    hint: String,
+    battery: Option<u8>,
+    /// `Icons.controller(device)`, or the disconnected controller with `lost`.
+    device: i32,
+    lost: bool,
+}
+
 fn glyph_family(kind: ControllerKind) -> i32 {
     match kind {
         ControllerKind::DualSense | ControllerKind::DualShock4 => 1,
@@ -948,34 +967,70 @@ impl Controller {
     }
 
     /// A controller went away. The game's own controller freezes the game under the overlay
-    /// (it can't be played without it); any other gets a notice.
+    /// (it can't be played without it) with a card that stays until it's back; any other
+    /// gets a notice.
     fn pad_gone(&mut self, pad: &PadInfo) {
         tracing::info!(pad = %pad.id, name = %pad.os_name, mode = ?self.mode, "controller gone");
         let driving = self.active.is_some() && self.game_pad.as_deref() == Some(pad.id.as_str());
+        let lost = PadCard {
+            title: "Controller disconnected".into(),
+            text: super::pads::display_name(pad),
+            hint: PAD_LOST.into(),
+            device: super::pads::device(Some(pad)),
+            lost: true,
+            ..PadCard::default()
+        };
         match self.mode {
             Mode::Game if driving && self.compositor.controls_focus() => {
                 self.open_overlay();
-                self.overlay_message(PAD_LOST);
+                self.pad_lost = Some((pad.id.clone(), Instant::now()));
+                self.pad_card(&lost, None);
             }
-            Mode::Overlay if driving => self.overlay_message(PAD_LOST),
-            _ => self.pad_notice("Controller disconnected", &pad.os_name, None),
+            Mode::Overlay if driving => {
+                self.pad_lost = Some((pad.id.clone(), Instant::now()));
+                self.pad_card(&lost, None);
+            }
+            _ => self.pad_card(
+                &PadCard {
+                    hint: String::new(),
+                    ..lost
+                },
+                Some(PAD_NOTICE_TIME),
+            ),
         }
     }
 
-    /// A controller came (back). If the game is waiting for it, the game is frozen (or stays
-    /// frozen) under the overlay with Resume focused: the emulator picks the pad up while the
-    /// game can't move, and the player resumes when ready.
+    /// A controller came (back). If the game is waiting for it: back within
+    /// [`QUICK_RESTART`] of going (a loose cable, a quick replug), the game resumes by itself;
+    /// later, the game stays frozen under the overlay with Resume focused, and the player
+    /// resumes when ready.
     fn pad_came(&mut self, pad: &PadInfo) {
         tracing::info!(pad = %pad.id, name = %pad.os_name, mode = ?self.mode, "controller came");
+        let connected = |hint: &str| PadCard {
+            title: super::pads::display_name(pad),
+            text: "Controller connected".into(),
+            hint: hint.into(),
+            device: super::pads::device(Some(pad)),
+            ..PadCard::default()
+        };
         if !self.drives_game(pad) {
-            self.pad_notice("Controller connected", &pad.os_name, None);
+            self.pad_card(&connected(""), Some(PAD_NOTICE_TIME));
             return;
         }
         self.game_pad = Some(pad.id.clone());
+        let quick = self
+            .pad_lost
+            .take()
+            .is_some_and(|(id, at)| id == pad.id && at.elapsed() <= QUICK_RESTART);
         match self.mode {
+            Mode::Overlay if quick && self.active.as_ref().is_some_and(|a| a.frozen) => {
+                tracing::info!("the game's controller is back at once: resuming");
+                self.resume_game();
+                self.pad_card(&connected(""), Some(PAD_NOTICE_TIME));
+            }
             Mode::Game if self.compositor.controls_focus() => {
                 self.open_overlay();
-                self.overlay_message(PAD_BACK);
+                self.pad_card(&connected(PAD_BACK), Some(PAD_NOTICE_TIME));
             }
             Mode::Overlay => {
                 if let Some(overlay) = &self.overlay
@@ -983,9 +1038,9 @@ impl Controller {
                 {
                     overlay.invoke_reset();
                 }
-                self.overlay_message(PAD_BACK);
+                self.pad_card(&connected(PAD_BACK), Some(PAD_NOTICE_TIME));
             }
-            _ => self.pad_notice("Controller connected", &pad.os_name, None),
+            _ => self.pad_card(&connected(""), Some(PAD_NOTICE_TIME)),
         }
     }
 
@@ -1006,21 +1061,28 @@ impl Controller {
                 continue;
             }
             tracing::info!(pad = %pad.id, percent, "controller battery low");
-            self.pad_notice(
-                "Controller battery low",
-                &format!("{percent} %"),
-                Some(percent),
-            );
+            let card = PadCard {
+                title: format!("{percent} %"),
+                text: "Controller battery low".into(),
+                battery: Some(percent),
+                device: super::pads::device(Some(pad)),
+                ..PadCard::default()
+            };
+            self.pad_card(&card, Some(PAD_NOTICE_TIME));
         }
     }
 
-    /// A controller notice for [`PAD_NOTICE_TIME`]: over the running game on the overlay's
-    /// notice panel (no scrim, no freeze), else in Hearth's windows.
-    fn pad_notice(&mut self, text: &str, detail: &str, battery: Option<u8>) {
+    /// A controller card, bottom right: for `time` (a notice), or until it's taken down
+    /// (`None`: the game's controller is gone). Over the running game it uses the overlay's
+    /// notice panel (no scrim, no freeze), else Hearth's windows.
+    fn pad_card(&mut self, card: &PadCard, time: Option<Duration>) {
         let set = |data: PadNotice<'_>| {
-            data.set_text(text.into());
-            data.set_detail(detail.into());
-            data.set_battery(battery.map_or(-1, i32::from));
+            data.set_detail(card.title.as_str().into());
+            data.set_text(card.text.as_str().into());
+            data.set_hint(card.hint.as_str().into());
+            data.set_battery(card.battery.map_or(-1, i32::from));
+            data.set_device(card.device);
+            data.set_lost(card.lost);
             data.set_shown(true);
         };
         if let Some(app) = self.app.upgrade() {
@@ -1039,10 +1101,14 @@ impl Controller {
                 }
             }
         }
-        self.pad_notice_timer
-            .start(slint::TimerMode::SingleShot, PAD_NOTICE_TIME, || {
-                defer(Controller::hide_pad_notice);
-            });
+        match time {
+            Some(time) => self
+                .pad_notice_timer
+                .start(slint::TimerMode::SingleShot, time, || {
+                    defer(Controller::hide_pad_notice);
+                }),
+            None => self.pad_notice_timer.stop(),
+        }
     }
 
     fn hide_pad_notice(&mut self) {
@@ -1506,6 +1572,10 @@ impl Controller {
     }
 
     fn hide_overlay(&mut self) {
+        // Resumed (or left) without the lost controller: its card goes with the overlay.
+        if self.pad_lost.take().is_some() {
+            self.hide_pad_notice();
+        }
         if let Some(overlay) = &self.overlay {
             // Only the menu (and its pages) sound; a notice comes and goes silently.
             if matches!(

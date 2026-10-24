@@ -2,8 +2,10 @@ import { Theme } from "../theme.slint";
 import { PadNotice } from "../data.slint";
 import { Icons } from "../icons.slint";
 
-// Controller notice (PadNotice): pad icon, battery icon and percent when it's about the battery,
-// one line of text. Bottom right, for a few seconds; takes no input.
+// Controller card (PadNotice): the controller's icon (Kenney; the disconnected one when the
+// game's controller is gone), battery icon and percent when it's about the battery, then one or
+// two lines. Bottom right, for a few seconds (or, for a lost controller, until it's back);
+// takes no input.
 export component PadNoticeCard inherits Rectangle {
     property <bool> critical: PadNotice.battery >= 0 && PadNotice.battery <= 10;
     width: content.preferred-width + 2 * Theme.sp-24;
@@ -23,8 +25,8 @@ export component PadNoticeCard inherits Rectangle {
             spacing: Theme.sp-12;
             alignment: start;
             Image {
-                source: Icons.gamepad;
-                colorize: Theme.text-primary;
+                source: PadNotice.lost ? Icons.controller-disconnected : Icons.controller(PadNotice.device);
+                colorize: PadNotice.lost ? Theme.warning : Theme.text-primary;
                 width: 32px * Theme.scale;
                 height: self.width;
             }
@@ -44,6 +46,11 @@ export component PadNoticeCard inherits Rectangle {
         }
         Text {
             text: PadNotice.text;
+            font-size: Theme.body;
+            color: PadNotice.lost ? Theme.text-primary : Theme.text-secondary;
+        }
+        if PadNotice.hint != "": Text {
+            text: PadNotice.hint;
             font-size: Theme.body;
             color: Theme.text-secondary;
         }

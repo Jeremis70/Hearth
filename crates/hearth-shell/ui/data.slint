@@ -231,11 +231,16 @@ export global Status {
 // few seconds, never pausing anything. Set by the session in both windows.
 export global PadNotice {
     in property <bool> shown;
-    in property <string> text;
-    // The controller's name or "15 %".
+    // The big line: the controller's name, "Controller disconnected" or "15 %".
     in property <string> detail;
+    in property <string> text;
+    // A third line ("Reconnect it to continue"), or "".
+    in property <string> hint;
     // Battery percent shown with its icon; -1: no battery icon (connect/disconnect).
     in property <int> battery: -1;
+    // The controller's icon (`Icons.controller`); `lost` shows the disconnected one.
+    in property <int> device;
+    in property <bool> lost;
 }
 
 // The running game, and the actions that control it (handled in src/bridge/session.rs).

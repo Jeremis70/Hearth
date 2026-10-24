@@ -11,7 +11,7 @@
 //! (`display.rs`). Layout, little endian:
 //!
 //! ```text
-//! "HRTHANIM" width:u32 height:u32          header (16 bytes)
+//! "HRTHANI2" width:u32 height:u32          header (16 bytes)
 //! <frame 0 QOI> <frame 1 QOI> …             full frames, already composited
 //! (delay_ms:u32 offset:u64 len:u32) × n     index
 //! index_offset:u64 n:u32 still:u32 "HRTHEND\0"   trailer (24 bytes)
@@ -31,7 +31,9 @@ use super::display::{DisplayClass, fit};
 use super::identity::ArtKey;
 use super::provider::ArtKind;
 
-const MAGIC: &[u8; 8] = b"HRTHANIM";
+/// Version 2: WebP frames disposed to background are cleared first (version 1 files drew
+/// them over the previous frame); files of another version are made again.
+const MAGIC: &[u8; 8] = b"HRTHANI2";
 const END: &[u8; 8] = b"HRTHEND\0";
 const HEADER_LEN: u64 = 16;
 const TRAILER_LEN: u64 = 24;
@@ -183,7 +185,15 @@ pub fn frames(path: &Path) -> Result<image::Frames<'static>, ImageError> {
     })?;
     let reader = BufReader::new(File::open(path)?);
     Ok(match format {
-        AnimFormat::WebP => image::codecs::webp::WebPDecoder::new(reader)?.into_frames(),
+        AnimFormat::WebP => {
+            let mut decoder = image::codecs::webp::WebPDecoder::new(reader)?;
+            // A frame "disposed to background" is only cleared when a background color is
+            // set (image-webp 0.2), else every frame is drawn over the last one: glows build
+            // up and drop back at the loop. Browsers clear to transparent (the file's own
+            // background is a hint the spec lets players ignore).
+            decoder.set_background_color(image::Rgba([0, 0, 0, 0]))?;
+            decoder.into_frames()
+        }
         AnimFormat::Apng => image::codecs::png::PngDecoder::new(reader)?
             .apng()?
             .into_frames(),
@@ -493,8 +503,8 @@ impl ArtCache {
         source: &Path,
         class: DisplayClass,
     ) -> PathBuf {
-        self.sized_path(key, kind, source, class)
-            .with_extension("anim")
+        self.sized_dir(key, class)
+            .join(format!("{}.anim", self.sized_name(key, kind, source)))
     }
 
     /// The `.anim` file of `source` for `class`, made first if it is missing or older than
@@ -511,7 +521,11 @@ impl ArtCache {
         let too_large = target.with_extension("toolarge");
         let still = target.with_extension("still");
         if !super::cache::is_stale(&target, source) {
-            return Ok(SizedAnim::File(target));
+            if AnimReader::open(&target).is_ok() {
+                return Ok(SizedAnim::File(target));
+            }
+            // An older version (or a broken file): made again.
+            let _ = fs::remove_file(&target);
         }
         if !super::cache::is_stale(&too_large, source) {
             return Ok(SizedAnim::TooLarge);
@@ -836,6 +850,21 @@ mod tests {
     }
 
     #[test]
+    fn disposed_webp_frames_are_cleared_not_drawn_over_the_last() {
+        // Three copies of one half-transparent frame, each "blend" and "dispose to
+        // background" (like OoT's SteamGridDB logo). Drawn over each other, alpha would climb
+        // 128 → 192 → 224, then drop back at the loop.
+        let dir = tempdir();
+        let path = dir.path().join("logo.webp");
+        fs::write(&path, include_bytes!("../../tests/fixtures/dispose.webp")).unwrap();
+        let alphas: Vec<u8> = frames(&path)
+            .unwrap()
+            .map(|f| f.unwrap().into_buffer().get_pixel(10, 10)[3])
+            .collect();
+        assert_eq!(alphas, [128, 128, 128]);
+    }
+
+    #[test]
     fn tiny_delays_play_at_ten_frames_a_second() {
         assert_eq!(delay_ms(image::Delay::from_numer_denom_ms(0, 1)), 100);
         assert_eq!(delay_ms(image::Delay::from_numer_denom_ms(10, 1)), 100);
@@ -883,6 +912,12 @@ mod tests {
             panic!("expected a file");
         };
         assert!(path.ends_with("gc/GZ2E01/sized/1080p/logo.anim"));
+        // Its still has a copy of its own name, apart from any static logo's.
+        assert!(
+            cache
+                .sized_path(&key(), ArtKind::Logo, &source, class)
+                .ends_with("sized/1080p/logo-still.qoi")
+        );
         let mut reader = AnimReader::open(&path).unwrap();
         assert_eq!(reader.len(), 6);
         assert_eq!(reader.size(), (640, 208), "1x the logo box");
@@ -897,6 +932,30 @@ mod tests {
             .sized_anim(&key(), ArtKind::Logo, &source, class, u64::MAX)
             .unwrap();
         assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), made);
+    }
+
+    #[test]
+    fn a_still_and_its_animated_version_never_share_a_copy() {
+        let dir = tempdir();
+        let cache = ArtCache::new(dir.path().join("art"));
+        let class = DisplayClass::default();
+        let still = cache
+            .store(&key(), ArtKind::Logo, "png", &still_png(64, 32))
+            .unwrap();
+        let animated = cache
+            .store_animated(&key(), ArtKind::Logo, "gif", &samples::gif(64, 32, 3, 50))
+            .unwrap();
+        let a = cache.sized(&key(), ArtKind::Logo, &still, class).unwrap();
+        let b = cache
+            .sized(&key(), ArtKind::Logo, &animated, class)
+            .unwrap();
+        assert!(a.ends_with("sized/1080p/logo.qoi"));
+        assert!(b.ends_with("sized/1080p/logo-animated-still.qoi"));
+        assert!(
+            cache
+                .anim_path(&key(), ArtKind::Logo, &animated, class)
+                .ends_with("sized/1080p/logo-animated.anim")
+        );
     }
 
     #[test]
@@ -969,7 +1028,7 @@ mod tests {
     fn broken_anim_files_are_rejected() {
         let dir = tempdir();
         let path = dir.path().join("x.anim");
-        fs::write(&path, b"HRTHANIM\0\0\0\0").unwrap();
+        fs::write(&path, b"HRTHANI2\0\0\0\0").unwrap();
         assert!(AnimReader::open(&path).is_err());
         let mut bytes = MAGIC.to_vec();
         bytes.extend([0; 8 + 24]);

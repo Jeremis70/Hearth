@@ -1,7 +1,10 @@
 //! Display-sized copies of cached art, so Home decodes small files instead of 4K originals.
 //!
-//! Copies live in `<cache>/art/<art key>/sized/<class>/<kind>.qoi` (`local-<kind>.qoi` when the
-//! source is a local file next to the ROM). QOI is lossless, keeps alpha and decodes several
+//! Copies live in `<cache>/art/<art key>/sized/<class>/<name>.qoi`, named after their source:
+//! `hero.qoi` for the cached `hero.png`, `hero-animated-still.qoi` for the cached
+//! `hero-animated.webp` (a copy made from an animated source holds its still, see
+//! `animation::still`), `local-<kind>.qoi` when the source is a local file (a pick, the game
+//! folder's). QOI is lossless, keeps alpha and decodes several
 //! times faster than PNG. The originals stay as they are (for "Change artwork" and other
 //! screen sizes). A copy is remade when it is missing or older than its source; making one
 //! for a class removes the game's copies for other classes.
@@ -97,15 +100,31 @@ impl ArtCache {
         source: &Path,
         class: DisplayClass,
     ) -> PathBuf {
-        let dir = self.dir(key);
-        let prefix = if source.starts_with(&dir) {
-            ""
+        let still = if super::animation::probe(source).is_some() {
+            "-still"
         } else {
-            "local-"
+            ""
         };
-        dir.join("sized")
-            .join(class.name())
-            .join(format!("{prefix}{}.qoi", kind.name()))
+        self.sized_dir(key, class)
+            .join(format!("{}{still}.qoi", self.sized_name(key, kind, source)))
+    }
+
+    /// `<cache>/art/<key>/sized/<class>`.
+    pub(super) fn sized_dir(&self, key: &ArtKey, class: DisplayClass) -> PathBuf {
+        self.dir(key).join("sized").join(class.name())
+    }
+
+    /// The name copies of `source` get: its own file name without the extension when it is
+    /// in the cache (so a still and its animated version never share one), else
+    /// `local-<kind>`.
+    pub(super) fn sized_name(&self, key: &ArtKey, kind: ArtKind, source: &Path) -> String {
+        if source.starts_with(self.dir(key))
+            && let Some(stem) = source.file_stem()
+        {
+            stem.to_string_lossy().into_owned()
+        } else {
+            format!("local-{}", kind.name())
+        }
     }
 
     /// The display copy of `source` for `class`, made first if it is missing or older than

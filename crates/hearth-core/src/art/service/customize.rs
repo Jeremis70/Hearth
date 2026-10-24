@@ -224,7 +224,7 @@ impl Worker {
 
     fn cached_thumb(&self, key: &ArtKey, set: CandidateSet, id: u64) -> Option<PathBuf> {
         let dir = self.thumb_dir(key, set);
-        ["png", "jpg", "jpeg", "webp"]
+        ["png", "jpg", "jpeg", "webp", "gif"]
             .iter()
             .map(|ext| dir.join(format!("{id}.{ext}")))
             .find(|p| p.is_file())

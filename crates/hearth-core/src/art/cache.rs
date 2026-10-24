@@ -15,7 +15,7 @@ use super::identity::ArtKey;
 use super::provider::ArtKind;
 
 /// Extensions a cached image may have.
-const EXTENSIONS: [&str; 4] = ["png", "jpg", "jpeg", "webp"];
+const EXTENSIONS: [&str; 5] = ["png", "jpg", "jpeg", "webp", "gif"];
 /// Width of the blurred hero: it is shown stretched and blurry, so small is fine.
 const BLUR_WIDTH: u32 = 480;
 /// Gaussian sigma at [`BLUR_WIDTH`].
@@ -198,9 +198,7 @@ pub(super) fn is_stale(derived: &Path, source: &Path) -> bool {
 
 /// Writes a downscaled, blurred copy of `source` to `target` (PNG).
 pub fn make_blurred(source: &Path, target: &Path) -> Result<(), image::ImageError> {
-    let image = image::ImageReader::open(source)?
-        .with_guessed_format()?
-        .decode()?;
+    let image = super::animation::still(source, super::provider::ArtKind::Hero)?;
     let height = (u64::from(image.height()) * u64::from(BLUR_WIDTH)
         / u64::from(image.width().max(1)))
     .clamp(1, u64::from(BLUR_WIDTH));

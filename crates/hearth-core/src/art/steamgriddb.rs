@@ -297,10 +297,11 @@ fn extension(mime: &str, url: &str) -> String {
         "image/png" => "png".into(),
         "image/jpeg" => "jpg".into(),
         "image/webp" => "webp".into(),
+        "image/gif" => "gif".into(),
         _ => url
             .rsplit_once('.')
             .map(|(_, ext)| ext.to_ascii_lowercase())
-            .filter(|ext| matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "webp"))
+            .filter(|ext| matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "webp" | "gif"))
             .unwrap_or_else(|| "png".into()),
     }
 }

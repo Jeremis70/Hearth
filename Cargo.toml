@@ -17,7 +17,9 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 clap = { version = "4.6", features = ["derive"] }
 directories = "6.0"
 gilrs = "0.11"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "qoi"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "qoi", "gif"] }
+# Writes APNG fixtures (`image` only reads them).
+png = "0.18"
 nix = { version = "0.31", features = ["signal", "process", "fs"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
@@ -62,6 +64,10 @@ opt-level = 3
 [profile.dev.package.image-webp]
 opt-level = 3
 [profile.dev.package.qoi]
+opt-level = 3
+[profile.dev.package.gif]
+opt-level = 3
+[profile.dev.package.weezl]
 opt-level = 3
 # The controller drawing (resvg) and text layout/rendering in debug builds: unoptimised, a
 # controls page took 290 ms to open and moves lagged; with these, ~80 ms and one frame.

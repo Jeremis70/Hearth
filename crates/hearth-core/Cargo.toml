@@ -9,6 +9,7 @@ rust-version.workspace = true
 [dependencies]
 directories.workspace = true
 image.workspace = true
+png.workspace = true
 nix.workspace = true
 rusqlite.workspace = true
 serde.workspace = true

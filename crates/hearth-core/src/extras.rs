@@ -28,7 +28,7 @@ use crate::model::Game;
 /// Theme files Hearth plays.
 pub const THEME_EXTENSIONS: [&str; 4] = ["ogg", "mp3", "flac", "wav"];
 /// Image files Hearth shows.
-pub const IMAGE_EXTENSIONS: [&str; 4] = ["png", "jpg", "jpeg", "webp"];
+pub const IMAGE_EXTENSIONS: [&str; 5] = ["png", "jpg", "jpeg", "webp", "gif"];
 
 /// What can be looked up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

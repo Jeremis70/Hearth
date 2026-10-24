@@ -64,10 +64,20 @@ impl DisplayClass {
             ArtKind::Grid | ArtKind::Icon => (scale(384), scale(384)),
         }
     }
+
+    /// The box an animation's frames must fit in. Like [`Self::bounds`], but logos at 1× Home's
+    /// box: every frame is kept decoded, so the 2× sharpness of the still isn't worth 4× the
+    /// memory.
+    pub fn anim_bounds(self, kind: ArtKind) -> (u32, u32) {
+        match kind {
+            ArtKind::Logo => (640 * self.0 / 1080, 260 * self.0 / 1080),
+            _ => self.bounds(kind),
+        }
+    }
 }
 
 /// The size `width` × `height` shrinks to inside `bounds`, aspect kept, never enlarged.
-fn fit(width: u32, height: u32, (max_w, max_h): (u32, u32)) -> (u32, u32) {
+pub(super) fn fit(width: u32, height: u32, (max_w, max_h): (u32, u32)) -> (u32, u32) {
     let ratio = (f64::from(max_w) / f64::from(width.max(1)))
         .min(f64::from(max_h) / f64::from(height.max(1)));
     if ratio >= 1.0 {
@@ -111,9 +121,8 @@ impl ArtCache {
         if !super::cache::is_stale(&target, source) {
             return Ok(target);
         }
-        let image = image::ImageReader::open(source)?
-            .with_guessed_format()?
-            .decode()?;
+        // An animated source's still: see `animation::still`.
+        let image = super::animation::still(source, kind)?;
         let (w, h) = fit(image.width(), image.height(), class.bounds(kind));
         let image = if (w, h) == (image.width(), image.height()) {
             image
@@ -137,7 +146,7 @@ impl ArtCache {
     }
 
     /// Deletes `key`'s display copies made for any class but `keep`.
-    fn remove_other_classes(&self, key: &ArtKey, keep: DisplayClass) -> io::Result<()> {
+    pub(super) fn remove_other_classes(&self, key: &ArtKey, keep: DisplayClass) -> io::Result<()> {
         let sized = self.dir(key).join("sized");
         for entry in fs::read_dir(&sized)? {
             let entry = entry?;

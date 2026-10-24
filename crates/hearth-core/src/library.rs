@@ -1,10 +1,14 @@
 //! The game library, persisted in SQLite: games found by scanning, when they were last played
 //! and for how long, favorites, and the artwork pipeline's results and retry queue.
 //!
+//! Games and art are shared; play history and favorites belong to a user profile
+//! (`profile_games`, `play_sessions`, keyed by [`ProfileId`]).
+//!
 //! A game's id is its path under the system folder, so moving a ROM (e.g. into its own
 //! folder) gives it a new id. A sync recognises that: a game that vanished and a new one with
-//! the same system and file name are the same game, and its row (playtime, last played,
-//! favorite, art key) moves to the new id. Only an unambiguous pair moves.
+//! the same system and file name are the same game, and its rows (art key, and every profile's
+//! playtime, last played, favorite and sessions) move to the new id. Only an unambiguous pair
+//! moves.
 
 use std::collections::{HashMap, HashSet};
 
@@ -15,6 +19,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::art::{ArtKey, ArtKind};
 use crate::model::{Game, GameId, SystemId};
+use crate::users::ProfileId;
 
 /// First retry delay for art that failed on the network; doubles with each attempt.
 const ART_RETRY_BASE: Duration = Duration::from_secs(5 * 60);
@@ -29,7 +34,7 @@ pub enum LibraryError {
     Sqlite(#[from] rusqlite::Error),
 }
 
-/// A game plus its play history.
+/// A game plus one profile's play history.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LibraryEntry {
     /// The game.
@@ -120,7 +125,8 @@ impl Library {
             );",
         )?;
         // Schema version 0: games only; 1: favorites, art keys, art result and queue tables;
-        // 2: the game's own folder; 3: the matcher's candidates.
+        // 2: the game's own folder; 3: the matcher's candidates; 4: play history and favorites
+        // per profile (existing history goes to the default profile).
         // The version is read under the write lock, so two threads opening the database at
         // once (library and art worker) don't both migrate.
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -165,12 +171,46 @@ impl Library {
                  PRAGMA user_version = 3;",
             )?;
         }
+        if version < 4 {
+            tx.execute_batch(
+                "CREATE TABLE IF NOT EXISTS profile_games (
+                     profile_id TEXT NOT NULL,
+                     game_id TEXT NOT NULL,
+                     last_played INTEGER,
+                     playtime_secs INTEGER NOT NULL DEFAULT 0,
+                     favorite INTEGER NOT NULL DEFAULT 0,
+                     PRIMARY KEY (profile_id, game_id)
+                 );
+                 CREATE TABLE IF NOT EXISTS play_sessions (
+                     profile_id TEXT NOT NULL,
+                     game_id TEXT NOT NULL,
+                     ended_at INTEGER NOT NULL,
+                     secs INTEGER NOT NULL
+                 );
+                 CREATE INDEX IF NOT EXISTS play_sessions_game
+                     ON play_sessions (profile_id, game_id);",
+            )?;
+            tx.execute(
+                "INSERT INTO profile_games (profile_id, game_id, last_played, playtime_secs,
+                     favorite)
+                 SELECT ?1, id, last_played, playtime_secs, favorite FROM games
+                 WHERE last_played IS NOT NULL OR playtime_secs != 0 OR favorite != 0",
+                [ProfileId::DEFAULT],
+            )?;
+            tx.execute_batch(
+                "ALTER TABLE games DROP COLUMN last_played;
+                 ALTER TABLE games DROP COLUMN playtime_secs;
+                 ALTER TABLE games DROP COLUMN favorite;
+                 PRAGMA user_version = 4;",
+            )?;
+        }
         tx.commit()?;
         Ok(Self { conn })
     }
 
     /// Makes the stored games match a fresh scan: new games are added, titles and paths
-    /// updated, games no longer found removed (with their history). Returns the removed games.
+    /// updated, games no longer found removed (with every profile's history). Returns the
+    /// removed games.
     pub fn sync(&mut self, games: &[Game]) -> Result<Vec<RemovedGame>, LibraryError> {
         let tx = self.conn.transaction()?;
         move_renamed(&tx, games)?;
@@ -215,21 +255,25 @@ impl Library {
             })?
             .collect::<Result<Vec<_>, _>>()?
         };
-        tx.execute(
-            "DELETE FROM games WHERE id NOT IN (SELECT id FROM seen)",
-            [],
+        tx.execute_batch(
+            "DELETE FROM profile_games WHERE game_id NOT IN (SELECT id FROM seen);
+             DELETE FROM play_sessions WHERE game_id NOT IN (SELECT id FROM seen);
+             DELETE FROM games WHERE id NOT IN (SELECT id FROM seen);",
         )?;
         tx.commit()?;
         Ok(removed)
     }
 
-    /// All games, most recently played first, then never-played games by title.
-    pub fn recent(&self) -> Result<Vec<LibraryEntry>, LibraryError> {
+    /// All games with `profile`'s history, most recently played first, then never-played
+    /// games by title.
+    pub fn recent(&self, profile: &ProfileId) -> Result<Vec<LibraryEntry>, LibraryError> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, title, system, path, last_played, playtime_secs, favorite, folder FROM games
-             ORDER BY last_played IS NULL, last_played DESC, title",
+            "SELECT g.id, g.title, g.system, g.path, p.last_played,
+                    COALESCE(p.playtime_secs, 0), COALESCE(p.favorite, 0), g.folder
+             FROM games g LEFT JOIN profile_games p ON p.game_id = g.id AND p.profile_id = ?1
+             ORDER BY p.last_played IS NULL, p.last_played DESC, g.title",
         )?;
-        let rows = stmt.query_map([], |row| {
+        let rows = stmt.query_map([profile.as_str()], |row| {
             Ok(LibraryEntry {
                 game: Game {
                     id: GameId::new(row.get::<_, String>(0)?),
@@ -246,14 +290,20 @@ impl Library {
         Ok(rows.collect::<Result<_, _>>()?)
     }
 
-    /// Looks up one game.
-    pub fn get(&self, id: &GameId) -> Result<Option<LibraryEntry>, LibraryError> {
-        Ok(self.recent()?.into_iter().find(|e| &e.game.id == id))
+    /// Looks up one game with `profile`'s history.
+    pub fn get(
+        &self,
+        profile: &ProfileId,
+        id: &GameId,
+    ) -> Result<Option<LibraryEntry>, LibraryError> {
+        Ok(self.recent(profile)?.into_iter().find(|e| &e.game.id == id))
     }
 
-    /// Adds a finished session: sets last played to `ended_at` and adds `played`.
+    /// Adds `profile`'s finished session: sets last played to `ended_at`, adds `played` and
+    /// logs the session. Nothing happens for a game not in the library.
     pub fn record_session(
-        &self,
+        &mut self,
+        profile: &ProfileId,
         id: &GameId,
         ended_at: SystemTime,
         played: Duration,
@@ -262,31 +312,75 @@ impl Library {
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
         let secs = i64::try_from(played.as_secs()).unwrap_or(i64::MAX);
-        self.conn.execute(
-            "UPDATE games SET last_played = ?2, playtime_secs = playtime_secs + ?3 WHERE id = ?1",
-            params![id.as_str(), ended, secs],
+        let tx = self.conn.transaction()?;
+        let added = tx.execute(
+            "INSERT INTO profile_games (profile_id, game_id, last_played, playtime_secs)
+             SELECT ?1, id, ?3, ?4 FROM games WHERE id = ?2
+             ON CONFLICT(profile_id, game_id) DO UPDATE
+                 SET last_played = ?3, playtime_secs = playtime_secs + ?4",
+            params![profile.as_str(), id.as_str(), ended, secs],
         )?;
+        if added > 0 {
+            tx.execute(
+                "INSERT INTO play_sessions (profile_id, game_id, ended_at, secs)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![profile.as_str(), id.as_str(), ended, secs],
+            )?;
+        }
+        tx.commit()?;
         Ok(())
     }
 
-    /// Total playtime of one game, if it exists.
-    pub fn playtime(&self, id: &GameId) -> Result<Option<Duration>, LibraryError> {
+    /// `profile`'s total playtime of one game, if the game exists.
+    pub fn playtime(
+        &self,
+        profile: &ProfileId,
+        id: &GameId,
+    ) -> Result<Option<Duration>, LibraryError> {
         let secs: Option<i64> = self
             .conn
             .query_row(
-                "SELECT playtime_secs FROM games WHERE id = ?1",
-                [id.as_str()],
+                "SELECT COALESCE(p.playtime_secs, 0) FROM games g
+                 LEFT JOIN profile_games p ON p.game_id = g.id AND p.profile_id = ?1
+                 WHERE g.id = ?2",
+                [profile.as_str(), id.as_str()],
                 |r| r.get(0),
             )
             .optional()?;
         Ok(secs.map(|s| Duration::from_secs(s.max(0).unsigned_abs())))
     }
 
-    /// Marks or unmarks a game as a favorite.
-    pub fn set_favorite(&self, id: &GameId, favorite: bool) -> Result<(), LibraryError> {
+    /// `profile`'s sessions of one game, oldest first: (Unix time it ended, length).
+    pub fn sessions(
+        &self,
+        profile: &ProfileId,
+        id: &GameId,
+    ) -> Result<Vec<(i64, Duration)>, LibraryError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT ended_at, secs FROM play_sessions WHERE profile_id = ?1 AND game_id = ?2
+             ORDER BY ended_at, rowid",
+        )?;
+        let rows = stmt.query_map([profile.as_str(), id.as_str()], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                Duration::from_secs(r.get::<_, i64>(1)?.max(0).unsigned_abs()),
+            ))
+        })?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// Marks or unmarks a game as one of `profile`'s favorites.
+    pub fn set_favorite(
+        &self,
+        profile: &ProfileId,
+        id: &GameId,
+        favorite: bool,
+    ) -> Result<(), LibraryError> {
         self.conn.execute(
-            "UPDATE games SET favorite = ?2 WHERE id = ?1",
-            params![id.as_str(), i64::from(favorite)],
+            "INSERT INTO profile_games (profile_id, game_id, favorite)
+             SELECT ?1, id, ?3 FROM games WHERE id = ?2
+             ON CONFLICT(profile_id, game_id) DO UPDATE SET favorite = ?3",
+            params![profile.as_str(), id.as_str(), i64::from(favorite)],
         )?;
         Ok(())
     }
@@ -524,10 +618,13 @@ fn move_renamed(tx: &rusqlite::Transaction<'_>, games: &[Game]) -> Result<(), Li
             continue;
         };
         tracing::info!(from = %old, to = %game.id, "game moved; keeping its history");
-        tx.execute(
+        for table in [
             "UPDATE games SET id = ?2 WHERE id = ?1",
-            params![old, game.id.as_str()],
-        )?;
+            "UPDATE profile_games SET game_id = ?2 WHERE game_id = ?1",
+            "UPDATE play_sessions SET game_id = ?2 WHERE game_id = ?1",
+        ] {
+            tx.execute(table, params![old, game.id.as_str()])?;
+        }
     }
     Ok(())
 }
@@ -558,12 +655,13 @@ mod tests {
         .unwrap();
         let old = GameId::new("roms:n64/Zelda.z64");
         lib.record_session(
+            &ProfileId::default(),
             &old,
             UNIX_EPOCH + Duration::from_secs(9),
             Duration::from_secs(60),
         )
         .unwrap();
-        lib.set_favorite(&old, true).unwrap();
+        lib.set_favorite(&ProfileId::default(), &old, true).unwrap();
         let key = ArtKey::new(&SystemId::new("n64"), Some("CZLE"), "");
         lib.set_art_key(&old, &key).unwrap();
 
@@ -578,13 +676,13 @@ mod tests {
             .sync(&[moved.clone(), game("roms:n64/Mario.z64", "Mario")])
             .unwrap();
         assert!(removed.is_empty(), "nothing removed, so no art deleted");
-        let entry = lib.get(&moved.id).unwrap().unwrap();
+        let entry = lib.get(&ProfileId::default(), &moved.id).unwrap().unwrap();
         assert_eq!(entry.playtime, Duration::from_secs(60));
         assert_eq!(entry.last_played, Some(9));
         assert!(entry.favorite);
         assert_eq!(entry.game.folder, moved.folder);
         assert!(lib.art_key_in_use(&key).unwrap());
-        assert_eq!(lib.get(&old).unwrap(), None);
+        assert_eq!(lib.get(&ProfileId::default(), &old).unwrap(), None);
 
         // Two same-named files appearing for one that vanished: ambiguous, nothing moves.
         let copy = |id: &str| Game {
@@ -606,15 +704,22 @@ mod tests {
             .unwrap();
 
         let t = UNIX_EPOCH + Duration::from_secs(1_000);
-        lib.record_session(&GameId::new("b"), t, Duration::from_secs(90))
-            .unwrap();
         lib.record_session(
+            &ProfileId::default(),
+            &GameId::new("b"),
+            t,
+            Duration::from_secs(90),
+        )
+        .unwrap();
+        lib.record_session(
+            &ProfileId::default(),
             &GameId::new("b"),
             t + Duration::from_secs(5),
             Duration::from_secs(30),
         )
         .unwrap();
         lib.record_session(
+            &ProfileId::default(),
             &GameId::new("c"),
             t - Duration::from_secs(5),
             Duration::from_secs(1),
@@ -622,14 +727,15 @@ mod tests {
         .unwrap();
 
         let titles: Vec<_> = lib
-            .recent()
+            .recent(&ProfileId::default())
             .unwrap()
             .into_iter()
             .map(|e| e.game.title)
             .collect();
         assert_eq!(titles, ["Zelda", "Mario", "Banjo"]);
         assert_eq!(
-            lib.playtime(&GameId::new("b")).unwrap(),
+            lib.playtime(&ProfileId::default(), &GameId::new("b"))
+                .unwrap(),
             Some(Duration::from_secs(120))
         );
 
@@ -637,7 +743,7 @@ mod tests {
         drop(lib);
         let mut lib = Library::open(&path).unwrap();
         lib.sync(&[game("b", "Zelda (renamed)")]).unwrap();
-        let entries = lib.recent().unwrap();
+        let entries = lib.recent(&ProfileId::default()).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].game.title, "Zelda (renamed)");
         assert_eq!(entries[0].last_played, Some(1_005));
@@ -659,14 +765,15 @@ mod tests {
             .unwrap();
         }
         let lib = Library::open(&path).unwrap();
-        let entries = lib.recent().unwrap();
+        let entries = lib.recent(&ProfileId::default()).unwrap();
         assert_eq!(entries[0].playtime, Duration::from_secs(60));
         assert!(!entries[0].favorite);
-        lib.set_favorite(&GameId::new("a"), true).unwrap();
+        lib.set_favorite(&ProfileId::default(), &GameId::new("a"), true)
+            .unwrap();
         drop(lib);
         // Opening again doesn't migrate twice.
         let lib = Library::open(&path).unwrap();
-        assert!(lib.recent().unwrap()[0].favorite);
+        assert!(lib.recent(&ProfileId::default()).unwrap()[0].favorite);
     }
 
     #[test]
@@ -789,5 +896,147 @@ mod tests {
         for t in threads {
             t.join().unwrap().unwrap();
         }
+    }
+
+    /// A version 3 database as the dev library had it before profiles.
+    fn version_3_db(path: &Path) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE games (id TEXT PRIMARY KEY, title TEXT NOT NULL,
+                 system TEXT NOT NULL, path TEXT NOT NULL, last_played INTEGER,
+                 playtime_secs INTEGER NOT NULL DEFAULT 0,
+                 favorite INTEGER NOT NULL DEFAULT 0, art_key TEXT, folder TEXT);
+             CREATE TABLE art (art_key TEXT PRIMARY KEY, status TEXT NOT NULL, sgdb_id INTEGER,
+                 sgdb_name TEXT, kinds TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL);
+             CREATE TABLE art_queue (art_key TEXT PRIMARY KEY, attempts INTEGER NOT NULL,
+                 next_try INTEGER NOT NULL, last_error TEXT NOT NULL);
+             CREATE TABLE art_candidates (art_key TEXT NOT NULL, rank INTEGER NOT NULL,
+                 sgdb_id INTEGER NOT NULL, name TEXT NOT NULL, query TEXT NOT NULL,
+                 PRIMARY KEY (art_key, sgdb_id));
+             INSERT INTO games VALUES ('oot', 'Ocarina of Time', 'n64', '/g/oot.z64', 1000,
+                 3738, 1, 'n64/CZLE', NULL);
+             INSERT INTO games VALUES ('tp', 'Twilight Princess', 'gc', '/g/tp.iso', 2000,
+                 2725, 0, 'gc/GZ2E01', NULL);
+             INSERT INTO games VALUES ('new', 'Never Played', 'n64', '/g/n.z64', NULL, 0, 0,
+                 NULL, NULL);
+             PRAGMA user_version = 3;",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn version_3_history_goes_to_the_default_profile() {
+        let dir = tempdir();
+        let path = dir.path().join("l.sqlite3");
+        version_3_db(&path);
+        let lib = Library::open(&path).unwrap();
+        let default = ProfileId::default();
+        let entries = lib.recent(&default).unwrap();
+        let summary: Vec<_> = entries
+            .iter()
+            .map(|e| {
+                (
+                    e.game.id.as_str(),
+                    e.last_played,
+                    e.playtime.as_secs(),
+                    e.favorite,
+                )
+            })
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                ("tp", Some(2000), 2725, false),
+                ("oot", Some(1000), 3738, true),
+                ("new", None, 0, false),
+            ]
+        );
+        let version: i32 = lib
+            .conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 4);
+        let columns: Vec<String> = lib
+            .conn
+            .prepare("SELECT name FROM pragma_table_info('games')")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(!columns.iter().any(|c| c == "playtime_secs"), "{columns:?}");
+        // Art keys stay shared.
+        assert!(
+            lib.art_key_in_use(&ArtKey::from_stored("gc/GZ2E01"))
+                .unwrap()
+        );
+        // Another profile starts with nothing.
+        let other = ProfileId::new("test2").unwrap();
+        assert!(
+            lib.recent(&other)
+                .unwrap()
+                .iter()
+                .all(|e| e.last_played.is_none() && e.playtime.is_zero() && !e.favorite)
+        );
+        drop(lib);
+        // Opening again changes nothing.
+        let lib = Library::open(&path).unwrap();
+        assert_eq!(lib.recent(&default).unwrap(), entries);
+    }
+
+    #[test]
+    fn profiles_keep_their_own_history() {
+        let dir = tempdir();
+        let mut lib = Library::open(&dir.path().join("l.sqlite3")).unwrap();
+        lib.sync(&[game("a", "A"), game("b", "B")]).unwrap();
+        let (me, guest) = (ProfileId::default(), ProfileId::new("guest").unwrap());
+        let t = UNIX_EPOCH + Duration::from_secs(100);
+        lib.record_session(&me, &GameId::new("a"), t, Duration::from_secs(60))
+            .unwrap();
+        lib.record_session(&me, &GameId::new("a"), t, Duration::from_secs(30))
+            .unwrap();
+        lib.record_session(&guest, &GameId::new("b"), t, Duration::from_secs(5))
+            .unwrap();
+        lib.set_favorite(&guest, &GameId::new("a"), true).unwrap();
+        // A game that isn't in the library records nothing.
+        lib.record_session(&me, &GameId::new("gone"), t, Duration::from_secs(5))
+            .unwrap();
+
+        let a = |p| lib.get(p, &GameId::new("a")).unwrap().unwrap();
+        assert_eq!((a(&me).playtime.as_secs(), a(&me).favorite), (90, false));
+        assert_eq!(
+            (a(&guest).playtime.as_secs(), a(&guest).favorite),
+            (0, true)
+        );
+        assert_eq!(lib.recent(&guest).unwrap()[0].game.id.as_str(), "b");
+        assert_eq!(
+            lib.sessions(&me, &GameId::new("a")).unwrap(),
+            [
+                (100, Duration::from_secs(60)),
+                (100, Duration::from_secs(30))
+            ]
+        );
+        assert!(lib.sessions(&me, &GameId::new("gone")).unwrap().is_empty());
+
+        // A moved game takes every profile's rows along; a removed one drops them.
+        let moved = Game {
+            id: GameId::new("a2"),
+            path: PathBuf::from("/games/n64/A/A.z64"),
+            ..game("a2", "A")
+        };
+        lib.sync(&[moved]).unwrap();
+        let a2 = |p| lib.get(p, &GameId::new("a2")).unwrap().unwrap();
+        assert_eq!(a2(&me).playtime.as_secs(), 90);
+        assert!(a2(&guest).favorite);
+        assert_eq!(lib.sessions(&me, &GameId::new("a2")).unwrap().len(), 2);
+        let rows: i64 = lib
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM profile_games WHERE game_id = 'b'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 0);
     }
 }

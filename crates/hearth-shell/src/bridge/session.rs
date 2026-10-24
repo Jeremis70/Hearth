@@ -37,6 +37,7 @@ use hearth_core::runtime::{
 use hearth_core::scan::{root_is_available, scan_roms};
 use hearth_core::session::{ActiveSession, SessionState};
 use hearth_core::systems::{EmulatorKind, SuspendPolicy, Systems};
+use hearth_core::users::{ProfileDirs, ProfileId};
 use hearth_platform::gamescope::{AppId, Compositor, SHELL_APP_ID};
 use hearth_platform::input::{
     Action, InputControl, InputMode, InputStatus, PadActivity, PadInfo, Power,
@@ -175,6 +176,8 @@ pub struct Controller {
     compositor: Arc<dyn Compositor>,
     runtime: Arc<ProcessRuntime>,
     systems: Systems,
+    /// The active user profile: its history, saves and controls.
+    user: ProfileDirs,
     profile: RetroArchProfile,
     dolphin: DolphinProfile,
     controls_dir: PathBuf,
@@ -291,6 +294,8 @@ pub struct Setup {
     pub compositor: Arc<dyn Compositor>,
     /// Known systems.
     pub systems: Systems,
+    /// The active user profile.
+    pub user: ProfileDirs,
     /// RetroArch profile.
     pub profile: RetroArchProfile,
     /// Dolphin profile.
@@ -441,6 +446,7 @@ pub fn install(setup: Setup) {
     );
     load_library(LibraryLoad {
         db: setup.library_db.clone(),
+        profile: setup.user.id().clone(),
         games_dir: setup.games_dir.clone(),
         systems: setup.systems.clone(),
         art_cache: setup.art_cache.clone(),
@@ -465,6 +471,7 @@ pub fn install(setup: Setup) {
         compositor: setup.compositor,
         runtime: Arc::new(ProcessRuntime::new()),
         systems: setup.systems,
+        user: setup.user,
         profile: setup.profile,
         dolphin: setup.dolphin,
         controls_dir: setup.controls_dir,
@@ -581,6 +588,7 @@ pub fn route(action: Action) -> Route {
 /// What the library thread needs.
 struct LibraryLoad {
     db: PathBuf,
+    profile: ProfileId,
     games_dir: PathBuf,
     systems: Systems,
     art_cache: ArtCache,
@@ -606,7 +614,7 @@ fn load_library(load: LibraryLoad) {
                         "games folder unavailable; showing the library as last scanned"
                     );
                 }
-                library.recent()
+                library.recent(&load.profile)
             });
             match result {
                 Ok(entries) => {
@@ -1727,12 +1735,13 @@ impl Controller {
 
         // Save playtime and reload the library off the UI thread.
         let db = self.library_db.clone();
+        let profile = self.user.id().clone();
         let spawned = thread::Builder::new()
             .name("hearth-record-session".into())
             .spawn(move || {
-                let result = Library::open(&db).and_then(|library| {
-                    library.record_session(&game, SystemTime::now(), played)?;
-                    library.recent()
+                let result = Library::open(&db).and_then(|mut library| {
+                    library.record_session(&profile, &game, SystemTime::now(), played)?;
+                    library.recent(&profile)
                 });
                 match result {
                     Ok(entries) => defer(move |c| c.set_entries(entries)),
@@ -2127,10 +2136,13 @@ impl Controller {
         entry.favorite = !entry.favorite;
         let favorite = entry.favorite;
         let (db, id) = (self.library_db.clone(), id.clone());
+        let profile = self.user.id().clone();
         let spawned = thread::Builder::new()
             .name("hearth-favorite".into())
             .spawn(move || {
-                if let Err(err) = Library::open(&db).and_then(|l| l.set_favorite(&id, favorite)) {
+                let saved =
+                    Library::open(&db).and_then(|l| l.set_favorite(&profile, &id, favorite));
+                if let Err(err) = saved {
                     tracing::warn!("saving the favorite failed: {err}");
                     defer(move |c| c.toast(&format!("Couldn't save the favorite: {err}")));
                 }

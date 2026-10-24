@@ -23,6 +23,7 @@ use hearth_core::packs::Resolver;
 use hearth_core::paths::{self, DataDirs};
 use hearth_core::profiles::{DolphinInstall, DolphinProfile, RetroArchProfile};
 use hearth_core::systems::Systems;
+use hearth_core::users::ProfileId;
 use hearth_platform::gamescope::{self, Compositor};
 use hearth_platform::input::dev_socket::DevSocketBackend;
 use hearth_platform::input::gilrs::GilrsBackend;
@@ -344,6 +345,7 @@ fn main() -> anyhow::Result<()> {
         overlay,
         compositor,
         systems,
+        user: dirs.profile(&ProfileId::default()),
         profile: RetroArchProfile::new(dirs.legacy_retroarch()),
         dolphin: DolphinProfile::new(dirs.legacy_dolphin(), dolphin),
         controls_dir,

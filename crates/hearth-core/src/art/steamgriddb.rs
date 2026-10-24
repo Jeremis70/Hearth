@@ -169,10 +169,24 @@ impl MetadataProvider for SteamGridDb {
 
     fn assets(&self, id: u64, kind: ArtKind) -> Result<Vec<Asset>, ProviderError> {
         let mut images = self.images(id, kind, None)?;
-        // Best first: the highest score (the API's order breaks ties); grids square first,
-        // as Home shows them square.
+        // Best first, in the order the automatic pick ranks them (`best_asset`), so the first
+        // is the one it would take: grids square first, heroes largest first (4K), then the
+        // highest score (the API's order breaks ties).
         let squarish = |i: &Image| kind != ArtKind::Grid || (i.width > 0 && i.width == i.height);
-        images.sort_by_key(|i| (!squarish(i), std::cmp::Reverse(i.score)));
+        let area = |i: &Image| {
+            if kind == ArtKind::Hero {
+                u64::from(i.width) * u64::from(i.height)
+            } else {
+                0
+            }
+        };
+        images.sort_by_key(|i| {
+            (
+                !squarish(i),
+                std::cmp::Reverse(area(i)),
+                std::cmp::Reverse(i.score),
+            )
+        });
         images.truncate(MAX_CANDIDATES);
         Ok(images.into_iter().map(asset).collect())
     }

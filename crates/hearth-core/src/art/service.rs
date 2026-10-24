@@ -104,6 +104,8 @@ enum Command {
     HeroPosition(ArtKey, f32),
     ThemeStart(ArtKey, f32),
     RemoveTheme(ArtKey),
+    /// Thumbnails left over from a list (resumed when nothing else waits).
+    Thumbs(customize::ThumbWork),
 }
 
 /// Handle to the art worker thread; once every clone is dropped, the thread stops after its
@@ -225,8 +227,11 @@ struct Worker {
     pending: VecDeque<Command>,
     /// Backoff for requests made from the Customize page.
     net: customize::NetBackoff,
-    /// The last candidates listed per key and kind (to apply one by id).
-    listed: HashMap<(ArtKey, ArtKind), Vec<super::provider::Asset>>,
+    /// The last candidates listed per key and kind (to apply one by id, and to mark the one
+    /// in use again after a change).
+    listed: HashMap<(ArtKey, ArtKind), (Vec<super::provider::Asset>, Availability)>,
+    /// Thumbnails put off for a request that came in meanwhile.
+    backlog: Option<customize::ThumbWork>,
 }
 
 /// What to fetch for one key.
@@ -262,6 +267,7 @@ impl Worker {
             pending: VecDeque::new(),
             net: customize::NetBackoff::default(),
             listed: HashMap::new(),
+            backlog: None,
         }
     }
 
@@ -269,28 +275,39 @@ impl Worker {
         if let Some(command) = self.pending.pop_front() {
             return Ok(command);
         }
-        match &self.inbox {
-            Some(inbox) => inbox.recv_timeout(QUEUE_CHECK),
-            None => Err(RecvTimeoutError::Disconnected),
+        let Some(inbox) = &self.inbox else {
+            return Err(RecvTimeoutError::Disconnected);
+        };
+        // Put-off thumbnails once nothing else waits.
+        if let Ok(command) = inbox.try_recv() {
+            return Ok(command);
         }
+        if let Some(work) = self.backlog.take() {
+            return Ok(Command::Thumbs(work));
+        }
+        inbox.recv_timeout(QUEUE_CHECK)
     }
 
-    /// True once a newer candidates request is waiting (the current thumbs can stop).
+    /// True once any request waits: thumbnails give way (they resume afterwards, unless a
+    /// newer list is wanted).
     fn superseded(&mut self) -> bool {
         if let Some(inbox) = &self.inbox {
             while let Ok(command) = inbox.try_recv() {
                 self.pending.push_back(command);
             }
         }
-        self.pending
-            .iter()
-            .any(|c| matches!(c, Command::Candidates(..)))
+        !self.pending.is_empty()
     }
 
     fn handle(&mut self, command: Command) {
         match command {
             Command::Library(games) => self.load(games),
-            Command::Candidates(key, set) => self.candidates(&key, set),
+            Command::Candidates(key, set) => {
+                // A newer list: thumbs put off for an older one aren't wanted any more.
+                self.backlog = None;
+                self.candidates(&key, set);
+            }
+            Command::Thumbs(work) => self.resume_thumbs(work),
             Command::Apply(key, kind, asset) => self.apply(&key, kind, asset),
             Command::PickFile(key, extra, file) => {
                 let done = self.picks.pick_file(&key, extra, &file);
@@ -332,6 +349,16 @@ impl Worker {
             key: key.clone(),
             custom: self.picks.load(key),
         });
+        // The lists again, marking what is in use now (no new request).
+        let kinds: Vec<ArtKind> = self
+            .listed
+            .keys()
+            .filter(|(k, _)| k == key)
+            .map(|(_, kind)| *kind)
+            .collect();
+        for kind in kinds {
+            self.send_art_list(key, kind);
+        }
     }
 
     fn load(&mut self, games: Vec<Game>) {

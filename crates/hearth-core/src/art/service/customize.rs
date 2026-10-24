@@ -159,6 +159,15 @@ impl From<Cached> for Asset {
     }
 }
 
+/// Thumbnails still to fetch for a list.
+#[derive(Debug)]
+pub(super) enum ThumbWork {
+    /// Images of a kind (or games' grids already looked up): id and thumb.
+    Images(ArtKey, CandidateSet, Vec<(u64, AssetRef)>),
+    /// Games whose best grid is still to look up.
+    Games(ArtKey, Vec<u64>),
+}
+
 /// Why a provider call can't happen now.
 enum Blocked {
     NoProvider,
@@ -261,6 +270,27 @@ impl Worker {
                 Err(err) => (cached, self.call_failed(&err)),
             },
         };
+        self.listed
+            .insert((key.clone(), kind), (assets.clone(), availability));
+        self.send_art_list(key, kind);
+        let set = CandidateSet::Art(kind);
+        if availability == Availability::Live {
+            let missing: Vec<(u64, AssetRef)> = assets
+                .into_iter()
+                .filter(|a| self.cached_thumb(key, set, a.id).is_none())
+                .map(|a| (a.id, a.thumb))
+                .collect();
+            self.fetch_thumbs(key, set, missing);
+        }
+    }
+
+    /// Sends the images listed last for `key`'s `kind`, marking the one in use: the picked
+    /// SteamGridDB image, or the automatic one when it is known which it was (art fetched
+    /// before Hearth noted its source can't be told apart: then none is marked).
+    pub(super) fn send_art_list(&self, key: &ArtKey, kind: ArtKind) {
+        let Some((assets, availability)) = self.listed.get(&(key.clone(), kind)) else {
+            return;
+        };
         let custom = self.picks.load(key);
         let entry = custom.entry(Extra::Art(kind));
         let auto_url = self.cache.source_url(key, kind);
@@ -282,16 +312,14 @@ impl Worker {
                 },
             })
             .collect();
-        self.listed.insert((key.clone(), kind), assets.clone());
-        let set = CandidateSet::Art(kind);
-        self.send_list(key, set, items, availability);
-        if availability == Availability::Live {
-            let missing: Vec<(u64, AssetRef)> = assets
-                .into_iter()
-                .filter(|a| self.cached_thumb(key, set, a.id).is_none())
-                .map(|a| (a.id, a.thumb))
-                .collect();
-            self.fetch_thumbs(key, set, missing);
+        self.send_list(key, CandidateSet::Art(kind), items, *availability);
+    }
+
+    /// Thumbnails put off earlier.
+    pub(super) fn resume_thumbs(&mut self, work: ThumbWork) {
+        match work {
+            ThumbWork::Images(key, set, thumbs) => self.fetch_thumbs(&key, set, thumbs),
+            ThumbWork::Games(key, ids) => self.game_thumbs(&key, ids),
         }
     }
 
@@ -359,12 +387,22 @@ impl Worker {
         if availability != Availability::Live {
             return;
         }
-        // Each game's best grid, as its thumbnail.
-        for item in items.into_iter().filter(|i| i.thumb.is_none()) {
+        let missing = items
+            .into_iter()
+            .filter(|i| i.thumb.is_none())
+            .map(|i| i.id)
+            .collect();
+        self.game_thumbs(key, missing);
+    }
+
+    /// Each game's best grid, as its thumbnail.
+    fn game_thumbs(&mut self, key: &ArtKey, ids: Vec<u64>) {
+        for (i, id) in ids.iter().enumerate() {
             if self.superseded() {
+                self.backlog = Some(ThumbWork::Games(key.clone(), ids[i..].to_vec()));
                 return;
             }
-            let grid = match self.provider_assets(item.id, ArtKind::Grid) {
+            let grid = match self.provider_assets(*id, ArtKind::Grid) {
                 Ok(grids) => grids.into_iter().next(),
                 Err(err) => {
                     self.call_failed(&err);
@@ -372,7 +410,7 @@ impl Worker {
                 }
             };
             if let Some(grid) = grid {
-                self.fetch_thumbs(key, set, vec![(item.id, grid.thumb)]);
+                self.fetch_thumbs(key, CandidateSet::Games, vec![(*id, grid.thumb)]);
             }
         }
     }
@@ -397,11 +435,12 @@ impl Worker {
         Ok(found)
     }
 
-    /// Downloads thumbs one by one, reporting each; stops when a newer list is wanted or the
-    /// network fails.
+    /// Downloads thumbs one by one, reporting each. Gives way to any request (the rest is put
+    /// off, see [`Worker::next_command`]); stops when the network fails.
     fn fetch_thumbs(&mut self, key: &ArtKey, set: CandidateSet, thumbs: Vec<(u64, AssetRef)>) {
-        for (id, thumb) in thumbs {
+        for (i, (id, thumb)) in thumbs.iter().cloned().enumerate() {
             if self.superseded() {
+                self.backlog = Some(ThumbWork::Images(key.clone(), set, thumbs[i..].to_vec()));
                 return;
             }
             let Some(provider) = self.provider.as_deref() else {
@@ -450,7 +489,7 @@ impl Worker {
         let listed = self
             .listed
             .get(&(key.clone(), kind))
-            .and_then(|list| list.iter().find(|a| a.id == asset))
+            .and_then(|(list, _)| list.iter().find(|a| a.id == asset))
             .cloned();
         let Some(asset) = listed else {
             tracing::warn!(%key, kind = kind.name(), asset, "apply: not among the listed images");
@@ -537,6 +576,7 @@ mod tests {
 
     use super::*;
     use crate::art::MockMetadataProvider;
+    use crate::art::service::Command;
     use crate::art::service::tests::{Setup, setup};
     use crate::custom::Lookup;
     use crate::library::Library;
@@ -699,6 +739,60 @@ mod tests {
         assert!(
             matches!(availability, Availability::Refused { status: 401, retry_in } if retry_in > Duration::ZERO)
         );
+    }
+
+    #[test]
+    fn art_of_unknown_origin_is_not_claimed_and_changes_remark_the_list() {
+        let s = setup();
+        let mut run = Run::new(&s, Arc::new(MockMetadataProvider::fixtures()));
+        // Art cached before Hearth noted where it came from.
+        std::fs::remove_file(s.cache.dir(&tp()).join("hero.url")).unwrap();
+        let set = CandidateSet::Art(ArtKind::Hero);
+        run.worker.candidates(&tp(), set);
+        let (items, _) = run.list(set);
+        assert!(
+            items.iter().all(|i| !i.current),
+            "can't tell which one it is"
+        );
+
+        // A change sends the list again, marked, without asking SteamGridDB.
+        run.worker.apply(&tp(), ArtKind::Hero, items[4].id);
+        let (items, _) = run.list(set);
+        assert!(items[4].current);
+        run.worker
+            .handle(Command::Reset(tp(), Extra::Art(ArtKind::Hero)));
+        let (items, _) = run.list(set);
+        assert!(
+            items.iter().all(|i| !i.current),
+            "automatic again, still unknown"
+        );
+    }
+
+    #[test]
+    fn requests_go_before_thumbnails_which_resume_afterwards() {
+        let s = setup();
+        let mut run = Run::new(&s, Arc::new(MockMetadataProvider::fixtures()));
+        let set = CandidateSet::Art(ArtKind::Logo);
+        let (tx, rx) = std::sync::mpsc::channel();
+        run.worker.inbox = Some(rx);
+        // Listed once without thumbs (the list file is cached), then a pick waits.
+        run.worker.listed.clear();
+        tx.send(Command::HeroPosition(tp(), 0.3)).unwrap();
+        run.worker.candidates(&tp(), set);
+        let thumbs = |events: &[ArtEvent]| {
+            events
+                .iter()
+                .filter(|e| matches!(e, ArtEvent::Thumb { .. }))
+                .count()
+        };
+        assert_eq!(thumbs(&run.take()), 0, "the waiting request goes first");
+        let next = run.worker.next_command().unwrap();
+        assert!(matches!(next, Command::HeroPosition(..)));
+        run.worker.handle(next);
+        let next = run.worker.next_command().unwrap();
+        assert!(matches!(next, Command::Thumbs(_)), "then the thumbs resume");
+        run.worker.handle(next);
+        assert_eq!(thumbs(&run.take()), 6);
     }
 
     #[test]

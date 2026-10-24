@@ -525,7 +525,7 @@ mod tests {
 
     /// 100 ms levels (dB) of `out` (stereo at `rate`).
     fn levels(out: &[f32], rate: usize) -> Vec<f32> {
-        out.chunks(rate / 10 * 2)
+        out.chunks_exact(rate / 10 * 2)
             .map(|w| {
                 let ms: f64 = w.iter().map(|v| f64::from(*v).powi(2)).sum::<f64>() / w.len() as f64;
                 (10.0 * ms.max(1e-12).log10()) as f32

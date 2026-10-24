@@ -5,9 +5,11 @@
 //!   with leading silence starts at once, and an intro is never cut. The user's "Start at"
 //!   offset is added to it, and to nothing else.
 //! - **The loop** runs between the first and the last 50 ms window whose level is within
-//!   10 dB ([`LOOP_RANGE_DB`]) of the track's median level (over its non-silent windows): a
-//!   fade-in or fade-out falls outside it, so every pass stays at full level, and the end
-//!   crossfades into the start over [`THEME_CROSSFADE_MS`].
+//!   10 dB ([`LOOP_RANGE_DB`]) of the track's median level (over its non-silent windows),
+//!   then each end moves inward past the rest of a fade: while the level (smoothed over
+//!   500 ms) keeps rising toward the middle and is still more than 1 dB under the median. A
+//!   fade-in or fade-out thus stays outside it, every pass stays at full level, and the end
+//!   crossfades into the start over [`THEME_CROSSFADE_MS`] with no dip.
 //!
 //! Analysing means decoding the whole file (up to a second for a long mp3), so it is done
 //! once per file and cached ([`AutoLoop::cache_dir`]); while it runs the first play has
@@ -30,6 +32,10 @@ pub const LOOP_RANGE_DB: f32 = 10.0;
 pub const THEME_CROSSFADE_MS: u32 = 2000;
 /// Level windows.
 const WINDOW_MS: u64 = 50;
+/// Windows averaged to follow a fade.
+const SMOOTH_WINDOWS: usize = 10;
+/// A fade is over this close to the median.
+const FADE_DONE_DB: f32 = 1.0;
 /// The quick scan for the first sound gives up here (the analysis will know).
 const ONSET_SCAN_LIMIT_MS: u64 = 30_000;
 /// Bumped when the analysis changes, so cached results are made again.
@@ -130,11 +136,21 @@ pub fn analyze(path: &Path) -> Result<Analysis, AudioError> {
         .copied()
         .unwrap_or(SILENCE_DB);
     let near = |l: &f32| *l >= median - LOOP_RANGE_DB;
-    let first = levels.iter().position(near).unwrap_or(0) as u64;
-    let last = levels
+    let mut first = levels.iter().position(near).unwrap_or(0);
+    let mut last = levels
         .iter()
         .rposition(near)
-        .map_or(levels.len(), |i| i + 1) as u64;
+        .map_or(levels.len(), |i| i + 1);
+    // Past the rest of a fade-in and a fade-out.
+    let smooth = smoothed(&levels);
+    let fading = |i: usize| smooth[i] < median - FADE_DONE_DB;
+    while first + 1 < last && fading(first) && smooth[first + 1] > smooth[first] {
+        first += 1;
+    }
+    while last > first + 2 && fading(last - 1) && smooth[last - 2] > smooth[last - 1] {
+        last -= 1;
+    }
+    let (first, last) = (first as u64, last as u64);
     let mut loop_start = (first * window).max(onset);
     let mut loop_end = (last * window).min(last_sound.max(onset + 1));
     // Too short a region to loop on (a blip in silence): loop everything that sounds.
@@ -147,6 +163,17 @@ pub fn analyze(path: &Path) -> Result<Analysis, AudioError> {
         loop_end_ms: ms(loop_end),
         duration_ms,
     })
+}
+
+/// Each level averaged (in dB) with its neighbours over [`SMOOTH_WINDOWS`].
+fn smoothed(levels: &[f32]) -> Vec<f32> {
+    let half = SMOOTH_WINDOWS / 2;
+    (0..levels.len())
+        .map(|i| {
+            let window = &levels[i.saturating_sub(half)..(i + half).min(levels.len())];
+            window.iter().sum::<f32>() / window.len() as f32
+        })
+        .collect()
 }
 
 /// Where the first sound is, scanning at most 30 s (0 if none by then).
@@ -278,14 +305,15 @@ pub(crate) mod tests {
         let a = analyze(&path).unwrap();
         assert!((3000..3020).contains(&a.onset_ms), "onset {}", a.onset_ms);
         assert_eq!(a.duration_ms, 28_000);
-        // −10 dB is 0.32 of the amplitude: 0.32 s into the fade-in, 2.05 s into the fade-out.
+        // Out of the fades: −1 dB is 0.89 of the amplitude, 0.89 s into the fade-in and
+        // 0.33 s into the fade-out (give or take the smoothing).
         assert!(
-            (3250..3450).contains(&a.loop_start_ms),
+            (3700..4150).contains(&a.loop_start_ms),
             "start {}",
             a.loop_start_ms
         );
         assert!(
-            (25_950..26_150).contains(&a.loop_end_ms),
+            (23_900..24_500).contains(&a.loop_end_ms),
             "end {}",
             a.loop_end_ms
         );

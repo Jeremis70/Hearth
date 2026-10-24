@@ -97,6 +97,18 @@ fn list_candidates(
     };
     let heroes = provider.assets(hit.id, ArtKind::Hero)?;
     println!("heroes of {} {}: {}", hit.id, hit.name, heroes.len());
+    // The page downloads each thumbnail next: try the first one (kept in memory only).
+    if let Some(first) = heroes.first() {
+        match provider.download(&first.thumb) {
+            Ok(bytes) => println!(
+                "first thumb: {} bytes, {:?} ({})",
+                bytes.len(),
+                image::guess_format(&bytes).ok(),
+                first.thumb.url
+            ),
+            Err(err) => println!("first thumb: error: {err} ({})", first.thumb.url),
+        }
+    }
     for hero in heroes.iter().take(8) {
         println!(
             "  {} {}x{} ({:.2}:1) thumb .{}",

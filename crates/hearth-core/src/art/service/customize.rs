@@ -67,6 +67,16 @@ pub enum Availability {
         /// Until the next try.
         retry_in: Duration,
     },
+    /// SteamGridDB answered with an error (401/403: the key was refused; 429: too many
+    /// requests): saved results, if any; tried again after `retry_in`.
+    Refused {
+        /// The HTTP status.
+        status: u16,
+        /// Until the next try.
+        retry_in: Duration,
+    },
+    /// SteamGridDB's answer couldn't be read: saved results, if any.
+    Unexpected,
     /// No SteamGridDB key (or provider): saved results only.
     NoProvider,
     /// The game has no match: nothing to list (use "Wrong game?" or a file).
@@ -78,6 +88,8 @@ pub enum Availability {
 pub(super) struct NetBackoff {
     failures: u32,
     until: Option<Instant>,
+    /// The HTTP status of the last failure (`None`: a network error).
+    last: Option<u16>,
 }
 
 impl NetBackoff {
@@ -89,8 +101,13 @@ impl NetBackoff {
     }
 
     pub(super) fn failed(&mut self) {
+        self.failed_with(None);
+    }
+
+    fn failed_with(&mut self, status: Option<u16>) {
         self.failures += 1;
         self.until = Some(Instant::now() + art_retry_delay(self.failures));
+        self.last = status;
     }
 
     pub(super) fn succeeded(&mut self) {
@@ -145,14 +162,16 @@ impl From<Cached> for Asset {
 /// Why a provider call can't happen now.
 enum Blocked {
     NoProvider,
-    Waiting(Duration),
+    /// Backing off: how long still, and the HTTP status that started it (`None`: network).
+    Waiting(Duration, Option<u16>),
 }
 
 impl From<Blocked> for Availability {
     fn from(b: Blocked) -> Self {
         match b {
             Blocked::NoProvider => Self::NoProvider,
-            Blocked::Waiting(retry_in) => Self::Offline { retry_in },
+            Blocked::Waiting(retry_in, None) => Self::Offline { retry_in },
+            Blocked::Waiting(retry_in, Some(status)) => Self::Refused { status, retry_in },
         }
     }
 }
@@ -163,19 +182,30 @@ impl Worker {
             return Err(Blocked::NoProvider);
         }
         match self.net.waiting() {
-            Some(left) => Err(Blocked::Waiting(left)),
+            Some(left) => Err(Blocked::Waiting(left, self.net.last)),
             None => Ok(()),
         }
     }
 
-    /// Notes a provider error; the availability to report for it.
+    /// Notes a provider error; the availability to report for it. Like the art queue, every
+    /// error but a permanent refusal waits before the next request.
     fn call_failed(&mut self, err: &ProviderError) -> Availability {
-        tracing::info!("SteamGridDB request for the Customize page failed: {err}");
-        if matches!(err, ProviderError::Network(_)) {
-            self.net.failed();
+        tracing::warn!("SteamGridDB request for the Customize page failed: {err}");
+        if !err.is_permanent() {
+            let status = match err {
+                ProviderError::Http { status, .. } => Some(*status),
+                _ => None,
+            };
+            self.net.failed_with(status);
         }
-        Availability::Offline {
-            retry_in: self.net.waiting().unwrap_or_default(),
+        let retry_in = self.net.waiting().unwrap_or_default();
+        match err {
+            ProviderError::Network(_) => Availability::Offline { retry_in },
+            ProviderError::Http { status, .. } => Availability::Refused {
+                status: *status,
+                retry_in,
+            },
+            ProviderError::Invalid(_) => Availability::Unexpected,
         }
     }
 
@@ -628,6 +658,47 @@ mod tests {
             .candidates(&tp(), CandidateSet::Art(ArtKind::Icon));
         let (items, availability) = run.list(CandidateSet::Art(ArtKind::Icon));
         assert!(items.is_empty() && matches!(availability, Availability::Offline { .. }));
+    }
+
+    /// Matches like the fixtures, but SteamGridDB refuses every image list (a bad key).
+    struct RefusesImages(MockMetadataProvider);
+    impl crate::art::MetadataProvider for RefusesImages {
+        fn search(&self, name: &str) -> Result<Vec<crate::art::CatalogGame>, ProviderError> {
+            self.0.search(name)
+        }
+        fn best_asset(&self, id: u64, kind: ArtKind) -> Result<Option<AssetRef>, ProviderError> {
+            self.0.best_asset(id, kind)
+        }
+        fn assets(&self, _: u64, _: ArtKind) -> Result<Vec<Asset>, ProviderError> {
+            Err(ProviderError::Http {
+                status: 401,
+                what: "/heroes/game".into(),
+            })
+        }
+        fn download(&self, asset: &AssetRef) -> Result<Vec<u8>, ProviderError> {
+            self.0.download(asset)
+        }
+    }
+
+    #[test]
+    fn a_refused_key_is_not_reported_as_offline() {
+        let s = setup();
+        let mut run = Run::new(&s, Arc::new(MockMetadataProvider::fixtures()));
+        run.worker.provider = Some(Box::new(RefusesImages(MockMetadataProvider::fixtures())));
+        let set = CandidateSet::Art(ArtKind::Hero);
+        run.worker.candidates(&tp(), set);
+        let (_, availability) = run.list(set);
+        assert!(matches!(
+            availability,
+            Availability::Refused { status: 401, .. }
+        ));
+        // It waits before asking again, and says why meanwhile.
+        run.worker
+            .candidates(&tp(), CandidateSet::Art(ArtKind::Logo));
+        let (_, availability) = run.list(CandidateSet::Art(ArtKind::Logo));
+        assert!(
+            matches!(availability, Availability::Refused { status: 401, retry_in } if retry_in > Duration::ZERO)
+        );
     }
 
     #[test]

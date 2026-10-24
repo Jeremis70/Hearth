@@ -282,7 +282,12 @@ impl Controller {
         let Some(set) = state.section.set() else {
             return;
         };
-        if state.requested.insert(set)
+        // Again when a visit was cut short before every thumbnail arrived (moving on stops
+        // them): the list comes from SteamGridDB again, the thumbs already cached are kept.
+        let incomplete = state.lists.get(&set).is_some_and(|(items, a)| {
+            *a == Availability::Live && items.iter().any(|i| i.thumb.is_none())
+        });
+        if (state.requested.insert(set) || incomplete)
             && let Some(service) = &self.art_service
         {
             service.candidates(state.key.clone(), set);
@@ -948,6 +953,25 @@ fn note_for(set: CandidateSet, availability: Availability, empty: bool) -> Strin
         (Availability::NoProvider, false) => "No SteamGridDB key · saved results".into(),
         (Availability::NoProvider, true) => {
             "No SteamGridDB key: add one to hearth.toml, or use a file.".into()
+        }
+        (Availability::Refused { status, retry_in }, empty) => {
+            let why = match status {
+                401 | 403 => format!(
+                    "SteamGridDB refused the API key (HTTP {status}): check \
+                     HEARTH_STEAMGRIDDB_KEY or [art] steamgriddb_key in hearth.toml."
+                ),
+                429 => "SteamGridDB asks to slow down (HTTP 429).".into(),
+                _ => format!("SteamGridDB answered with an error (HTTP {status})."),
+            };
+            let saved = if empty { "" } else { " Saved results below." };
+            format!(
+                "{why}{saved} Trying again in {} min.",
+                retry_in.as_secs().div_ceil(60).max(1)
+            )
+        }
+        (Availability::Unexpected, false) => "SteamGridDB's answer was odd · saved results".into(),
+        (Availability::Unexpected, true) => {
+            "SteamGridDB's answer couldn't be read. Use a file meanwhile.".into()
         }
         (Availability::NotMatched, _) => {
             "Not matched to a SteamGridDB game: try “Wrong game?”, or use a file.".into()

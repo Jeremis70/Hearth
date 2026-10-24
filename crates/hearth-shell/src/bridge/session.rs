@@ -735,7 +735,10 @@ impl Controller {
     fn music_focus_changed(&mut self, id: Option<GameId>) {
         self.theme_timer.stop();
         let Some(id) = id else {
-            if self.focused_theme.take().is_some() {
+            // The Customize page keeps its game's theme.
+            if self.customize.is_some() {
+                self.keep_theme();
+            } else if self.focused_theme.take().is_some() {
                 self.sync_music(director::FADE_LAUNCH);
             }
             return;

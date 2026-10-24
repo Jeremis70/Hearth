@@ -134,6 +134,9 @@ export global CustomizeData {
     in property <string> note;          // "Loading…", "Offline · saved results"…
     in property <[Candidate]> candidates;
     in property <[CustomRow]> rows;
+    // A change is on its way (the source line says what); `busy-index`: the strip tile.
+    in property <bool> busy;
+    in property <int> busy-index: -1;
     // The file list ("Use a file…", "Choose a file…").
     in property <string> files-heading;
     in property <string> files-note;    // shown when empty

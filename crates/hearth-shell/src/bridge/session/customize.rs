@@ -13,7 +13,7 @@ use std::time::{Duration, SystemTime};
 
 use hearth_core::art::service::{Availability, Candidate as Listed, CandidateSet};
 use hearth_core::art::{ArtEvent, ArtKey, ArtKind};
-use hearth_core::custom::{CENTER, Custom, Lookup, Source};
+use hearth_core::custom::{CENTER, Lookup, Source};
 use hearth_core::extras::{Extra, folder_candidates};
 use hearth_core::files::{self, FileKind, ListedFile, Place};
 use hearth_core::model::{Game, GameId};
@@ -111,6 +111,9 @@ pub(super) struct CustomizeState {
     file_preview: Option<PathBuf>,
     /// The hero's position before positioning started (to cancel), while positioning.
     position_before: Option<f32>,
+    /// A change asked of the art worker and not answered yet (what the page shows meanwhile,
+    /// and the strip tile being applied).
+    busy: Option<(&'static str, Option<usize>)>,
 }
 
 impl CustomizeState {
@@ -227,10 +230,12 @@ impl Controller {
             durations: HashMap::new(),
             file_preview: None,
             position_before: None,
+            busy: None,
         });
         self.request_candidates();
         self.decode_current();
         self.fill_customize();
+        self.keep_theme();
         let index = SECTIONS.iter().position(|s| *s == section).unwrap_or(0);
         if let Some(app) = self.app.upgrade() {
             app.invoke_open_customize(i32::try_from(index).unwrap_or(0));
@@ -295,6 +300,15 @@ impl Controller {
     }
 
     fn customize_candidate(&mut self, index: usize) {
+        // The "In use" tile first (art not among the candidates): nothing to apply.
+        let in_use = self.customize.as_ref().is_some_and(|s| self.in_use_tile(s));
+        let Some(index) = (if in_use {
+            index.checked_sub(1)
+        } else {
+            Some(index)
+        }) else {
+            return;
+        };
         let Some(state) = self.customize.as_mut() else {
             return;
         };
@@ -315,7 +329,11 @@ impl Controller {
         };
         match set {
             CandidateSet::Art(kind) => {
+                if item.current {
+                    return;
+                }
                 tracing::info!(%key, kind = kind.name(), asset = item.id, "artwork picked");
+                state.busy = Some(("Downloading it…", Some(index + usize::from(in_use))));
                 service.apply(key, kind, item.id);
             }
             CandidateSet::Games => {
@@ -327,6 +345,7 @@ impl Controller {
                 state.lists.clear();
                 state.requested.clear();
                 state.requested.insert(CandidateSet::Games);
+                state.busy = Some(("Matching…", None));
                 service.rematch(key, item.id, item.name.clone());
                 self.toast(&format!("Matched to {}", item.name));
                 // The new game's name shows once the worker saved it.
@@ -349,12 +368,16 @@ impl Controller {
             "file" => self.open_files(),
             "reset" => {
                 if let (Some(service), Some(extra)) = (&self.art_service, section.extra()) {
+                    state.busy = Some(("Resetting…", None));
                     service.reset(key, extra);
+                    self.fill_customize();
                 }
             }
             "remove" => {
                 if let Some(service) = &self.art_service {
+                    state.busy = Some(("Removing…", None));
                     service.remove_theme(key);
+                    self.fill_customize();
                 }
             }
             "position" => {
@@ -505,8 +528,10 @@ impl Controller {
         self.preview_timer.stop();
         if let (Some(file), Some(extra), Some(service)) = (file, extra, &self.art_service) {
             tracing::info!(%key, extra = extra.name(), file = %file.path.display(), "file picked");
+            state.busy = Some(("Copying it…", None));
             service.pick_file(key, extra, file.path);
         }
+        self.fill_customize();
         self.update_preview();
     }
 
@@ -568,6 +593,12 @@ impl Controller {
                 let shown = state.section.set() == Some(set);
                 self.decode_thumbs(paths);
                 self.fill_customize();
+                // Where the strip starts: the one in use (after an "In use" tile, or that tile).
+                let in_use = self.customize.as_ref().is_some_and(|s| self.in_use_tile(s));
+                let current = match current {
+                    Some(i) => Some(i + usize::from(in_use)),
+                    None => in_use.then_some(0),
+                };
                 if shown && let (Some(app), Some(current)) = (self.app.upgrade(), current) {
                     app.invoke_customize_current(i32::try_from(current).unwrap_or(0));
                 }
@@ -585,13 +616,14 @@ impl Controller {
                 }
                 self.decode_thumbs(vec![path]);
             }
-            ArtEvent::Custom { key, custom } => {
+            ArtEvent::Custom { key, .. } => {
                 let Some(state) = self.customize.as_mut().filter(|s| s.key == key) else {
                     return;
                 };
-                // What's in use changed: mark it in the lists.
-                mark_current(&mut state.lists, &custom);
+                // Done (the worker sends the lists again, marked).
+                state.busy = None;
                 self.fill_customize();
+                self.keep_theme();
                 // A new theme (or none): the preview follows.
                 self.preview = None;
                 self.update_preview();
@@ -600,7 +632,9 @@ impl Controller {
                 }
             }
             ArtEvent::Failed { key, message } => {
-                if self.customize.as_ref().is_some_and(|s| s.key == key) {
+                if let Some(state) = self.customize.as_mut().filter(|s| s.key == key) {
+                    state.busy = None;
+                    self.fill_customize();
                     self.toast(&message);
                 }
             }
@@ -674,6 +708,35 @@ impl Controller {
             .get(&state.game.id)?
             .get(kind)
             .map(Path::to_path_buf)
+    }
+
+    /// True when the art in use isn't marked among the focused section's candidates (a file,
+    /// the game folder's, or automatic art fetched before its source was noted): the strip
+    /// then starts with an "In use" tile.
+    fn in_use_tile(&self, state: &CustomizeState) -> bool {
+        let Section::Art(kind) = state.section else {
+            return false;
+        };
+        let Some((items, _)) = state.lists.get(&CandidateSet::Art(kind)) else {
+            return false;
+        };
+        let in_use = self
+            .art_paths
+            .get(&state.game.id)
+            .is_some_and(|art| art.get(kind).is_some());
+        in_use && !items.iter().any(|i| i.current)
+    }
+
+    /// The game's theme keeps playing on its page (as on Home), whatever Home's focus says.
+    pub(super) fn keep_theme(&mut self) {
+        let Some(state) = self.customize.as_ref() else {
+            return;
+        };
+        let theme = self.theme_of(&state.game);
+        if theme != self.focused_theme {
+            self.focused_theme = theme;
+            self.sync_music(director::FADE_LAUNCH);
+        }
     }
 
     /// (short status, sentence) for where `section`'s file comes from now.
@@ -770,12 +833,23 @@ impl Controller {
         data.set_sections(ModelRc::from(Rc::new(VecModel::from(sections))));
         let section = state.section;
         data.set_heading(section.label().into());
-        data.set_source(self.source_of(state, section).1.into());
-        let current = self
+        match state.busy {
+            Some((what, index)) => {
+                data.set_source(what.into());
+                data.set_busy(true);
+                data.set_busy_index(index.and_then(|i| i32::try_from(i).ok()).unwrap_or(-1));
+            }
+            None => {
+                data.set_source(self.source_of(state, section).1.into());
+                data.set_busy(false);
+                data.set_busy_index(-1);
+            }
+        }
+        let current_thumb = self
             .current_art_path()
             .and_then(|p| state.thumbs.get(&p).cloned())
             .unwrap_or_default();
-        data.set_current(current);
+        data.set_current(current_thumb.clone());
         data.set_warning(
             if section == Section::Theme && !self.audio_settings.game_themes {
                 "Game themes are off in Settings · Display & sound (previews still play)".into()
@@ -806,6 +880,20 @@ impl Controller {
                         })
                         .collect();
                     let note = note_for(set, *availability, shown.is_empty());
+                    // The art in use isn't one of these (or can't be told apart): it comes
+                    // first, marked, rather than marking an image that may not be it.
+                    let mut shown = shown;
+                    if self.in_use_tile(state) {
+                        shown.insert(
+                            0,
+                            Candidate {
+                                name: "In use".into(),
+                                detail: "".into(),
+                                thumb: current_thumb.clone(),
+                                current: true,
+                            },
+                        );
+                    }
                     (shown, note)
                 }
             },
@@ -907,31 +995,6 @@ impl Controller {
         if let Some(state) = self.customize.as_mut() {
             state.durations.insert(path, duration);
             self.fill_files();
-        }
-    }
-}
-
-/// After a change of picks: which listed image is in use now (an automatic one stays marked
-/// only until the next listing; a file pick marks none).
-fn mark_current(lists: &mut HashMap<CandidateSet, (Vec<Listed>, Availability)>, custom: &Custom) {
-    for (set, (items, _)) in lists.iter_mut() {
-        let CandidateSet::Art(kind) = *set else {
-            continue;
-        };
-        let entry = custom.entry(Extra::Art(kind));
-        match entry.source {
-            Some(Source::Sgdb) => {
-                for item in items.iter_mut() {
-                    item.current = entry.asset == Some(item.id);
-                }
-            }
-            Some(_) => items.iter_mut().for_each(|i| i.current = false),
-            // Back to automatic: the best one (it is first).
-            None => {
-                for (i, item) in items.iter_mut().enumerate() {
-                    item.current = i == 0;
-                }
-            }
         }
     }
 }

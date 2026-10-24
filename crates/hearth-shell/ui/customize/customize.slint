@@ -104,6 +104,7 @@ component CandidateStrip inherits Rectangle {
     in property <string> section;
     in property <[Candidate]> items;
     in property <int> focus-index: -1;
+    in property <int> busy-index: -1;     // being applied: dimmed, a pulsing dot
 
     property <length> tile-w: Sections.thumb-width(section);
     property <length> tile-h: Sections.thumb-height(section);
@@ -137,7 +138,20 @@ component CandidateStrip inherits Rectangle {
                 font-size: Theme.heading;
                 color: Theme.text-disabled;
             }
-            if item.current: Rectangle {
+            // Being applied: a little darker, an ember dot breathing where the check goes.
+            if i == busy-index: Rectangle {
+                background: #00000066;
+            }
+            if i == busy-index: Rectangle {
+                x: parent.width - self.width - Theme.sp-8 - 6px * Theme.scale;
+                y: Theme.sp-8 + 6px * Theme.scale;
+                width: 24px * Theme.scale;
+                height: self.width;
+                border-radius: self.width / 2;
+                background: Theme.accent;
+                opacity: 0.45 + 0.45 * sin(animation-tick() / 1ms * 0.36deg);
+            }
+            if item.current && i != busy-index: Rectangle {
                 x: parent.width - self.width - Theme.sp-8;
                 y: Theme.sp-8;
                 width: 36px * Theme.scale;
@@ -522,7 +536,7 @@ export component CustomizeScreen inherits Rectangle {
                 Text {
                     text: CustomizeData.source;
                     font-size: Theme.body;
-                    color: Theme.text-secondary;
+                    color: CustomizeData.busy ? Theme.accent : Theme.text-secondary;
                     wrap: word-wrap;
                 }
                 if CustomizeData.warning != "": HorizontalLayout {
@@ -558,6 +572,7 @@ export component CustomizeScreen inherits Rectangle {
                     section: shown-key;
                     items: CustomizeData.candidates;
                     focus-index: pane == 1 && on-strip ? strip-index : -1;
+                    busy-index: CustomizeData.busy-index;
                 }
                 for row[i] in CustomizeData.rows: Rectangle {
                     y: strip.height + Theme.sp-16 + i * (Theme.row-height + Theme.row-gap);

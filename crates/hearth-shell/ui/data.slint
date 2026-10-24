@@ -19,6 +19,8 @@ export struct HomeTile {
     // Art; empty images (width 0) mean "not there": placeholders are drawn instead.
     art: image,         // square grid
     hero: image,        // sharp banner for the hero zone
+    hero-x: float,      // where the hero is cropped: 0 = its left edge, 1 = its right edge
+    hero-rev: int,      // bumped whenever `hero` changes (the backdrop crossfades)
     logo: image,        // shown instead of the title
     // Console icon from the selected pack or Hearth's glyphs (tinted), else `monogram`.
     console-icon: image,

@@ -38,6 +38,10 @@ pub struct TileArt {
     pub logo: Image,
     /// The SteamGridDB game it matched.
     pub match_name: Option<String>,
+    /// Where the hero is cropped (0 = its left edge … 1 = its right edge); `None`: centered.
+    pub hero_position: Option<f32>,
+    /// Bumped whenever the hero changes.
+    pub hero_rev: i32,
 }
 
 impl TileArt {
@@ -46,7 +50,10 @@ impl TileArt {
         let image = pixels.map(Image::from_rgba8).unwrap_or_default();
         match kind {
             ArtKind::Grid => self.grid = image,
-            ArtKind::Hero => self.hero = image,
+            ArtKind::Hero => {
+                self.hero = image;
+                self.hero_rev = self.hero_rev.wrapping_add(1);
+            }
             ArtKind::Logo => self.logo = image,
             ArtKind::Icon => {}
         }
@@ -316,11 +323,11 @@ pub fn start(
                 key,
                 art,
                 match_name,
-                ..
+                hero_position,
             } => {
                 super::startup::note("first art event");
                 loader.submit(&game, &key, &art);
-                defer(move |c| c.set_art_match(&game, match_name));
+                defer(move |c| c.set_art_meta(&game, match_name, hero_position));
             }
             // The Customize page's answers (not built yet).
             other => tracing::debug!(?other, "art event"),

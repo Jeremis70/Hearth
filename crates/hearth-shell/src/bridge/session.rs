@@ -1611,9 +1611,16 @@ impl Controller {
         self.probe_startup();
     }
 
-    /// The SteamGridDB game a game matched (for Properties), from the art worker.
-    pub fn set_art_match(&mut self, game: &GameId, match_name: Option<String>) {
-        self.art.entry(game.clone()).or_default().match_name = match_name;
+    /// The SteamGridDB game a game matched (for Properties) and where its hero is cropped,
+    /// from the art worker.
+    pub fn set_art_meta(&mut self, game: &GameId, match_name: Option<String>, hero_position: f32) {
+        let art = self.art.entry(game.clone()).or_default();
+        art.match_name = match_name;
+        let moved = art.hero_position != Some(hero_position);
+        art.hero_position = Some(hero_position);
+        if moved {
+            self.refresh_tiles();
+        }
         self.probe_startup();
     }
 

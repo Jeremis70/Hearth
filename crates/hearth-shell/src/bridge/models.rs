@@ -160,6 +160,10 @@ pub fn home_tiles(
             favorite: e.favorite,
             art: tile_art.grid,
             hero: tile_art.hero,
+            hero_x: tile_art
+                .hero_position
+                .unwrap_or(hearth_core::custom::CENTER),
+            hero_rev: tile_art.hero_rev,
             logo: tile_art.logo,
             console_icon: icon.image,
             console_icon_tint: icon.tint,

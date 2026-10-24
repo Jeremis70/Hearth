@@ -25,18 +25,36 @@ component Glow inherits Rectangle {
     }
 }
 
-// One background layer: the hero full-bleed behind the whole screen (cover, centered crop),
-// darkened on the left and at the bottom so the logo, text and buttons stay readable. Without
-// a hero (Welcome, Library, games without art): the glow.
-component Backdrop inherits Rectangle {
+// The hero full-bleed (cover), cropped at `position`: 0 shows its left edge, 1 its right edge
+// (heroes are about 3.1:1, the screen 16:9). Vertically centered.
+export component HeroImage inherits Rectangle {
+    in property <image> source;
+    in property <float> position: 0.5;
+    clip: true;
+
+    property <float> scale: max(root.width / (source.width * 1px), root.height / (source.height * 1px));
+    Image {
+        width: source.width * 1px * scale;
+        height: source.height * 1px * scale;
+        x: (root.width - self.width) * clamp(position, 0, 1);
+        y: (root.height - self.height) / 2;
+        source: source;
+        image-fit: fill;
+    }
+}
+
+// One background layer: the hero full-bleed behind the whole screen (cover, cropped where the
+// user put it, centered by default), darkened on the left and at the bottom so the logo, text
+// and buttons stay readable. Without a hero (Welcome, Library, games without art): the glow.
+export component Backdrop inherits Rectangle {
     in property <HomeTile> tile;
 
     if tile.hero.width == 0: Glow { }
-    if tile.hero.width > 0: Image {
+    if tile.hero.width > 0: HeroImage {
         width: root.width;
         height: root.height;
         source: tile.hero;
-        image-fit: cover;
+        position: tile.hero-x;
     }
     // Strong on the left, gone by 60 % of the width.
     if tile.hero.width > 0: Rectangle {
@@ -164,7 +182,7 @@ export component Home inherits Rectangle {
     property <length> widgets-y: logo-bottom + Theme.sp-48;
 
     // Background layers crossfade (`slow`) whenever the current cell's hero changes.
-    property <string> backdrop-key: current.id + ":" + current.hero.width;
+    property <string> backdrop-key: current.id + ":" + current.hero-rev;
     property <bool> show-a: true;
     property <HomeTile> backdrop-a;
     property <HomeTile> backdrop-b;
@@ -175,6 +193,16 @@ export component Home inherits Rectangle {
             backdrop-a = current;
         }
         show-a = !show-a;
+    }
+    // A new crop position shows at once (it follows Left/Right on the Customize page).
+    // Only for the game shown: a layer fading out keeps its own.
+    property <float> current-hero-x: current.hero-x;
+    changed current-hero-x => {
+        if show-a && backdrop-a.id == current.id {
+            backdrop-a.hero-x = current-hero-x;
+        } else if !show-a && backdrop-b.id == current.id {
+            backdrop-b.hero-x = current-hero-x;
+        }
     }
 
     // Focus on Welcome, or with `focus-game` on the first game (the running one: Rust puts it

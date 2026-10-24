@@ -364,8 +364,9 @@ fn main() -> anyhow::Result<()> {
         backends.push(Box::new(observer));
     }
     if let Some(path) = args.dev_socket {
-        let socket =
-            DevSocketBackend::new(path).with_commands(bridge::sounds::dev_commands(audio_handle));
+        let socket = DevSocketBackend::new(path).with_commands(bridge::session::dev_commands(
+            bridge::sounds::dev_commands(audio_handle),
+        ));
         backends.push(Box::new(socket));
     }
     if let Err(err) = bridge::input::start(backends) {

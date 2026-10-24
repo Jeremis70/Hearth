@@ -6,6 +6,15 @@
 # Commands (their reply is printed):
 #   sound:<name>    play a logical sound (move, accept, …, achievement, mastery, startup)
 #   audio_state     the audio engine's state as JSON (playing music and its source, volumes)
+#   Customize page (reply "ok", an error, or JSON):
+#     customize:<art key>:<art|theme|match>   open it, e.g. customize:gc/GZ2E01:art
+#     pick:<n>          use candidate n of the section shown (an image, or a game to match)
+#     rematch:<n>       match game n of "Wrong game?"
+#     pick_file:<n>     use file n of the file list (images; theme_file:<n> for the theme)
+#     position:<0..1>   the hero's crop position (saved)
+#     reset:<kind>      back to automatic (grid, hero, logo, icon)
+#     theme_start:<s>   theme_remove
+#     custom_state      the page and the game's picks as JSON
 set -euo pipefail
 cd "$(dirname "$0")/.."
 SOCKET="${HEARTH_DEV_SOCKET:-./.dev-data/actions.sock}"
@@ -13,7 +22,9 @@ for action in "$@"; do
     python3 -c 'import os, socket, sys
 path, word = sys.argv[1], sys.argv[2]
 s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
-reply = word == "audio_state" or word.startswith("sound:")
+actions = {"up", "down", "left", "right", "accept", "back", "prev_tab", "next_tab",
+           "options", "home_short", "home_long", "capture"}
+reply = word not in actions
 if reply:
     # A bound address so Hearth can answer.
     me = os.path.join(os.path.dirname(path) or ".", ".reply-%d.sock" % os.getpid())

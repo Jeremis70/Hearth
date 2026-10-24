@@ -47,6 +47,7 @@ use std::rc::Rc;
 use super::art::{self as art_ui, ArtLoader, ArtMap, ConsoleIcons};
 
 mod customize;
+
 use super::controls_page::{
     self, ApplyOutcome, EmulatorConfigApplier, InputPlumberApplier, MappingApplier, Page, TestPage,
 };
@@ -58,6 +59,7 @@ use crate::{
     OverlayPanel, OverlayWindow, PadNotice, PadRow, Session, SettingsCategory, SettingsData,
     Status, TileKind,
 };
+pub use customize::dev_commands;
 use hearth_audio::director::{self, GameScene, MusicDirector, Scene};
 use hearth_audio::{Audio, SoundFile, Volumes};
 use hearth_core::config::AudioSettings;

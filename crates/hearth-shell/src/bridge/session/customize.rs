@@ -970,3 +970,194 @@ fn measure_durations(paths: Vec<PathBuf>) {
         tracing::warn!("can't start a duration thread: {err}");
     }
 }
+
+/// Dev socket words for the Customize page (`scripts/send-action.sh`); their reply is "ok", an
+/// error, or (`custom_state`) JSON.
+const DEV_WORDS: [&str; 10] = [
+    "customize:",
+    "pick:",
+    "pick_file:",
+    "position:",
+    "rematch:",
+    "reset:",
+    "theme_file:",
+    "theme_start:",
+    "theme_remove",
+    "custom_state",
+];
+
+/// Wraps the dev socket's command handler with the Customize page's words, run on the UI
+/// thread (the reply waits up to 3 s for it).
+pub fn dev_commands(
+    other: hearth_platform::input::dev_socket::CommandHandler,
+) -> hearth_platform::input::dev_socket::CommandHandler {
+    std::sync::Arc::new(move |word: &str| {
+        if !DEV_WORDS.iter().any(|w| word.starts_with(w)) {
+            return other(word);
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let word = word.to_owned();
+        defer(move |c| {
+            let _ = tx.send(c.dev_command(&word));
+        });
+        Some(
+            rx.recv_timeout(Duration::from_secs(3))
+                .unwrap_or_else(|_| "error: the UI didn't answer".into()),
+        )
+    })
+}
+
+impl Controller {
+    fn dev_command(&mut self, word: &str) -> String {
+        let (name, arg) = word.split_once(':').unwrap_or((word, ""));
+        let number = || {
+            arg.parse::<usize>()
+                .map_err(|_| format!("error: {arg} isn't a number"))
+        };
+        let result: Result<(), String> = match name {
+            "customize" => {
+                // customize:<art key>:<section>, the key holding a '/' (gc/GZ2E01).
+                let (key, section) = arg.rsplit_once(':').unwrap_or((arg, "art"));
+                let game = self
+                    .entries
+                    .iter()
+                    .find(|e| self.picks.key_of(&e.game).as_str() == key)
+                    .map(|e| e.game.id.clone());
+                match game {
+                    Some(id) => {
+                        self.open_customize(&id, section);
+                        Ok(())
+                    }
+                    None => Err(format!("error: no game with art key {key}")),
+                }
+            }
+            "custom_state" => return self.custom_state(),
+            _ if self.customize.is_none() => Err("error: the Customize page isn't open".into()),
+            "pick" => number().map(|n| self.customize_candidate(n)),
+            "rematch" => number().map(|n| {
+                self.dev_section(Section::Match);
+                self.customize_candidate(n);
+            }),
+            "pick_file" | "theme_file" => number().map(|n| {
+                if name == "theme_file" {
+                    self.dev_section(Section::Theme);
+                }
+                self.open_files();
+                self.customize_file_chosen(n);
+            }),
+            "position" => arg
+                .parse::<f32>()
+                .map_err(|_| format!("error: {arg} isn't a position (0 to 1)"))
+                .map(|position| {
+                    let Some(state) = self.customize.as_ref() else {
+                        return;
+                    };
+                    let (game, key) = (state.game.id.clone(), state.key.clone());
+                    self.set_hero_position_live(&game, position.clamp(0.0, 1.0));
+                    if let Some(service) = &self.art_service {
+                        service.set_hero_position(key, position);
+                    }
+                }),
+            "reset" => match ArtKind::from_name(arg) {
+                Some(kind) => {
+                    self.dev_section(Section::Art(kind));
+                    self.customize_row("reset");
+                    Ok(())
+                }
+                None => Err(format!("error: {arg} isn't grid, hero, logo or icon")),
+            },
+            "theme_start" => arg
+                .parse::<f32>()
+                .map_err(|_| format!("error: {arg} isn't a number of seconds"))
+                .map(|seconds| {
+                    self.dev_section(Section::Theme);
+                    if let (Some(state), Some(service)) = (&self.customize, &self.art_service) {
+                        service.set_theme_start(state.key.clone(), seconds.max(0.0));
+                    }
+                    self.update_preview_with_start(Some(seconds.max(0.0)));
+                    self.fill_customize_rows(Some(seconds.max(0.0)));
+                }),
+            "theme_remove" => {
+                self.dev_section(Section::Theme);
+                self.customize_row("remove");
+                Ok(())
+            }
+            _ => Err(format!("error: unknown command {word}")),
+        };
+        match result {
+            Ok(()) => "ok".into(),
+            Err(err) => err,
+        }
+    }
+
+    /// Shows `section` (as if focused there, the pane entered) and asks for its list.
+    fn dev_section(&mut self, section: Section) {
+        let index = SECTIONS.iter().position(|s| *s == section).unwrap_or(0);
+        if let Some(state) = self.customize.as_mut() {
+            state.section = section;
+            state.in_pane = true;
+        }
+        if let Some(app) = self.app.upgrade() {
+            app.invoke_open_customize(i32::try_from(index).unwrap_or(0));
+        }
+        if let Some(state) = self.customize.as_mut() {
+            state.in_pane = true;
+        }
+        self.request_candidates();
+        self.fill_customize();
+        self.update_preview();
+    }
+
+    /// The page and the game's picks, as JSON.
+    fn custom_state(&self) -> String {
+        let Some(state) = &self.customize else {
+            return serde_json::json!({ "open": false }).to_string();
+        };
+        let lists: serde_json::Map<String, serde_json::Value> = state
+            .lists
+            .iter()
+            .map(|(set, (items, availability))| {
+                let name = match set {
+                    CandidateSet::Art(kind) => kind.name().to_owned(),
+                    CandidateSet::Games => "games".into(),
+                };
+                let items: Vec<_> = items
+                    .iter()
+                    .map(|i| {
+                        serde_json::json!({
+                            "id": i.id, "name": i.name, "detail": i.detail,
+                            "current": i.current, "thumb": i.thumb.is_some(),
+                        })
+                    })
+                    .collect();
+                (
+                    name,
+                    serde_json::json!({ "availability": format!("{availability:?}"), "items": items }),
+                )
+            })
+            .collect();
+        let sources: serde_json::Map<String, serde_json::Value> = SECTIONS
+            .iter()
+            .map(|&s| (s.key().to_owned(), self.source_of(state, s).1.into()))
+            .collect();
+        let picks = std::fs::read_to_string(self.picks.dir(&state.key).join("custom.toml"))
+            .unwrap_or_default();
+        let art = self.art_paths.get(&state.game.id);
+        serde_json::json!({
+            "open": true,
+            "game": state.game.id.as_str(),
+            "key": state.key.as_str(),
+            "section": state.section.key(),
+            "sources": sources,
+            "custom_toml": picks,
+            "hero_position": self.art.get(&state.game.id).and_then(|a| a.hero_position),
+            "art": art.map(|a| serde_json::json!({
+                "grid": a.grid, "hero": a.hero, "logo": a.logo, "icon": a.icon,
+            })),
+            "lists": lists,
+            "files": state.files.as_ref().map(|(_, f)| f.iter().map(|f| f.name.clone()).collect::<Vec<_>>()),
+            "preview": self.preview.as_ref().map(|p| p.path.display().to_string()),
+        })
+        .to_string()
+    }
+}

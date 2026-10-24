@@ -10,7 +10,7 @@
 //!
 //! [audio]
 //! ui_volume = 80                        # 0–100, a perceptual (dB) scale
-//! music_volume = 60
+//! music_volume = 50
 //! mute = false
 //! music_in_overlay = true
 //! game_themes = true
@@ -151,7 +151,7 @@ impl Default for AudioSettings {
     fn default() -> Self {
         Self {
             ui_volume: 80,
-            music_volume: 60,
+            music_volume: 50,
             mute: false,
             music_in_overlay: true,
             game_themes: true,
@@ -357,7 +357,7 @@ mod tests {
         .unwrap();
         let config = Config::load(&path).unwrap();
         assert_eq!(config.audio().ui_volume, 100);
-        assert_eq!(config.audio().music_volume, 60);
+        assert_eq!(config.audio().music_volume, 50);
         let audio = AudioSettings {
             ui_volume: 30,
             music_volume: 0,

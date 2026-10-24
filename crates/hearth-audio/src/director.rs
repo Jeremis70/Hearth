@@ -123,6 +123,7 @@ mod tests {
             path: name.into(),
             origin: "test".into(),
             loop_spec: None,
+            gain_db: 0,
         }
     }
 

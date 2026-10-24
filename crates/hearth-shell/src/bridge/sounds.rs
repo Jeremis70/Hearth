@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use hearth_audio::{Audio, SoundFile};
 use hearth_core::config::PackCategory;
-use hearth_core::packs::{Origin, Resolved, Resolver, SOUND_NAMES};
+use hearth_core::packs::{MUSIC_NAMES, Origin, Resolved, Resolver, SOUND_NAMES};
 use hearth_platform::input::dev_socket::CommandHandler;
 
 use crate::{NavResult, UiAction};
@@ -26,9 +26,6 @@ pub const MOVE_INTERVAL: Duration = Duration::from_millis(130);
 pub const EDGE_INTERVAL: Duration = Duration::from_millis(250);
 /// An input stamp older than this belongs to another action (keyboard input has none).
 const STAMP_AGE: Duration = Duration::from_millis(500);
-
-/// Logical names played as music (streamed, never decoded whole).
-pub const MUSIC_NAMES: [&str; 2] = ["ambient_loop", "ambient_profiles"];
 
 /// When the last controller action reached the UI (set by the input bridge).
 static LAST_INPUT: Mutex<Option<Instant>> = Mutex::new(None);
@@ -70,6 +67,7 @@ pub fn sound_file(resolved: Resolved) -> SoundFile {
             Origin::Default => "default".into(),
         },
         loop_spec: resolved.loop_spec,
+        gain_db: resolved.gain_db,
     }
 }
 

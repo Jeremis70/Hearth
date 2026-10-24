@@ -23,6 +23,8 @@ const MAX_BACKOFF: Duration = Duration::from_secs(5);
 const STALL: Duration = Duration::from_secs(3);
 /// Parked tracks kept for resuming (the ambient, and one spare).
 const MAX_PARKED: usize = 2;
+/// Music always sits this far under the UI sounds (at equal volumes), so it stays a backdrop.
+const MUSIC_HEADROOM_DB: f32 = -6.0;
 /// Sounds that cut each other (navigation), so a held D-pad never piles up.
 const NAV_GROUP: u8 = 1;
 
@@ -52,7 +54,8 @@ struct Engine {
     opened_once: bool,
     last_callbacks: (u64, Instant),
     sources: Vec<(String, Option<SoundFile>)>,
-    clips: HashMap<String, Clip>,
+    /// Decoded UI sounds with their gain correction.
+    clips: HashMap<String, (Clip, f32)>,
     /// Names for stats stamps (index = `Stamp::sound`).
     names: Vec<String>,
     missing_logged: HashSet<String>,
@@ -149,7 +152,7 @@ impl Engine {
         } else {
             (
                 volume_to_gain(self.volumes.ui),
-                volume_to_gain(self.volumes.music),
+                volume_to_gain(self.volumes.music) * 10f32.powf(MUSIC_HEADROOM_DB / 20.0),
             )
         };
         self.command(Command::Gains { ui, music });
@@ -168,7 +171,7 @@ impl Engine {
             let Some(file) = file else { continue };
             match load_clip(file, self.rate) {
                 Ok(clip) => {
-                    self.clips.insert(name.clone(), clip);
+                    self.clips.insert(name.clone(), (clip, file.gain()));
                 }
                 Err(err) => tracing::warn!(sound = %name, "can't load a UI sound: {err}"),
             }
@@ -181,7 +184,7 @@ impl Engine {
     }
 
     fn play(&mut self, name: &str, input_at: Option<Instant>) {
-        let Some(clip) = self.clips.get(name).cloned() else {
+        let Some((clip, gain)) = self.clips.get(name).cloned() else {
             if self.missing_logged.insert(name.to_owned()) {
                 tracing::info!(sound = name, "no sound file for this name; staying silent");
             }
@@ -191,7 +194,7 @@ impl Engine {
         let group = matches!(name, "move" | "edge_bump").then_some(NAV_GROUP);
         self.command(Command::Voice {
             clip,
-            gain: 1.0,
+            gain,
             group,
             stamp: Stamp { sound, input_at },
         });
@@ -212,7 +215,7 @@ impl Engine {
                 found = true;
                 track.wanted = true;
                 track.parked_at = None;
-                fades.push((track.id, 1.0, AtSilence::Nothing));
+                fades.push((track.id, track.music.file.gain(), AtSilence::Nothing));
             } else if track.wanted {
                 track.wanted = false;
                 // A track replaced under its own key (a pack change) never comes back.
@@ -252,7 +255,7 @@ impl Engine {
         self.command(Command::Music { id, ring });
         self.command(Command::Fade {
             id,
-            target: 1.0,
+            target: music.file.gain(),
             frames,
             then: AtSilence::Nothing,
         });
@@ -511,6 +514,7 @@ mod tests {
                     path,
                     origin: "test".into(),
                     loop_spec: None,
+                    gain_db: 0,
                 },
                 resume: true,
             }),
@@ -576,6 +580,7 @@ mod tests {
             path: path.to_path_buf(),
             origin: "test".into(),
             loop_spec: None,
+            gain_db: 0,
         };
         audio.set_sounds(vec![
             ("move".into(), Some(file(&click))),

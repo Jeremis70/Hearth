@@ -63,6 +63,10 @@ Round B (audio), 2026-10-23, oldest first:
   - the seam of the pack's ambient (`loop_seam`): 100 ms levels stay −12…−18 dB through it,
     largest sample step 0.031 (normal content 0.022 at p99.9); without loop points it dips to
     −59 dB.
+- After the user listened: UI sounds were barely heard over the music. Music now sits 6 dB
+  under the UI sounds, Music defaults to 50, and packs can correct their mastering with
+  `[gain] ui_db / music_db`; ps5-sounds uses +10 / −4 (its UI files peak at −27…−15 dBFS,
+  Home Menu is −15 dBFS RMS). The user moved `004` out of `themes/` and replaced edge_bump.
 - Not verified (the user's to do): hearing it (nothing here was listened to); real
   controller input (dev socket only, so the pad's own path isn't in the latency numbers);
   turning the TV/HDMI off and on or switching the output device (not allowed here: only

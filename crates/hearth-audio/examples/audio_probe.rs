@@ -37,6 +37,7 @@ fn main() {
         path,
         origin: "probe".into(),
         loop_spec: None,
+        gain_db: 0,
     };
     if let Some(sound) = sound.clone() {
         audio.set_sounds(vec![("move".into(), Some(source(sound)))]);

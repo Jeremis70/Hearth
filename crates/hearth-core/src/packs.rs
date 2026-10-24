@@ -20,6 +20,10 @@
 //! start = 1.0          # seconds; the loop restarts here
 //! end = 884.4          # seconds; default: the end of the file
 //! crossfade_ms = 2000  # the end fades into the start (equal power)
+//!
+//! [gain]                # corrects the pack's own mastering, in dB (±24)
+//! ui_db = 10            # UI sounds
+//! music_db = -4         # music (ambient loops)
 //! ```
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -46,6 +50,12 @@ pub const SOUND_NAMES: [&str; 11] = [
     "ambient_profiles",
     "startup",
 ];
+
+/// Logical sound names that are music (streamed, looped), not one-shot UI sounds.
+pub const MUSIC_NAMES: [&str; 2] = ["ambient_loop", "ambient_profiles"];
+
+/// The largest gain correction a pack may ask for, in dB.
+const MAX_GAIN_DB: f64 = 24.0;
 
 const ICON_EXTENSIONS: [&str; 2] = ["svg", "png"];
 const SOUND_EXTENSIONS: [&str; 4] = ["ogg", "wav", "flac", "mp3"];
@@ -80,6 +90,18 @@ struct PackToml {
     sounds: BTreeMap<String, String>,
     /// Logical sound name → loop points.
     loops: BTreeMap<String, LoopToml>,
+    gain: GainToml,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct GainToml {
+    ui_db: Option<f64>,
+    music_db: Option<f64>,
+}
+
+fn gain_db(db: Option<f64>) -> i32 {
+    db.unwrap_or(0.0).clamp(-MAX_GAIN_DB, MAX_GAIN_DB).round() as i32
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -134,6 +156,8 @@ fn inside_pack(rel: &str) -> Option<PathBuf> {
 struct SoundMap {
     files: HashMap<String, PathBuf>,
     loops: HashMap<String, LoopSpec>,
+    ui_db: i32,
+    music_db: i32,
 }
 
 impl SoundMap {
@@ -158,7 +182,12 @@ impl SoundMap {
             .into_iter()
             .map(|(name, spec)| (name, spec.spec()))
             .collect();
-        Self { files, loops }
+        Self {
+            files,
+            loops,
+            ui_db: gain_db(meta.gain.ui_db),
+            music_db: gain_db(meta.gain.music_db),
+        }
     }
 }
 
@@ -257,6 +286,8 @@ pub struct Resolved {
     pub origin: Origin,
     /// Loop points, for a sound whose pack gives them.
     pub loop_spec: Option<LoopSpec>,
+    /// Gain correction from the pack's `[gain]`, in dB (0 for Hearth's defaults and icons).
+    pub gain_db: i32,
 }
 
 /// Finds asset files by logical name, given the selected packs.
@@ -339,14 +370,22 @@ impl Resolver {
                 PackCategory::ConsoleIcons => None,
             };
             if let Some(path) = mapped.or_else(|| find(&pack_dir)) {
-                let loop_spec = match category {
-                    PackCategory::UiSounds => self.sound_map.loops.get(name).copied(),
-                    PackCategory::ConsoleIcons => None,
+                let (loop_spec, gain_db) = match category {
+                    PackCategory::UiSounds => (
+                        self.sound_map.loops.get(name).copied(),
+                        if MUSIC_NAMES.contains(&name) {
+                            self.sound_map.music_db
+                        } else {
+                            self.sound_map.ui_db
+                        },
+                    ),
+                    PackCategory::ConsoleIcons => (None, 0),
                 };
                 return Some(Resolved {
                     path,
                     origin: Origin::Pack(pack.to_owned()),
                     loop_spec,
+                    gain_db,
                 });
             }
         }
@@ -354,6 +393,7 @@ impl Resolver {
             path,
             origin: Origin::Default,
             loop_spec: None,
+            gain_db: 0,
         })
     }
 
@@ -436,7 +476,8 @@ mod tests {
             packs.join("ps5/pack.toml"),
             "[sounds]\nambient_loop = \"themes/003. Home Menu.mp3\"\n\
              accept = \"../secret.ogg\"\nback = \"themes/gone.ogg\"\n\
-             [loops.ambient_loop]\nstart = 1.0\nend = 884.4\ncrossfade_ms = 2000\n",
+             [loops.ambient_loop]\nstart = 1.0\nend = 884.4\ncrossfade_ms = 2000\n\
+             [gain]\nui_db = 10.4\nmusic_db = -40\n",
         )
         .unwrap();
         let mut config = Config::default();
@@ -453,11 +494,11 @@ mod tests {
                 crossfade_ms: 2000
             })
         );
+        assert_eq!(ambient.gain_db, -24, "music gain, clamped");
         // Unmapped names use the default location; escaping mappings are ignored.
-        assert_eq!(
-            resolver.resolve("sounds/move").unwrap().path,
-            packs.join("ps5/sounds/move.mp3")
-        );
+        let click = resolver.resolve("sounds/move").unwrap();
+        assert_eq!(click.path, packs.join("ps5/sounds/move.mp3"));
+        assert_eq!(click.gain_db, 10);
         assert_eq!(resolver.resolve("sounds/accept"), None);
         // A mapping to a missing file falls back like a missing file.
         assert_eq!(

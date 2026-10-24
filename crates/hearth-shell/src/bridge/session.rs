@@ -672,6 +672,7 @@ impl Controller {
             path: theme.path,
             origin: theme.source.to_owned(),
             loop_spec: None,
+            gain_db: 0,
         })
     }
 

@@ -63,6 +63,15 @@ pub struct SoundFile {
     /// Loop points (music only).
     #[serde(skip)]
     pub loop_spec: Option<LoopSpec>,
+    /// Gain correction in dB (a pack's `[gain]`), on top of the volumes.
+    pub gain_db: i32,
+}
+
+impl SoundFile {
+    /// The gain correction as an amplitude factor.
+    pub fn gain(&self) -> f32 {
+        10f32.powf(self.gain_db as f32 / 20.0)
+    }
 }
 
 /// Hearth's own volumes.
@@ -80,7 +89,7 @@ impl Default for Volumes {
     fn default() -> Self {
         Self {
             ui: 80,
-            music: 60,
+            music: 50,
             mute: false,
         }
     }

@@ -263,6 +263,10 @@ ambient_loop = "themes/003. Home Menu.mp3"
 start = 1.2           # seconds; the loop restarts here (the first play starts at 0)
 end = 884.0           # seconds; default: the end of the file
 crossfade_ms = 3000   # the end fades into the start (equal power)
+
+[gain]                # corrects the pack's own mastering, in dB (±24)
+ui_db = 10            # UI sounds
+music_db = -4         # music
 ```
 
 Without loop points the whole file loops with no crossfade (gapless: made for files that loop by construction, like Hearth's own). `cargo run --release -p hearth-audio --example loop_seam -- <file> <start> <end> <ms> out.wav` renders the 10 s around the seam with levels, to check loop points.
@@ -284,7 +288,7 @@ ui_sounds = "ps5-sounds"
   - `quiet`: used, sound comes from elsewhere (Back or Resume in the overlay play `overlay_close`).
 - **Music:** the ambient loop on Hearth's screens, fading in over 300 ms. Silent whenever a game runs unfrozen: launching fades it out over 300 ms while the game starts; Resume unfreezes at once and fades it out over 150 ms. In the overlay over a frozen game it plays only with "Music in overlay" (continuing where it left off); over a game whose suspend policy is off it stays silent.
 - **Game themes:** `<rom stem>-theme.ogg` (or `.mp3`, `.flac`) next to the ROM, like the local art. When a game with a theme stays focused on Home's Games row for 500 ms, the ambient crossfades to it (800 ms), and back once focus settles elsewhere or Home is left. The overlay plays the running game's theme instead of the ambient. Themes extracted from dumps will be a second source behind the file next to the ROM.
-- **Volumes** (Settings → Display & sound): UI sounds and Music, 0–100 in steps of 10 on a dB scale (100 = 0 dB, each step −5 dB, 0 = silent); Mute all; Music in overlay; Game themes. Changes apply at once (the UI volume plays a move at its new level) and are saved under `[audio]` in `hearth.toml`. System volume (PipeWire, the overlay's Volume button) is separate and later.
+- **Volumes** (Settings → Display & sound): UI sounds (default 80) and Music (default 50), 0–100 in steps of 10 on a dB scale (100 = 0 dB, each step −5 dB, 0 = silent); music always sits a further 6 dB under the UI sounds, so it stays a backdrop; Mute all; Music in overlay; Game themes. Changes apply at once (the UI volume plays a move at its new level) and are saved under `[audio]` in `hearth.toml`. System volume (PipeWire, the overlay's Volume button) is separate and later.
 
 ## 8. Assets and licenses
 

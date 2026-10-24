@@ -201,6 +201,10 @@ pub struct Controller {
     icons: ConsoleIcons,
     /// Hearth's settings file (pack choices).
     config_file: PathBuf,
+    /// What the move into profiles did, for `profile_state`.
+    migration: String,
+    /// Why games can't start (the move into profiles failed), if they can't.
+    launch_blocked: Option<String>,
     /// Installed asset packs.
     packs_dir: PathBuf,
     active: Option<ActiveSession>,
@@ -336,6 +340,10 @@ pub struct Setup {
     pub config_file: PathBuf,
     /// Title and text of a notice about that file (it couldn't be read).
     pub config_problem: Option<(String, String)>,
+    /// What the move into profiles did ("migrated", "nothing to do", "failed: …").
+    pub migration: String,
+    /// Title and text of a notice when that move failed; games don't start then.
+    pub storage_problem: Option<(String, String)>,
     /// The audio engine (UI sounds are in `sounds`; music is the session's).
     pub audio: Audio,
     /// Volumes and music options from `hearth.toml`.
@@ -492,6 +500,10 @@ pub fn install(setup: Setup) {
         class_candidate: None,
         icons: setup.icons,
         config_file: setup.config_file,
+        migration: setup.migration,
+        launch_blocked: setup.storage_problem.as_ref().map(|_| {
+            "Games can't start: your saves couldn't be moved into your profile".to_owned()
+        }),
         packs_dir: setup.packs_dir,
         active: None,
         closing: false,
@@ -545,6 +557,9 @@ pub fn install(setup: Setup) {
     with(Controller::apply_motion);
     with(|c| c.sync_music(director::FADE_IN));
     if let Some((title, text)) = setup.config_problem {
+        with(|c| c.show_problem(&title, &text));
+    }
+    if let Some((title, text)) = setup.storage_problem.clone() {
         with(|c| c.show_problem(&title, &text));
     }
     with(|c| {
@@ -1209,7 +1224,37 @@ impl Controller {
 
     // --- launching ---------------------------------------------------------------------
 
+    /// The active profile and its folders, for the dev socket (`profile_state`).
+    pub(super) fn profile_state(&self) -> serde_json::Value {
+        let user = &self.user;
+        let name = std::fs::read_to_string(user.profile_file())
+            .ok()
+            .and_then(|text| toml::from_str::<hearth_core::users::UserProfile>(&text).ok())
+            .map(|p| p.name);
+        serde_json::json!({
+            "id": user.id().as_str(),
+            "name": name,
+            "root": user.root(),
+            "saves": user.saves(),
+            "controls": self.controls.dir(),
+            "retroarch": self.profile.root(),
+            "retroarch_saves_n64": self.profile.saves_dir(&SystemId::new("n64")),
+            "retroarch_system": self.profile.system_dir(),
+            "dolphin": self.dolphin.root(),
+            "gc_saves": user.gc_saves(),
+            "wii_nand": user.wii_nand(),
+            "migration": self.migration,
+            "launch_blocked": self.launch_blocked,
+        })
+    }
+
     fn launch(&mut self, id: &GameId) {
+        if let Some(reason) = &self.launch_blocked {
+            let reason = reason.clone();
+            tracing::warn!(%id, "not launching: {reason}");
+            self.toast(&reason);
+            return;
+        }
         if let Some(active) = &self.active {
             if &active.game.id == id {
                 self.resume_game();

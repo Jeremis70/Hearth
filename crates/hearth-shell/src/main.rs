@@ -7,6 +7,7 @@ mod controls;
 mod diagram;
 mod guard;
 
+use std::ops::ControlFlow;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -24,6 +25,7 @@ use hearth_core::packs::Resolver;
 use hearth_core::paths::{self, DataDirs};
 use hearth_core::profiles::{DolphinInstall, DolphinProfile, RetroArchProfile};
 use hearth_core::systems::Systems;
+use hearth_core::users::migrate::{Migrator, Outcome};
 use hearth_core::users::{ProfileDirs, ProfileId};
 use hearth_platform::gamescope::{self, Compositor};
 use hearth_platform::input::dev_socket::DevSocketBackend;
@@ -86,6 +88,68 @@ struct Args {
     /// HEARTH_AUDIO=null.
     #[arg(long)]
     no_audio: bool,
+    /// The user profile whose saves, controls and play history to use (development and
+    /// tests). An unknown id creates a fresh profile: no saves, the shipped controls.
+    #[arg(long, value_name = "ID", default_value = ProfileId::DEFAULT)]
+    profile: ProfileId,
+}
+
+/// Dev hook: abort (as a kill would) right after this step of the move into profiles. Only
+/// honoured in a throwaway HEARTH_HOME.
+const MIGRATION_ABORT_ENV: &str = "HEARTH_TEST_MIGRATION_ABORT_AFTER";
+
+/// Moves data from before profiles into `profiles/default/` (once). Returns the status for
+/// `profile_state` and, if it failed, the notice to show (games won't start then).
+fn migrate_storage(dirs: &DataDirs) -> (String, Option<(String, String)>) {
+    let mut migrator = Migrator::new(dirs);
+    if let Ok(step) = std::env::var(MIGRATION_ABORT_ENV) {
+        match step.parse::<usize>() {
+            Ok(step) if is_throwaway_home() => {
+                tracing::warn!("{MIGRATION_ABORT_ENV}: aborting after step {step}");
+                migrator = migrator.on_step(Box::new(move |n| {
+                    if n == step {
+                        tracing::warn!("{MIGRATION_ABORT_ENV}: aborting now, after step {n}");
+                        std::process::abort();
+                    }
+                    ControlFlow::Continue(())
+                }));
+            }
+            _ => tracing::warn!(
+                "ignoring {MIGRATION_ABORT_ENV}: it needs a step number and a throwaway \
+                 HEARTH_HOME"
+            ),
+        }
+    }
+    match migrator.run() {
+        Ok(Outcome::NothingToDo) => ("nothing to do".into(), None),
+        Ok(Outcome::Migrated(summary)) => {
+            summary.log();
+            let status = if summary.resumed {
+                "resumed"
+            } else {
+                "migrated"
+            };
+            (status.into(), None)
+        }
+        Err(err) => {
+            tracing::error!("moving your data into profiles/default failed: {err}");
+            let text = if err.data_untouched() {
+                "Nothing was changed. Games won't start until this is fixed (see the log)."
+                    .to_owned()
+            } else {
+                "Some files were moved and a backup was made. Games won't start until this is \
+                 fixed (see the log)."
+                    .to_owned()
+            };
+            (
+                format!("failed: {err}"),
+                Some((
+                    "Couldn't move your saves into your profile".to_owned(),
+                    text,
+                )),
+            )
+        }
+    }
 }
 
 /// Hearth's bundled assets (default console icons, sounds). TODO: an installed location
@@ -234,7 +298,7 @@ fn main() -> anyhow::Result<()> {
         .context("no home directory; pass --games-dir")?;
     let systems = Systems::builtin()?;
     let device_dir = dirs.shared_controls();
-    let user = dirs.profile(&ProfileId::default());
+    let user = dirs.profile(&args.profile);
 
     if let Some(query) = args.print_controls {
         return print_controls(&query, &games_dir, &systems, &device_dir, &user, args.input);
@@ -250,6 +314,18 @@ fn main() -> anyhow::Result<()> {
         }
         Err(err) => return Err(err).context("taking the single-instance lock"),
     };
+
+    // Before anything opens the library or an emulator folder.
+    let (migration, storage_problem) = migrate_storage(&dirs);
+    let profile = user
+        .ensure()
+        .with_context(|| format!("opening profile {}", user.id()))?;
+    tracing::info!(
+        profile = %user.id(),
+        name = %profile.name,
+        root = %user.root().display(),
+        "active profile"
+    );
 
     if process::any_process_named("steam") {
         tracing::warn!(
@@ -362,6 +438,8 @@ fn main() -> anyhow::Result<()> {
         icons,
         config_file: dirs.config_file(),
         config_problem,
+        migration,
+        storage_problem,
         packs_dir: dirs.packs().to_path_buf(),
         audio,
         audio_settings: config.audio(),

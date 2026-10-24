@@ -18,6 +18,7 @@ use hearth_core::art::{
     ArtCache, DisplayClass, MetadataProvider, MockMetadataProvider, SteamGridDb,
 };
 use hearth_core::config::{self, Config};
+use hearth_core::custom::CustomStore;
 use hearth_core::packs::Resolver;
 use hearth_core::paths::{self, DataDirs};
 use hearth_core::profiles::{DolphinInstall, DolphinProfile, RetroArchProfile};
@@ -297,6 +298,7 @@ fn main() -> anyhow::Result<()> {
         library_db: dirs.library_db(),
         games_dir,
         art_cache: ArtCache::new(dirs.art_cache()),
+        picks: CustomStore::new(dirs.game_data()),
         display_class: std::fs::read_to_string(display_class_file(&dirs))
             .ok()
             .and_then(|name| DisplayClass::from_name(&name))

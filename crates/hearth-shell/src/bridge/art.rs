@@ -15,6 +15,7 @@ use hearth_core::art::{
     ArtCache, ArtEvent, ArtKey, ArtKind, ArtService, DisplayClass, GameArt, MetadataProvider,
 };
 use hearth_core::config::PackCategory;
+use hearth_core::custom::CustomStore;
 use hearth_core::model::GameId;
 use hearth_core::packs::{Origin, Resolver};
 use hearth_core::systems::Systems;
@@ -299,22 +300,29 @@ fn load(
 /// Starts the art worker; its paths go to `loader`, match names to the session.
 pub fn start(
     cache: ArtCache,
+    picks: CustomStore,
     library_db: PathBuf,
     provider: Option<Box<dyn MetadataProvider>>,
     loader: ArtLoader,
 ) -> Option<ArtService> {
-    let spawned = ArtService::spawn(cache, library_db, provider, move |event| match event {
-        ArtEvent::Art {
-            game,
-            key,
-            art,
-            match_name,
-        } => {
-            super::startup::note("first art event");
-            loader.submit(&game, &key, &art);
-            defer(move |c| c.set_art_match(&game, match_name));
-        }
-    });
+    let spawned = ArtService::spawn(
+        cache,
+        picks,
+        library_db,
+        provider,
+        move |event| match event {
+            ArtEvent::Art {
+                game,
+                key,
+                art,
+                match_name,
+            } => {
+                super::startup::note("first art event");
+                loader.submit(&game, &key, &art);
+                defer(move |c| c.set_art_match(&game, match_name));
+            }
+        },
+    );
     match spawned {
         Ok(service) => Some(service),
         Err(err) => {

@@ -13,14 +13,16 @@
 //! A folder holding several games is only a grouping folder, and games laid out flat in the
 //! system folder have no extras; nothing is matched by the ROM's name.
 //!
-//! Sources are tried in order, first match wins. Today: [`GameFolder`]. The Round C picker
-//! (a choice stored in Hearth's own per-game data, keyed by game id) goes in front of it in
-//! [`Extras::standard`]; after the chain come the pack or Hearth's defaults (the ambient loop)
-//! and the art cache, which the callers handle.
+//! Sources are tried in order, first match wins: [`Picked`] (what the user chose, stored in
+//! Hearth's own per-game data, see [`crate::custom`]), then [`GameFolder`]. A source may also
+//! block the rest (a theme removed by the user, though its file is in the game folder). After
+//! the chain come the pack or Hearth's defaults (the ambient loop) and the art cache, which the
+//! callers handle.
 
 use std::path::PathBuf;
 
 use crate::art::{ArtKind, GameArt};
+use crate::custom::{CustomStore, Lookup};
 use crate::model::Game;
 
 const THEME_EXTENSIONS: [&str; 3] = ["ogg", "mp3", "flac"];
@@ -47,7 +49,7 @@ impl Extra {
         }
     }
 
-    fn extensions(self) -> &'static [&'static str] {
+    pub(crate) fn extensions(self) -> &'static [&'static str] {
         match self {
             Self::Theme => &THEME_EXTENSIONS,
             Self::Art(_) => &IMAGE_EXTENSIONS,
@@ -66,8 +68,8 @@ pub struct Found {
 
 /// Somewhere extras come from.
 pub trait ExtraSource: Send + Sync {
-    /// The file this source has for `game`'s `extra`, if any.
-    fn find(&self, game: &Game, extra: Extra) -> Option<PathBuf>;
+    /// What this source has for `game`'s `extra`.
+    fn find(&self, game: &Game, extra: Extra) -> Lookup;
     /// Its name, for logs and the audio state ("folder").
     fn name(&self) -> &'static str;
 }
@@ -90,20 +92,39 @@ pub fn folder_candidates(game: &Game, extra: Extra) -> Vec<PathBuf> {
 pub struct GameFolder;
 
 impl ExtraSource for GameFolder {
-    fn find(&self, game: &Game, extra: Extra) -> Option<PathBuf> {
+    fn find(&self, game: &Game, extra: Extra) -> Lookup {
         let candidates = folder_candidates(game, extra);
         if candidates.is_empty() {
             tracing::debug!(game = %game.id, extra = extra.name(), "no game folder: no extras");
         }
-        candidates.into_iter().find(|path| {
-            let found = path.is_file();
-            tracing::debug!(path = %path.display(), found, "extra lookup");
-            found
-        })
+        candidates
+            .into_iter()
+            .find(|path| {
+                let found = path.is_file();
+                tracing::debug!(path = %path.display(), found, "extra lookup");
+                found
+            })
+            .map_or(Lookup::Pass, Lookup::Found)
     }
 
     fn name(&self) -> &'static str {
         "folder"
+    }
+}
+
+/// What the user picked for the game ([`CustomStore`]).
+#[derive(Debug, Clone)]
+pub struct Picked(pub CustomStore);
+
+impl ExtraSource for Picked {
+    fn find(&self, game: &Game, extra: Extra) -> Lookup {
+        let found = self.0.find(&self.0.key_of(game), extra);
+        tracing::debug!(game = %game.id, extra = extra.name(), ?found, "picked lookup");
+        found
+    }
+
+    fn name(&self) -> &'static str {
+        "picked"
     }
 }
 
@@ -120,9 +141,9 @@ impl std::fmt::Debug for Extras {
 }
 
 impl Extras {
-    /// Hearth's chain. Round C: the stored choice goes first.
-    pub fn standard() -> Self {
-        Self::new(vec![Box::new(GameFolder)])
+    /// Hearth's chain: the user's picks, then the game folder.
+    pub fn standard(picks: CustomStore) -> Self {
+        Self::new(vec![Box::new(Picked(picks)), Box::new(GameFolder)])
     }
 
     /// A chain over `sources`, in order.
@@ -141,14 +162,21 @@ impl Extras {
         art
     }
 
-    /// `game`'s `extra` from the first source that has it.
+    /// `game`'s `extra` from the first source that has it (or none, when one blocks it).
     pub fn find(&self, game: &Game, extra: Extra) -> Option<Found> {
-        self.sources.iter().find_map(|source| {
-            source.find(game, extra).map(|path| Found {
-                path,
-                source: source.name(),
-            })
-        })
+        for source in &self.sources {
+            match source.find(game, extra) {
+                Lookup::Found(path) => {
+                    return Some(Found {
+                        path,
+                        source: source.name(),
+                    });
+                }
+                Lookup::Blocked => return None,
+                Lookup::Pass => {}
+            }
+        }
+        None
     }
 }
 
@@ -160,9 +188,12 @@ mod tests {
 
     struct Chosen;
     impl ExtraSource for Chosen {
-        fn find(&self, game: &Game, extra: Extra) -> Option<PathBuf> {
-            (game.id.as_str() == "picked" && extra == Extra::Theme)
-                .then(|| PathBuf::from("/data/picked/theme.ogg"))
+        fn find(&self, game: &Game, extra: Extra) -> Lookup {
+            match (game.id.as_str(), extra) {
+                ("picked", Extra::Theme) => Lookup::Found(PathBuf::from("/data/picked/theme.ogg")),
+                ("hidden", Extra::Theme) => Lookup::Blocked,
+                _ => Lookup::Pass,
+            }
         }
         fn name(&self) -> &'static str {
             "chosen"
@@ -197,7 +228,7 @@ mod tests {
             b"x",
         )
         .unwrap();
-        let extras = Extras::standard();
+        let extras = Extras::new(vec![Box::new(GameFolder)]);
         let oot = game("oot", rom.clone(), Some(folder.clone()));
         assert_eq!(extras.find(&oot, Extra::Theme), None);
         assert_eq!(extras.find(&oot, Extra::Art(ArtKind::Hero)), None);
@@ -233,7 +264,39 @@ mod tests {
         let extras = Extras::new(vec![Box::new(Chosen), Box::new(GameFolder)]);
         let picked = game("picked", folder.join("a.z64"), Some(folder.clone()));
         assert_eq!(extras.find(&picked, Extra::Theme).unwrap().source, "chosen");
-        let other = game("other", folder.join("b.z64"), Some(folder));
+        let other = game("other", folder.join("b.z64"), Some(folder.clone()));
         assert_eq!(extras.find(&other, Extra::Theme).unwrap().source, "folder");
+        let hidden = game("hidden", folder.join("c.z64"), Some(folder));
+        assert_eq!(extras.find(&hidden, Extra::Theme), None);
+    }
+
+    #[test]
+    fn picks_come_before_the_game_folder() {
+        let dir = tempdir();
+        let folder = dir.path().join("n64/Ocarina of Time");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("theme.ogg"), b"x").unwrap();
+        std::fs::write(folder.join("hero.png"), b"x").unwrap();
+        let song = dir.path().join("song.mp3");
+        std::fs::write(&song, b"x").unwrap();
+        let store = CustomStore::new(dir.path().join("data/games"));
+        let extras = Extras::standard(store.clone());
+        let oot = game("oot", folder.join("oot.z64"), Some(folder.clone()));
+        let key = crate::art::ArtKey::from_stored("n64/CZLE");
+        store.remember(&oot.id, &key);
+
+        store.pick_file(&key, Extra::Theme, &song).unwrap();
+        let theme = extras.find(&oot, Extra::Theme).unwrap();
+        assert_eq!(theme.source, "picked");
+        assert_eq!(theme.path, store.dir(&key).join("theme.mp3"));
+        assert_eq!(
+            extras.art(&oot).hero.as_deref(),
+            Some(folder.join("hero.png").as_path())
+        );
+
+        store.remove_theme(&key).unwrap();
+        assert_eq!(extras.find(&oot, Extra::Theme).unwrap().source, "folder");
+        store.remove_theme(&key).unwrap();
+        assert_eq!(extras.find(&oot, Extra::Theme), None);
     }
 }

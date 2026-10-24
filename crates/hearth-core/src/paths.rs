@@ -229,6 +229,11 @@ impl DataDirs {
     pub fn library_db(&self) -> PathBuf {
         self.data.join("library.sqlite3")
     }
+
+    /// Per-game data: what the user picked for each game (`crate::custom`), by art key.
+    pub fn game_data(&self) -> PathBuf {
+        self.data.join("games")
+    }
 }
 
 #[cfg(test)]

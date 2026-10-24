@@ -22,6 +22,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use super::cache::{ArtCache, GameArt};
 use super::identity::{ArtKey, Identity, identify, pick_match};
 use super::provider::{ArtKind, MetadataProvider, ProviderError};
+use crate::custom::CustomStore;
 use crate::extras::Extras;
 use crate::library::{ArtStatus, Library, LibraryError, RemovedGame};
 use crate::model::{Game, GameId};
@@ -62,6 +63,7 @@ impl ArtService {
     /// shown.
     pub fn spawn(
         cache: ArtCache,
+        picks: CustomStore,
         library_db: PathBuf,
         provider: Option<Box<dyn MetadataProvider>>,
         events: impl Fn(ArtEvent) + Send + 'static,
@@ -77,15 +79,7 @@ impl ArtService {
                         return;
                     }
                 };
-                let mut worker = Worker {
-                    cache,
-                    library,
-                    provider,
-                    events: Box::new(events),
-                    games: HashMap::new(),
-                    warned_no_key: false,
-                    extras: Extras::standard(),
-                };
+                let mut worker = Worker::new(cache, picks, library, provider, Box::new(events));
                 loop {
                     match rx.recv_timeout(QUEUE_CHECK) {
                         Ok(Command::Library(games)) => worker.load(games),
@@ -118,6 +112,8 @@ struct Worker {
     events: Box<dyn Fn(ArtEvent) + Send>,
     games: HashMap<ArtKey, Known>,
     warned_no_key: bool,
+    /// What the user picked for each game.
+    picks: CustomStore,
     /// Where a game's own art comes from (ahead of the cache).
     extras: Extras,
 }
@@ -135,10 +131,30 @@ enum Job {
 }
 
 impl Worker {
+    fn new(
+        cache: ArtCache,
+        picks: CustomStore,
+        library: Library,
+        provider: Option<Box<dyn MetadataProvider>>,
+        events: Box<dyn Fn(ArtEvent) + Send>,
+    ) -> Self {
+        Self {
+            cache,
+            library,
+            provider,
+            events,
+            games: HashMap::new(),
+            warned_no_key: false,
+            extras: Extras::standard(picks.clone()),
+            picks,
+        }
+    }
+
     fn load(&mut self, games: Vec<Game>) {
         self.games.clear();
         for game in games {
             let identity = identify(&game.system, &game.path);
+            self.picks.remember(&game.id, &identity.key);
             if let Err(err) = self.library.set_art_key(&game.id, &identity.key) {
                 tracing::warn!("can't record the art key of {}: {err}", game.title);
             }
@@ -453,6 +469,7 @@ mod tests {
         root: PathBuf,
         db: PathBuf,
         cache: ArtCache,
+        picks: CustomStore,
         games: Vec<Game>,
     }
 
@@ -489,6 +506,7 @@ mod tests {
         Library::open(&db).unwrap().sync(&games).unwrap();
         Setup {
             cache: ArtCache::new(dir.path().join("cache/art")),
+            picks: CustomStore::new(dir.path().join("data/games")),
             root,
             db,
             games,
@@ -517,15 +535,13 @@ mod tests {
     fn load(s: &Setup, provider: Option<Arc<MockMetadataProvider>>) -> (Worker, Vec<ArtEvent>) {
         let events = Arc::new(Mutex::new(Vec::new()));
         let sink = events.clone();
-        let mut worker = Worker {
-            cache: s.cache.clone(),
-            library: Library::open(&s.db).unwrap(),
-            provider: provider.map(|p| Box::new(p) as Box<dyn MetadataProvider>),
-            events: Box::new(move |e| sink.lock().unwrap().push(e)),
-            games: HashMap::new(),
-            warned_no_key: false,
-            extras: Extras::standard(),
-        };
+        let mut worker = Worker::new(
+            s.cache.clone(),
+            s.picks.clone(),
+            Library::open(&s.db).unwrap(),
+            provider.map(|p| Box::new(p) as Box<dyn MetadataProvider>),
+            Box::new(move |e| sink.lock().unwrap().push(e)),
+        );
         worker.load(s.games.clone());
         let events = events.lock().unwrap().clone();
         (worker, events)
@@ -745,15 +761,13 @@ mod tests {
         let s = setup();
         let events = Arc::new(Mutex::new(Vec::new()));
         let sink = events.clone();
-        let mut worker = Worker {
-            cache: s.cache.clone(),
-            library: Library::open(&s.db).unwrap(),
-            provider: Some(Box::new(NoLogos(catalog()))),
-            events: Box::new(move |e| sink.lock().unwrap().push(e)),
-            games: HashMap::new(),
-            warned_no_key: false,
-            extras: Extras::standard(),
-        };
+        let mut worker = Worker::new(
+            s.cache.clone(),
+            s.picks.clone(),
+            Library::open(&s.db).unwrap(),
+            Some(Box::new(NoLogos(catalog()))),
+            Box::new(move |e| sink.lock().unwrap().push(e)),
+        );
         worker.load(s.games.clone());
         let events = events.lock().unwrap().clone();
         let (tp, _) = last_art(&events, "tp");

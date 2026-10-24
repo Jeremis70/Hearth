@@ -26,6 +26,7 @@ use hearth_core::art::{
 use hearth_core::config::{self, PackCategory};
 use hearth_core::controls::edit::{Editor, Scope};
 use hearth_core::controls::{ControllerKind, GameKey, HearthAction, PadInput, Target, defaults};
+use hearth_core::custom::CustomStore;
 use hearth_core::library::{Library, LibraryEntry};
 use hearth_core::model::{Game, GameId, SystemId};
 use hearth_core::packs;
@@ -274,6 +275,8 @@ pub struct Setup {
     /// Root scanned for ROMs (read-only).
     pub games_dir: PathBuf,
     /// Cached art.
+    /// What the user picked for each game.
+    pub picks: CustomStore,
     pub art_cache: ArtCache,
     /// Screen class remembered from the last run, and its file.
     pub display_class: DisplayClass,
@@ -386,6 +389,7 @@ pub fn install(setup: Setup) {
     let art_loader = art_ui::ArtLoader::start(&setup.art_cache, setup.display_class);
     let art_service = art_ui::start(
         setup.art_cache.clone(),
+        setup.picks.clone(),
         setup.library_db.clone(),
         setup.art_provider,
         art_loader.clone(),
@@ -461,7 +465,7 @@ pub fn install(setup: Setup) {
         music: MusicDirector::default(),
         audio_settings: setup.audio_settings,
         ambient: sounds::music_file("ambient_loop"),
-        extras: Extras::standard(),
+        extras: Extras::standard(setup.picks.clone()),
         focused_theme: None,
         theme_timer: slint::Timer::default(),
     };

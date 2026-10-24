@@ -7,6 +7,7 @@
 pub mod art;
 pub mod config;
 pub mod controls;
+pub mod custom;
 pub mod extras;
 pub mod library;
 pub mod model;

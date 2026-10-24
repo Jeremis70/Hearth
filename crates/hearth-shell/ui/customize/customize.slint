@@ -451,8 +451,10 @@ export component CustomizeScreen inherits Rectangle {
         HorizontalLayout {
             x: Theme.safe-x;
             y: Theme.safe-y + Theme.sp-16;
+            width: parent.width - 2 * Theme.safe-x;
             height: 96px * Theme.scale;
             spacing: Theme.sp-24;
+            alignment: start;
             opacity: files-open ? 0 : 1;
             animate opacity { duration: Theme.fast; easing: ease-out; }
             if CustomizeData.logo.width > 0: Image {
@@ -463,6 +465,7 @@ export component CustomizeScreen inherits Rectangle {
             }
             if CustomizeData.logo.width == 0: Text {
                 text: CustomizeData.title;
+                horizontal-stretch: 0;
                 vertical-alignment: center;
                 font-size: Theme.display;
                 font-weight: Theme.semibold;

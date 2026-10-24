@@ -1,6 +1,6 @@
 # Hearth status
 
-Last updated: 2026-10-23 (round C.1, per-game customization). Read this first, then `AGENTS.md` (rules, commands),
+Last updated: 2026-10-24 (round C.2, animated art + polish). Read this first, then `AGENTS.md` (rules, commands),
 `.github/instructions/rust.instructions.md` and `docs/plan.md` (architecture).
 
 ## 0. Where we are, and how we work
@@ -22,6 +22,58 @@ Last updated: 2026-10-23 (round C.1, per-game customization). Read this first, t
   SteamGridDB candidates or a file, hero position, Wrong game?, theme music with Start at),
   picks in `<data>/games/<art key>/`, themes that loop by themselves. Design: README §4
   "Customize", §6 "Picks", §7 "Game themes loop by themselves".
+
+- Round C.2, animated art + polish (2026-10-24): animated SteamGridDB heroes and logos on
+  Home and the Customize page, Animated artwork and Reduce motion, Kenney controller icons,
+  the controller-disconnected card. Design: README §6 "Animated art", §4 "Customize",
+  "In-game overlay".
+
+Round C.2 (animated art + polish), 2026-10-24, oldest first:
+- `b9336cb`: `.dev-data/games` links the moved ROMs and their `theme.mp3` (see below).
+- `990a911`, `2807f4e`, `cd08468`: `hearth-core::art::animation` (content probe, frames,
+  `.anim` v2 files of QOI frames, stills, `FrameStream`, disk trim by last played); WebP
+  frames disposed to background are cleared (image-webp only does it with a background
+  color set: OoT's logo glow built up and dropped at each loop); display copies named after
+  their source; an animated source is decoded once.
+- `9e6549a`, `2746dc0`: animated requests (`types=animated`, `image/png,image/webp`: the API
+  refuses GIF there), `hero-animated.<ext>` / `logo-animated.<ext>`, automatic up to 30 MiB;
+  Customize lists them (previews up to 10 MB).
+- `af73832`: `[display] animated_art, reduce_motion`; Reduce motion sets `Theme.motion-scale`.
+- `490c869`, `b2e98ac`, `9039776`: `bridge/anim.rs` (tracks, sheets, windows, streams) and
+  `bridge/session/anim.rs` (slots: Home hero/logo, Customize strip/background); while
+  animation may play, the still shown is the animated asset's own.
+- `6a19537`: the row reorders only once a launched game is on screen; focus changes while a
+  game is in front are ignored (a launched game's theme no longer lost to the game that
+  took its cell).
+- `30c89a2`, `34ce455`, `c761a17`: `--no-pad-input`, `HEARTH_TEST_SGDB=real`, dev words
+  (`anim:`, `reduce_motion:`, `anim_state`, `pad:connect:`/`pad:disconnect`), animated
+  fixtures, `anim_probe`; Kenney controller icons (`assets/icons/controllers/`).
+- `15a994c`: the controller-disconnected card and the 2 s auto-resume.
+- Measured (release, nested gamescope 1920×1080, on AC, performance profile; % of one
+  core; GPU busy = 1 − RC6 residency, includes the desktop): idle Welcome 0.7 % / 19 %;
+  OoT animated logo (74 frames 260×260, sheet 20 MB) + hero (48 frames 1920×620, window
+  38 MB) 6.4 % / 28 %, RSS 298 MB; TP's 27 MB hero (469 frames, `.anim` 311 MB, window)
+  19.1 % / 29 %, RSS 337 MB (it was 50.8 % streamed from the WebP before the per-file cap
+  went). The cost is mostly Slint redrawing the whole window at each flip (draw 0.7–1.1 ms,
+  ~38/s); sheets removed the uploads but barely the CPU. Focus moves: input→screen 6–28 ms,
+  longest draw 14.5 ms (a sheet's one-time upload when an animation starts), none over
+  16.7 ms. `.anim` sizes: OoT logo 8.8 MB, OoT hero 10.9 MB, TP automatic hero 39 MB.
+  TP has 3 animated heroes (0.6, 1.1, 27.2 MB) and no animated logo; OoT one of each.
+- Verified live (release and debug, `HEARTH_TEST_SGDB=real`, `--no-pad-input`, dev socket,
+  screenshots): OoT's logo and hero animate on Home, stop on a focus move, show their
+  stills with Reduce motion or Animated artwork off, never play in game or in the overlay,
+  play again over a frozen game; a cached replay starts in 5–80 ms. Customize: badges, the
+  focused candidate plays in its tile, the background and position mode play the hero in
+  use; the 27 MB hero picked (no preview, size shown) survived a restart; a GIF and an
+  animated WebP named `.png` from Downloads play as logos. Kenney icons in the top bar,
+  the widget and Controllers rows (fake DualSense and Xbox). Fake controller pulled in
+  game: back after 1.2 s resumed by itself, after 4 s stayed frozen.
+- Not verified: the card itself in the overlay window (gamescope screenshots capture the
+  base layer only; seen in Hearth's own window); a real unplug; listening (all runs
+  `--no-audio`; the theme after Guide long press checked by `audio_state`); 720p for the
+  27 MB hero (the run was interrupted by a stray controller press, before `--no-pad-input`).
+- Follow-ups: another controller taking over a lost one (multiplayer round); cheaper flips
+  would need fewer redraws (Slint's GPU renderer has no partial redraw).
 
 Round C.1 (per-game customization), 2026-10-23, oldest first:
 - `3575472`: `hearth-core::custom` (`CustomStore`, `custom.toml`, copies of chosen files);
@@ -540,7 +592,8 @@ worker's side), `hearth-core::files`, `hearth-audio::analyze`, `ui/customize/`,
 - **Desktop, no overlay:** `HEARTH_HOME=./.dev-data cargo run -p hearth-shell -- --windowed`.
 - **Real thing:** `scripts/run-gamescope.sh` (options: `HEARTH_GS_SIZE`,
   `HEARTH_GS_FULLSCREEN=1`, `HEARTH_GS_ARGS`, `HEARTH_GS_RELEASE=1`).
-- **Dev socket actions:** up, down, left, right, accept, back, prev_tab, next_tab, options,
+- **Dev socket actions** (add `--no-pad-input` so a real controller never drives a test
+  instance): up, down, left, right, accept, back, prev_tab, next_tab, options,
   home_short, home_long, capture. Commands: `sound:<name>`, `audio_state`, and the Customize
   page's words (see `scripts/send-action.sh`; `custom_state` gives JSON). Replies are printed.
 - **Throwaway test home:** `scripts/test-home.sh [--reset] [gamescope|windowed] [args]`

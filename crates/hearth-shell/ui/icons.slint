@@ -40,4 +40,18 @@ export global Icons {
     out property <image> wifi-high: @image-url("../../../assets/icons/wifi-high.svg");
     out property <image> wifi-low: @image-url("../../../assets/icons/wifi-low.svg");
     out property <image> wifi-zero: @image-url("../../../assets/icons/wifi-zero.svg");
+
+    // Controller icons: Kenney Input Prompts (CC0, assets/icons/controllers/), not Lucide.
+    // Filled shapes; tint with `colorize` like the rest.
+    out property <image> controller-generic: @image-url("../../../assets/icons/controllers/generic.svg");
+    out property <image> controller-disconnected: @image-url("../../../assets/icons/controllers/disconnected.svg");
+    // The icon for a pad's `device` (see `bridge::pads::device`): 1 DualSense, 2 DualShock 4,
+    // 3 Xbox, 4 Switch Pro, else the generic controller.
+    public pure function controller(device: int) -> image {
+        if device == 1 { return @image-url("../../../assets/icons/controllers/playstation5.svg"); }
+        if device == 2 { return @image-url("../../../assets/icons/controllers/playstation4.svg"); }
+        if device == 3 { return @image-url("../../../assets/icons/controllers/xbox.svg"); }
+        if device == 4 { return @image-url("../../../assets/icons/controllers/switch_pro.svg"); }
+        controller-generic
+    }
 }

@@ -62,7 +62,7 @@ component PadListRow inherits Rectangle {
         padding-right: Theme.sp-24;
         spacing: Theme.sp-24;
         Image {
-            source: Icons.gamepad;
+            source: Icons.controller(pad.device);
             width: Theme.icon-size;
             height: Theme.icon-size;
             y: (parent.height - self.height) / 2;
@@ -180,7 +180,7 @@ export component PadPage inherits Rectangle {
             border-radius: Theme.radius-md;
             background: Theme.surface;
             Image {
-                source: Icons.gamepad;
+                source: Icons.controller(pad.device);
                 width: 56px * Theme.scale;
                 height: self.width;
                 colorize: Theme.text-primary;

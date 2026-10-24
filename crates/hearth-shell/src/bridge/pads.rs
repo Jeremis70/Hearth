@@ -38,6 +38,18 @@ fn battery(pad: &PadInfo) -> (Option<u8>, bool) {
     }
 }
 
+/// The controller icon for a pad (`Icons.controller` in Slint): 0 generic, 1 DualSense,
+/// 2 DualShock 4, 3 Xbox, 4 Switch Pro.
+pub fn device(pad: Option<&PadInfo>) -> i32 {
+    match pad.map(|p| ControllerKind::from_ids(p.vendor_id, p.product_id)) {
+        Some(ControllerKind::DualSense) => 1,
+        Some(ControllerKind::DualShock4) => 2,
+        Some(ControllerKind::Xbox) => 3,
+        Some(ControllerKind::SwitchPro) => 4,
+        Some(ControllerKind::Generic) | None => 0,
+    }
+}
+
 /// The row of one controller.
 pub fn row(pad: &PadInfo) -> PadRow {
     let (percent, charging) = battery(pad);
@@ -47,6 +59,7 @@ pub fn row(pad: &PadInfo) -> PadRow {
         connection: connection(pad).into(),
         battery: percent.map_or(-1, i32::from),
         charging,
+        device: device(Some(pad)),
     }
 }
 

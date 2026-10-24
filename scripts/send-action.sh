@@ -15,6 +15,9 @@
 #     reset:<kind>      back to automatic (grid, hero, logo, icon)
 #     theme_start:<s>   theme_remove
 #     custom_state      the page and the game's picks as JSON
+#   Controllers (fake ones, for --no-pad-input runs):
+#     pad:connect:<dualsense|ds4|xbox|switch|generic>   one more (id dev:<kind>)
+#     pad:disconnect[:<kind>]                            the last one, or that one
 #   Animated art:
 #     anim:on|off           Animated artwork (saved, like the Settings toggle)
 #     reduce_motion:on|off  Reduce motion (saved)

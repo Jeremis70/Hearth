@@ -2,6 +2,7 @@ import { Theme } from "../theme.slint";
 import { Icons } from "../icons.slint";
 import { Status } from "../data.slint";
 import { FocusRing } from "focus.slint";
+import { ControllerType } from "glyphs.slint";
 
 component TabLabel inherits Rectangle {
     in property <string> label;
@@ -89,7 +90,7 @@ export component TopBar inherits Rectangle {
             padding-left: Theme.sp-16;
             spacing: Theme.sp-8;
             Image {
-                source: Icons.gamepad;
+                source: Icons.controller(ControllerType.device);
                 width: Theme.icon-size;
                 height: Theme.icon-size;
                 y: (parent.height - self.height) / 2;

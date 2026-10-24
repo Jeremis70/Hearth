@@ -1908,11 +1908,14 @@ impl Controller {
     /// globals).
     fn sync_controller_type(&self) {
         let family = glyph_family(self.connected_kind());
+        let device = super::pads::device(self.activity.pads().first());
         if let Some(app) = self.app.upgrade() {
             app.global::<ControllerType>().set_family(family);
+            app.global::<ControllerType>().set_device(device);
         }
         if let Some(overlay) = &self.overlay {
             overlay.global::<ControllerType>().set_family(family);
+            overlay.global::<ControllerType>().set_device(device);
         }
     }
 
@@ -2294,6 +2297,53 @@ impl Controller {
         }
         self.fill_audio_rows();
         self.sync_music(director::FADE_LAUNCH);
+    }
+
+    /// The dev socket's fake controllers (with `--no-pad-input` nothing else changes the pad
+    /// list): `connect:<dualsense|ds4|xbox|switch|generic>` adds one (id `dev:<kind>`),
+    /// `disconnect[:<kind>]` removes it (the last one by default).
+    pub(super) fn dev_pad(&mut self, arg: &str) -> Result<(), String> {
+        use hearth_platform::input::{Connection, PadInfo, Power};
+        let (verb, kind) = arg.split_once(':').unwrap_or((arg, ""));
+        let mut pads = self.activity.pads();
+        match verb {
+            "connect" => {
+                let kind = if kind.is_empty() { "dualsense" } else { kind };
+                let (vendor, product, name) = match kind {
+                    "dualsense" => (0x054c, 0x0ce6, "DualSense Wireless Controller"),
+                    "ds4" => (0x054c, 0x09cc, "Wireless Controller"),
+                    "xbox" => (0x045e, 0x0b13, "Xbox Wireless Controller"),
+                    "switch" => (0x057e, 0x2009, "Pro Controller"),
+                    "generic" => (0x1234, 0x5678, "USB Gamepad"),
+                    _ => return Err(format!("error: unknown controller kind {kind}")),
+                };
+                let id = format!("dev:{kind}");
+                pads.retain(|p| p.id != id);
+                pads.push(PadInfo {
+                    id,
+                    name: name.into(),
+                    os_name: name.into(),
+                    vendor_id: Some(vendor),
+                    product_id: Some(product),
+                    connection: Connection::Bluetooth,
+                    power: Power::Discharging(80),
+                });
+            }
+            "disconnect" => {
+                let gone = if kind.is_empty() {
+                    pads.pop()
+                } else {
+                    let id = format!("dev:{kind}");
+                    pads.iter().position(|p| p.id == id).map(|i| pads.remove(i))
+                };
+                if gone.is_none() {
+                    return Err("error: no such controller".into());
+                }
+            }
+            _ => return Err("error: pad:connect:<kind> or pad:disconnect[:<kind>]".into()),
+        }
+        self.activity.set_pads(pads);
+        Ok(())
     }
 
     /// Sets Animated artwork (`animated_art`) or Reduce motion (`reduce_motion`) to `on`.

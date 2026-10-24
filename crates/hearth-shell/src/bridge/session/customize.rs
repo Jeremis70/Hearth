@@ -1142,7 +1142,7 @@ fn measure_durations(paths: Vec<PathBuf>) {
 
 /// Dev socket words for the Customize page (`scripts/send-action.sh`); their reply is "ok", an
 /// error, or (`custom_state`) JSON.
-const DEV_WORDS: [&str; 13] = [
+const DEV_WORDS: [&str; 14] = [
     "customize:",
     "pick:",
     "pick_file:",
@@ -1156,6 +1156,7 @@ const DEV_WORDS: [&str; 13] = [
     "anim_state",
     "anim:",
     "reduce_motion:",
+    "pad:",
 ];
 
 /// Wraps the dev socket's command handler with the Customize page's words, run on the UI
@@ -1205,6 +1206,7 @@ impl Controller {
             }
             "custom_state" => return self.custom_state(),
             "anim_state" => return self.anim_state().to_string(),
+            "pad" => self.dev_pad(arg),
             // anim:on|off and reduce_motion:on|off, like the Display & sound toggles.
             "anim" | "reduce_motion" => {
                 let key = if name == "anim" { "animated_art" } else { name };

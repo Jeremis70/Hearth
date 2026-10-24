@@ -63,6 +63,7 @@ export struct PadRow {
     connection: string, // "USB", "Bluetooth" or ""
     battery: int,       // percent, -1 when not reported (or wired)
     charging: bool,
+    device: int,        // its icon: Icons.controller(device)
 }
 
 export struct WifiRow {

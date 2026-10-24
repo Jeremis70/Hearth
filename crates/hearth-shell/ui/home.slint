@@ -3,6 +3,7 @@ import { Icons } from "icons.slint";
 import { UiAction, NavResult, Nav } from "input.slint";
 import { HomeData, HomeTile, TileKind, Session, Status, AnimFrame } from "data.slint";
 import { Tile } from "components/tile.slint";
+import { ControllerType } from "components/glyphs.slint";
 import { TopBar } from "components/top_bar.slint";
 import { HButton } from "components/button.slint";
 import { Widget } from "components/widget.slint";
@@ -692,7 +693,7 @@ export component Home inherits Rectangle {
             }
             Widget {
                 width: widget-row.widget-width;
-                icon: Icons.gamepad;
+                icon: Icons.controller(ControllerType.device);
                 label: "Controllers";
                 value: Status.pads-value;
                 detail: Status.pads-detail;

@@ -7,6 +7,8 @@ import { Theme } from "../theme.slint";
 // The connected controller's family, set by the app (per window).
 export global ControllerType {
     in-out property <int> family: 0;
+    // The first pad's icon (`Icons.controller`), for the top bar and the Home widget.
+    in-out property <int> device: 0;
 }
 
 export global Glyphs {

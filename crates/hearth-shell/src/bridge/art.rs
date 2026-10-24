@@ -7,7 +7,7 @@
 //! `SharedPixelBuffer`s (which are `Send`) and become `slint::Image`s there.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 
@@ -279,7 +279,13 @@ fn load(
             source.path.clone()
         }
     };
-    let image = match image::ImageReader::open(&path).and_then(|r| r.with_guessed_format()) {
+    let (max_w, max_h) = class.bounds(kind);
+    decode_fit(&path, max_w, max_h)
+}
+
+/// Decodes an image file, shrunk to fit `max_w` × `max_h` (never enlarged). Off the UI thread.
+pub fn decode_fit(path: &Path, max_w: u32, max_h: u32) -> Option<SharedPixelBuffer<Rgba8Pixel>> {
+    let image = match image::ImageReader::open(path).and_then(|r| r.with_guessed_format()) {
         Ok(reader) => reader.decode(),
         Err(err) => Err(image::ImageError::IoError(err)),
     };
@@ -290,7 +296,6 @@ fn load(
             return None;
         }
     };
-    let (max_w, max_h) = class.bounds(kind);
     let image = if image.width() > max_w || image.height() > max_h {
         image.resize(max_w, max_h, image::imageops::FilterType::Triangle)
     } else {
@@ -327,10 +332,10 @@ pub fn start(
             } => {
                 super::startup::note("first art event");
                 loader.submit(&game, &key, &art);
-                defer(move |c| c.set_art_meta(&game, match_name, hero_position));
+                defer(move |c| c.set_art_meta(&game, match_name, hero_position, art));
             }
-            // The Customize page's answers (not built yet).
-            other => tracing::debug!(?other, "art event"),
+            // The Customize page's answers.
+            other => defer(move |c| c.on_customize_event(other)),
         },
     );
     match spawned {

@@ -45,6 +45,8 @@ use slint::{ComponentHandle, Model, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecM
 use std::rc::Rc;
 
 use super::art::{self as art_ui, ArtLoader, ArtMap, ConsoleIcons};
+
+mod customize;
 use super::controls_page::{
     self, ApplyOutcome, EmulatorConfigApplier, InputPlumberApplier, MappingApplier, Page, TestPage,
 };
@@ -235,6 +237,22 @@ pub struct Controller {
     focused_theme: Option<SoundFile>,
     /// Waits for focus to settle before the theme changes.
     theme_timer: slint::Timer,
+    /// What the user picked for each game (read here, written by the art worker).
+    picks: CustomStore,
+    /// Cached art (sources and candidates for the Customize page).
+    art_cache: ArtCache,
+    /// Where theme analyses are cached.
+    audio_cache: PathBuf,
+    /// The art worker, for the Customize page's requests.
+    art_service: Option<ArtService>,
+    /// Each game's art files (the art worker's last report).
+    art_paths: std::collections::HashMap<GameId, hearth_core::art::GameArt>,
+    /// The Customize page, while open.
+    customize: Option<customize::CustomizeState>,
+    /// A theme previewed on the Customize page (wins over Home's music).
+    preview: Option<SoundFile>,
+    /// Waits for focus to settle on an audio file before previewing it.
+    preview_timer: slint::Timer,
 }
 
 /// Which window a controls page is in.
@@ -274,10 +292,12 @@ pub struct Setup {
     pub library_db: PathBuf,
     /// Root scanned for ROMs (read-only).
     pub games_dir: PathBuf,
-    /// Cached art.
     /// What the user picked for each game.
     pub picks: CustomStore,
+    /// Cached art.
     pub art_cache: ArtCache,
+    /// Cached theme analyses (`<cache>/audio`).
+    pub audio_cache: PathBuf,
     /// Screen class remembered from the last run, and its file.
     pub display_class: DisplayClass,
     pub display_class_file: PathBuf,
@@ -344,6 +364,11 @@ pub fn install(setup: Setup) {
         home.on_request_properties(|id| {
             with(|c| c.fill_properties(&GameId::new(id.as_str())));
         });
+        home.on_customize(|id, section| {
+            let (id, section) = (GameId::new(id.as_str()), section.to_string());
+            defer(move |c| c.open_customize(&id, &section));
+        });
+        customize::wire(&app);
         let settings = app.global::<SettingsData>();
         settings.on_controller_item(|key| {
             let key = key.to_string();
@@ -398,8 +423,8 @@ pub fn install(setup: Setup) {
         db: setup.library_db.clone(),
         games_dir: setup.games_dir.clone(),
         systems: setup.systems.clone(),
-        art_cache: setup.art_cache,
-        art: art_service,
+        art_cache: setup.art_cache.clone(),
+        art: art_service.clone(),
     });
 
     let applier: Box<dyn MappingApplier> = if setup.input.is_live() {
@@ -468,6 +493,14 @@ pub fn install(setup: Setup) {
         extras: Extras::standard(setup.picks.clone()),
         focused_theme: None,
         theme_timer: slint::Timer::default(),
+        picks: setup.picks,
+        art_cache: setup.art_cache,
+        audio_cache: setup.audio_cache,
+        art_service,
+        art_paths: std::collections::HashMap::new(),
+        customize: None,
+        preview: None,
+        preview_timer: slint::Timer::default(),
     };
     CONTROLLER.with(|cell| *cell.borrow_mut() = Some(controller));
     with(Controller::fill_display_items);
@@ -672,14 +705,26 @@ impl Controller {
 
     // --- music -------------------------------------------------------------------------
 
+    /// The game's theme, looped automatically from where it starts (plus its "Start at").
     fn theme_of(&self, game: &Game) -> Option<SoundFile> {
-        self.extras.find(game, Extra::Theme).map(|theme| SoundFile {
-            path: theme.path,
-            origin: theme.source.to_owned(),
+        let theme = self.extras.find(game, Extra::Theme)?;
+        let start = self.picks.load(&self.picks.key_of(game)).theme_start();
+        Some(self.auto_looped(theme.path, theme.source, start))
+    }
+
+    /// A music file that loops by itself (`hearth_audio::analyze`), its first play starting
+    /// `start` seconds after its first sound.
+    fn auto_looped(&self, path: PathBuf, origin: &str, start: f32) -> SoundFile {
+        SoundFile {
+            path,
+            origin: origin.to_owned(),
             loop_spec: None,
-            auto_loop: None,
+            auto_loop: Some(hearth_audio::AutoLoop {
+                offset_ms: (start.max(0.0) * 1000.0).round() as u64,
+                cache_dir: Some(self.audio_cache.clone()),
+            }),
             gain_db: 0,
-        })
+        }
     }
 
     /// Home's focused game changed (`None`: no game, or Home isn't showing). The theme follows
@@ -721,7 +766,7 @@ impl Controller {
             overlay: self.mode == Mode::Overlay,
             ambient: self.ambient.as_ref(),
             focused_theme: self.focused_theme.as_ref(),
-            preview: None,
+            preview: self.preview.as_ref(),
             music_in_overlay: self.audio_settings.music_in_overlay,
             game_themes: self.audio_settings.game_themes,
         };
@@ -1608,19 +1653,32 @@ impl Controller {
         self.art.entry(game.clone()).or_default().set(kind, pixels);
         self.art_delivered.insert((game.clone(), kind));
         self.refresh_tiles();
+        self.customize_art_changed(game);
         self.probe_startup();
     }
 
-    /// The SteamGridDB game a game matched (for Properties) and where its hero is cropped,
-    /// from the art worker.
-    pub fn set_art_meta(&mut self, game: &GameId, match_name: Option<String>, hero_position: f32) {
+    /// The SteamGridDB game a game matched (for Properties), where its hero is cropped and
+    /// its art files, from the art worker.
+    pub fn set_art_meta(
+        &mut self,
+        game: &GameId,
+        match_name: Option<String>,
+        hero_position: f32,
+        paths: hearth_core::art::GameArt,
+    ) {
         let art = self.art.entry(game.clone()).or_default();
         art.match_name = match_name;
-        let moved = art.hero_position != Some(hero_position);
-        art.hero_position = Some(hero_position);
+        // While the hero is being positioned, the page's position wins.
+        let positioning = self.customize.as_ref().is_some_and(|c| c.positioning(game));
+        let moved = !positioning && art.hero_position != Some(hero_position);
+        if !positioning {
+            art.hero_position = Some(hero_position);
+        }
+        self.art_paths.insert(game.clone(), paths);
         if moved {
             self.refresh_tiles();
         }
+        self.customize_art_changed(game);
         self.probe_startup();
     }
 

@@ -1,5 +1,8 @@
 import { Theme } from "../theme.slint";
+import { Icons } from "../icons.slint";
 import { GameProperties } from "../data.slint";
+import { ListRow } from "list_row.slint";
+import { FocusRing } from "focus.slint";
 
 component Field inherits HorizontalLayout {
     in property <string> label;
@@ -22,10 +25,29 @@ component Field inherits HorizontalLayout {
     }
 }
 
-// Read-only facts about a game, with the artwork actions still to come shown disabled.
-// Back closes it (handled by the owner).
+component Action inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <bool> focused;
+    height: Theme.row-height;
+    border-radius: Theme.radius-md;
+    background: focused ? Theme.surface : transparent;
+    ListRow {
+        height: parent.height;
+        icon: icon;
+        label: label;
+        trailing-icon: Icons.chevron-right;
+        has-trailing-icon: true;
+        show-divider: false;
+    }
+    FocusRing { shown: focused; }
+}
+
+// Facts about a game, then its customization (Artwork, Theme music, Wrong game?: `index`).
+// The owner handles navigation; Back closes it.
 export component PropertiesPanel inherits Rectangle {
     in property <GameProperties> data;
+    in property <int> index;
 
     background: Theme.scrim;
 
@@ -54,8 +76,9 @@ export component PropertiesPanel inherits Rectangle {
                 height: 1px;
                 background: Theme.divider;
             }
-            Field { label: "Change artwork"; value: "Coming later"; disabled: true; }
-            Field { label: "Wrong game?"; value: "Coming later"; disabled: true; }
+            Action { icon: Icons.image; label: "Artwork"; focused: index == 0; }
+            Action { icon: Icons.music; label: "Theme music"; focused: index == 1; }
+            Action { icon: Icons.help; label: "Wrong game?"; focused: index == 2; }
         }
     }
 }

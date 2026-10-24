@@ -1,0 +1,100 @@
+import { Theme } from "../theme.slint";
+import { Icons } from "../icons.slint";
+import { FileEntry } from "../data.slint";
+import { FocusRing } from "focus.slint";
+
+// A list of files to choose from (newest first): a thumbnail for images, a note icon for
+// audio, the name and where it is. The owner handles navigation; the list scrolls to keep the
+// focused row in view. Made for "Use a file…" now and the Downloads inbox later.
+export component FileList inherits Rectangle {
+    in property <string> heading;
+    in property <string> empty-note;
+    in property <[FileEntry]> files;
+    in property <int> focus-index: -1;
+
+    property <length> row-h: 112px * Theme.scale;
+    property <length> step: row-h + Theme.row-gap;
+    property <length> list-top: title.height + Theme.sp-24;
+    property <length> visible-h: self.height - list-top;
+    property <length> total-h: files.length * step;
+    property <length> scroll: max(0, min(focus-index * step - (visible-h - row-h) / 2, total-h - visible-h));
+
+    title := Text {
+        x: 0;
+        y: 0;
+        text: heading;
+        font-size: Theme.heading;
+        font-weight: Theme.semibold;
+        color: Theme.text-primary;
+    }
+
+    if files.length == 0: Text {
+        x: Theme.sp-24;
+        y: list-top + Theme.sp-24;
+        width: parent.width - 2 * Theme.sp-24;
+        text: empty-note;
+        wrap: word-wrap;
+        font-size: Theme.body-lg;
+        color: Theme.text-secondary;
+    }
+
+    Rectangle {
+        y: list-top;
+        height: visible-h;
+        clip: true;
+        Rectangle {
+            y: -scroll;
+            animate y { duration: Theme.fast; easing: ease-out; }
+            height: total-h;
+            for file[i] in files: Rectangle {
+                y: i * step;
+                height: row-h;
+                border-radius: Theme.radius-md;
+                background: i == focus-index ? Theme.surface-raised : transparent;
+                Rectangle {
+                    x: Theme.sp-8;
+                    y: Theme.sp-8;
+                    width: 96px * Theme.scale;
+                    height: 96px * Theme.scale;
+                    border-radius: Theme.radius-sm;
+                    background: Theme.surface;
+                    clip: true;
+                    if !file.audio && file.thumb.width > 0: Image {
+                        width: parent.width;
+                        height: parent.height;
+                        source: file.thumb;
+                        image-fit: contain;
+                    }
+                    if file.audio || file.thumb.width == 0: Image {
+                        width: Theme.icon-size;
+                        height: Theme.icon-size;
+                        source: file.audio ? Icons.music : Icons.image;
+                        colorize: Theme.text-secondary;
+                    }
+                }
+                VerticalLayout {
+                    x: Theme.sp-8 + 96px * Theme.scale + Theme.sp-24;
+                    width: parent.width - self.x - Theme.sp-24;
+                    alignment: center;
+                    spacing: Theme.sp-4;
+                    Text {
+                        text: file.name;
+                        font-size: Theme.body-lg;
+                        font-weight: Theme.medium;
+                        color: Theme.text-primary;
+                        overflow: elide;
+                    }
+                    Text {
+                        text: file.detail;
+                        font-size: Theme.body;
+                        color: Theme.text-secondary;
+                        overflow: elide;
+                    }
+                }
+                FocusRing {
+                    shown: i == focus-index;
+                }
+            }
+        }
+    }
+}

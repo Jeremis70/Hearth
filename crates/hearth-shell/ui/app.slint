@@ -5,7 +5,8 @@ import "../../../assets/fonts/Manrope-SemiBold.ttf";
 
 import { Theme } from "theme.slint";
 import { UiAction, InputMap, NavResult, Nav, Feedback } from "input.slint";
-import { HomeData, SettingsData, Status, PadNotice, Session, HomeTile, TileKind, SettingsCategory, WifiRow, PadRow, GameProperties, AudioRow } from "data.slint";
+import { HomeData, SettingsData, Status, PadNotice, Session, HomeTile, TileKind, SettingsCategory, WifiRow, PadRow, GameProperties, AudioRow, CustomizeData, CustomSection, Candidate, CustomRow, FileEntry } from "data.slint";
+import { CustomizeScreen } from "customize/customize.slint";
 import { Home } from "home.slint";
 import { SettingsScreen } from "settings/settings.slint";
 import { Placeholder } from "placeholder.slint";
@@ -17,9 +18,9 @@ import { ControllerType } from "components/glyphs.slint";
 import { ControlsScreen } from "controls/screen.slint";
 import { ControlsData, Callout, Choice, OptionRow } from "controls/data.slint";
 
-export { Theme, Feedback, UiAction, NavResult, ControllerType, OverlayWindow, OverlayPanel, HomeData, SettingsData, Status, PadNotice, Session, HomeTile, TileKind, SettingsCategory, WifiRow, PadRow, GameProperties, AudioRow, ControlsData, Callout, Choice, OptionRow }
+export { Theme, Feedback, UiAction, NavResult, ControllerType, OverlayWindow, OverlayPanel, HomeData, SettingsData, Status, PadNotice, Session, HomeTile, TileKind, SettingsCategory, WifiRow, PadRow, GameProperties, AudioRow, ControlsData, Callout, Choice, OptionRow, CustomizeData, CustomSection, Candidate, CustomRow, FileEntry }
 
-enum Screen { home, settings, placeholder, controls }
+enum Screen { home, settings, placeholder, controls, customize }
 
 export component AppWindow inherits Window {
     title: "Hearth";
@@ -68,6 +69,18 @@ export component AppWindow inherits Window {
         screen = Screen.controls;
     }
 
+    // A game's Customize page (CustomizeData filled by Rust), on a section (its index). Back
+    // returns to Home as it was (the menu closed, Properties still open).
+    public function open-customize(section-index: int) {
+        customize.open(section-index);
+        screen = Screen.customize;
+    }
+    // The candidates arrived: the strip focuses the one in use (`index`).
+    public function customize-current(index: int) {
+        customize.current-candidate = index;
+        customize.focus-current();
+    }
+
     // Button test (Settings → Controllers → a controller): input is handled by Rust (a long
     // Guide press closes it).
     public function open-button-test() {
@@ -111,6 +124,9 @@ export component AppWindow inherits Window {
         }
         if screen == Screen.controls {
             return controls.handle(action);
+        }
+        if screen == Screen.customize {
+            return customize.handle(action);
         }
         if screen == Screen.placeholder {
             if action == UiAction.back {
@@ -157,6 +173,13 @@ export component AppWindow inherits Window {
 
         controls := ControlsScreen {
             opacity: screen == Screen.controls ? 1 : 0;
+            visible: self.opacity > 0;
+            animate opacity { duration: Theme.base; easing: ease-out; }
+            close => { screen = Screen.home; }
+        }
+
+        customize := CustomizeScreen {
+            opacity: screen == Screen.customize ? 1 : 0;
             visible: self.opacity > 0;
             animate opacity { duration: Theme.base; easing: ease-out; }
             close => { screen = Screen.home; }

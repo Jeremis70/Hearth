@@ -154,9 +154,13 @@ export component Home inherits Rectangle {
         current.running ? { key: "close", label: "Close game", danger: true } : { key: "play", label: "Play" },
         { key: "controls", label: "Controls for this game" },
         { key: "favorite", label: "Favorite", checked: current.favorite },
+        { key: "art", label: "Artwork" },
+        { key: "theme", label: "Theme music" },
+        { key: "match", label: "Wrong game?" },
         { key: "properties", label: "Properties" },
     ];
     property <bool> properties-open: false;
+    property <int> properties-index: 0;     // its actions: Artwork, Theme music, Wrong game?
     property <bool> confirm-open: false;
     property <int> confirm-index: 0;
 
@@ -284,6 +288,9 @@ export component Home inherits Rectangle {
             } else if key == "properties" {
                 HomeData.request-properties(current.id);
                 properties-open = true;
+                properties-index = 0;
+            } else if key == "art" || key == "theme" || key == "match" {
+                HomeData.customize(current.id, key);
             }
             return NavResult.handled;
         }
@@ -317,11 +324,22 @@ export component Home inherits Rectangle {
         if confirm-open {
             return handle-confirm(action);
         }
+        // Properties stays open under the Customize page: Back from there returns here.
         if properties-open {
-            if action == UiAction.back || action == UiAction.accept || action == UiAction.options {
-                properties-open = false;
+            if action == UiAction.up || action == UiAction.down {
+                let old = properties-index;
+                properties-index = max(0, min(2, properties-index + (action == UiAction.up ? -1 : 1)));
+                return Nav.moved(properties-index != old);
             }
-            return NavResult.handled;
+            if action == UiAction.accept {
+                HomeData.customize(current.id, properties-index == 0 ? "art" : properties-index == 1 ? "theme" : "match");
+                return NavResult.handled;
+            }
+            if action == UiAction.back || action == UiAction.options {
+                properties-open = false;
+                return NavResult.handled;
+            }
+            return action == UiAction.left || action == UiAction.right ? NavResult.edge : NavResult.handled;
         }
         if menu-open {
             return handle-menu(action);
@@ -687,6 +705,7 @@ export component Home inherits Rectangle {
 
     if properties-open: PropertiesPanel {
         data: HomeData.properties;
+        index: properties-index;
     }
 
     if confirm-open: ConfirmDialog {

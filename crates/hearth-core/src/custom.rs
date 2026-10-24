@@ -345,7 +345,8 @@ impl CustomStore {
 
     /// Sets the hero's crop position (0 to 1).
     pub fn set_hero_position(&self, key: &ArtKey, position: f32) -> io::Result<()> {
-        let position = position.clamp(0.0, 1.0);
+        // Hundredths: steps of 0.05 stay readable in the file.
+        let position = (position.clamp(0.0, 1.0) * 100.0).round() / 100.0;
         self.update(key, |custom| {
             custom.hero.position = ((position - CENTER).abs() > f32::EPSILON).then_some(position);
         })?;

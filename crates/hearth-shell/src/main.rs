@@ -331,6 +331,7 @@ fn main() -> anyhow::Result<()> {
         games_dir,
         art_cache: ArtCache::new(dirs.art_cache()),
         picks: CustomStore::new(dirs.game_data()),
+        audio_cache: dirs.cache().join("audio"),
         display_class: std::fs::read_to_string(display_class_file(&dirs))
             .ok()
             .and_then(|name| DisplayClass::from_name(&name))

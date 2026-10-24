@@ -83,6 +83,72 @@ export global HomeData {
     callback open-game-controls(/* game id */ string);
     // Fills `properties` (synchronously) for a game.
     callback request-properties(/* game id */ string);
+    // Opens the Customize page on a section ("art", "theme" or "match").
+    callback customize(/* game id */ string, /* section */ string);
+}
+
+// One section of the Customize page (Cover, Hero, Logo, Icon, Theme music, Wrong game?):
+// key "grid" / "hero" / "logo" / "icon" / "theme" / "match"; status "Automatic", "Picked"…
+export struct CustomSection {
+    key: string,
+    label: string,
+    status: string,
+}
+
+// Something to choose on the Customize page: an image of the matched game, or another game.
+export struct Candidate {
+    name: string,       // a game's name, or an image's size
+    detail: string,     // games: the search that found it
+    thumb: image,       // empty while it loads
+    current: bool,      // what is used now
+}
+
+// An action row under the candidates ("file", "reset", "position", "start", "remove").
+export struct CustomRow {
+    key: string,
+    label: string,
+    value: string,
+    slider: bool,       // Left/Right change it (Start at)
+}
+
+// One file in the file list.
+export struct FileEntry {
+    name: string,
+    detail: string,     // "Downloads · 2 h ago · 2:41"
+    thumb: image,       // images: a thumbnail once decoded
+    audio: bool,
+}
+
+// The Customize page (README §4 "Customize"), filled by src/bridge/customize.rs.
+export global CustomizeData {
+    in property <string> title;
+    in property <image> hero;           // behind the page, as on Home
+    in property <float> hero-x: 0.5;
+    in property <image> logo;
+    in property <[CustomSection]> sections;
+    // The focused section's pane.
+    in property <string> heading;
+    in property <string> source;        // "Now: picked from SteamGridDB"
+    in property <image> current;        // the art in use, as a small preview
+    in property <string> warning;       // e.g. game themes are off
+    in property <string> note;          // "Loading…", "Offline · saved results"…
+    in property <[Candidate]> candidates;
+    in property <[CustomRow]> rows;
+    // The file list ("Use a file…", "Choose a file…").
+    in property <string> files-heading;
+    in property <string> files-note;    // shown when empty
+    in property <[FileEntry]> files;
+    callback section-changed(/* key */ string);
+    // Focus entered (true) or left (false) the right pane (the theme previews meanwhile).
+    callback pane-focused(/* in pane */ bool);
+    callback candidate(/* index */ int);
+    callback row(/* key */ string);
+    callback step(/* key */ string, /* -1 or 1 */ int);
+    callback position-done(/* save */ bool);
+    callback file-focused(/* index */ int);
+    callback file-chosen(/* index */ int);
+    callback files-closed();
+    callback closed();
 }
 
 export global SettingsData {

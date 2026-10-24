@@ -1,0 +1,669 @@
+import { Theme } from "../theme.slint";
+import { Icons } from "../icons.slint";
+import { UiAction, NavResult, Nav } from "../input.slint";
+import { CustomizeData, CustomSection, Candidate, CustomRow } from "../data.slint";
+import { HintBar } from "../components/hint_bar.slint";
+import { ListRow } from "../components/list_row.slint";
+import { FocusRing } from "../components/focus.slint";
+import { FileList } from "../components/file_list.slint";
+import { HeroImage } from "../home.slint";
+
+global Sections {
+    public pure function icon-for(key: string) -> image {
+        if key == "theme" { return Icons.music; }
+        if key == "match" { return Icons.help; }
+        Icons.image
+    }
+
+    public pure function row-icon(key: string) -> image {
+        if key == "file" { return Icons.file; }
+        if key == "position" { return Icons.move-horizontal; }
+        if key == "start" { return Icons.clock; }
+        Icons.reset
+    }
+
+    // Thumbnail size of a candidate, by section (heroes are wide, logos less so).
+    public pure function thumb-width(key: string) -> length {
+        if key == "hero" { return 360px * Theme.scale; }
+        if key == "logo" { return 300px * Theme.scale; }
+        if key == "icon" { return 140px * Theme.scale; }
+        180px * Theme.scale
+    }
+
+    public pure function thumb-height(key: string) -> length {
+        if key == "hero" { return 116px * Theme.scale; }
+        if key == "logo" { return 116px * Theme.scale; }
+        if key == "icon" { return 140px * Theme.scale; }
+        180px * Theme.scale
+    }
+}
+
+// The section list (left): icon, label and status; collapses to an icon rail for the file
+// list.
+component SectionList inherits Rectangle {
+    in property <[CustomSection]> items;
+    in property <int> index;
+    in property <bool> focused;
+    in property <bool> rail;
+    in property <length> row-h;
+
+    property <length> step: row-h + Theme.row-gap;
+    height: items.length * step;
+
+    Rectangle {
+        y: index * step;
+        animate y { duration: Theme.fast; easing: ease-out; }
+        width: parent.width;
+        height: row-h;
+        border-radius: Theme.radius-md;
+        background: focused ? Theme.surface-raised : Theme.accent-soft;
+        border-width: focused ? Theme.focus-ring-width : 0;
+        border-color: Theme.focus-ring;
+        drop-shadow-blur: focused ? Theme.focus-glow-radius : 0;
+        drop-shadow-color: Theme.focus-glow;
+    }
+    for item[i] in items: Rectangle {
+        y: i * step;
+        height: row-h;
+        clip: true;
+        Image {
+            x: Theme.sp-24;
+            y: (parent.height - self.height) / 2;
+            source: Sections.icon-for(item.key);
+            width: Theme.icon-size;
+            height: Theme.icon-size;
+            colorize: Theme.text-primary;
+        }
+        VerticalLayout {
+            x: Theme.sp-24 + Theme.icon-size + Theme.sp-24;
+            width: parent.width - self.x - Theme.sp-24;
+            alignment: center;
+            spacing: Theme.sp-4;
+            opacity: rail ? 0 : 1;
+            animate opacity { duration: Theme.fast; easing: ease-out; }
+            Text {
+                text: item.label;
+                font-size: Theme.body-lg;
+                font-weight: Theme.medium;
+                color: Theme.text-primary;
+                overflow: elide;
+            }
+            if item.status != "": Text {
+                text: item.status;
+                font-size: Theme.body;
+                color: Theme.text-secondary;
+                overflow: elide;
+            }
+        }
+    }
+}
+
+// A row of images to choose from; the one in use has a check mark. Scrolls to keep the
+// focused one in view.
+component CandidateStrip inherits Rectangle {
+    in property <string> section;
+    in property <[Candidate]> items;
+    in property <int> focus-index: -1;
+
+    property <length> tile-w: Sections.thumb-width(section);
+    property <length> tile-h: Sections.thumb-height(section);
+    property <length> step: tile-w + Theme.sp-16;
+    property <length> total: items.length * step;
+    property <length> scroll: max(0, min(focus-index * step - step, total - self.width));
+    height: tile-h + 2 * Theme.sp-16;
+    clip: true;
+
+    Rectangle {
+        x: -scroll;
+        animate x { duration: Theme.base; easing: ease-out; }
+        width: total;
+        for item[i] in items: Rectangle {
+            x: i * step + Theme.sp-8;
+            y: Theme.sp-16;
+            width: tile-w;
+            height: tile-h;
+            border-radius: Theme.radius-md;
+            // Logos and icons are often transparent: a light surface shows them.
+            background: section == "logo" || section == "icon" ? #FFFFFF14 : Theme.surface;
+            clip: true;
+            if item.thumb.width > 0: Image {
+                width: parent.width;
+                height: parent.height;
+                source: item.thumb;
+                image-fit: section == "logo" || section == "icon" ? contain : cover;
+            }
+            if item.thumb.width == 0: Text {
+                text: "…";
+                font-size: Theme.heading;
+                color: Theme.text-disabled;
+            }
+            if item.current: Rectangle {
+                x: parent.width - self.width - Theme.sp-8;
+                y: Theme.sp-8;
+                width: 36px * Theme.scale;
+                height: self.width;
+                border-radius: self.width / 2;
+                background: Theme.accent;
+                Image {
+                    width: parent.width * 0.6;
+                    height: self.width;
+                    source: Icons.check;
+                    colorize: Theme.on-accent;
+                }
+            }
+            FocusRing {
+                shown: i == focus-index;
+            }
+        }
+    }
+}
+
+// "Wrong game?": keep the match, or one of the games the matcher considered.
+component MatchList inherits Rectangle {
+    in property <[Candidate]> items;
+    in property <int> focus-index: -1;    // 0: Keep current match
+
+    property <length> row-h: 96px * Theme.scale;
+    property <length> step: row-h + Theme.row-gap;
+    property <length> total: (items.length + 1) * step;
+    property <length> scroll: max(0, min(focus-index * step - (self.height - row-h) / 2, total - self.height));
+    clip: true;
+
+    Rectangle {
+        y: -scroll;
+        animate y { duration: Theme.fast; easing: ease-out; }
+        height: total;
+        Rectangle {
+            y: 0;
+            height: row-h;
+            border-radius: Theme.radius-md;
+            background: focus-index == 0 ? Theme.surface-raised : transparent;
+            ListRow {
+                height: parent.height;
+                icon: Icons.check;
+                label: "Keep current match";
+                show-divider: false;
+            }
+            FocusRing { shown: focus-index == 0; }
+        }
+        for item[i] in items: Rectangle {
+            y: (i + 1) * step;
+            height: row-h;
+            border-radius: Theme.radius-md;
+            background: i + 1 == focus-index ? Theme.surface-raised : transparent;
+            Rectangle {
+                x: Theme.sp-8;
+                y: Theme.sp-8;
+                width: parent.height - 2 * Theme.sp-8;
+                height: self.width;
+                border-radius: Theme.radius-sm;
+                background: Theme.surface;
+                clip: true;
+                if item.thumb.width > 0: Image {
+                    width: parent.width;
+                    height: parent.height;
+                    source: item.thumb;
+                    image-fit: cover;
+                }
+            }
+            VerticalLayout {
+                x: parent.height + Theme.sp-16;
+                width: parent.width - self.x - Theme.sp-64;
+                alignment: center;
+                spacing: Theme.sp-4;
+                Text {
+                    text: item.name;
+                    font-size: Theme.body-lg;
+                    font-weight: Theme.medium;
+                    color: Theme.text-primary;
+                    overflow: elide;
+                }
+                Text {
+                    text: item.detail;
+                    font-size: Theme.body;
+                    color: Theme.text-secondary;
+                    overflow: elide;
+                }
+            }
+            if item.current: Image {
+                x: parent.width - Theme.sp-24 - self.width;
+                y: (parent.height - self.height) / 2;
+                width: Theme.icon-size;
+                height: self.width;
+                source: Icons.check;
+                colorize: Theme.accent;
+            }
+            FocusRing { shown: i + 1 == focus-index; }
+        }
+    }
+}
+
+// A game's Customize page (README §4): sections on the left (Cover, Hero, Logo, Icon, Theme
+// music, Wrong game?), the focused section's choices on the right, over the game's hero.
+// Right/Accept enter the right pane, Left at its edge or Back return to the list, Back from
+// the list leaves. "Use a file…" opens the file list (wide: the sections collapse to a rail).
+// The hero's position is set over the bare hero, exactly as Home shows it.
+export component CustomizeScreen inherits Rectangle {
+    callback close();
+
+    property <int> index: 0;            // section
+    property <int> pane: 0;             // 0 sections, 1 right pane
+    property <int> content-index: 0;
+    property <int> strip-index: 0;
+    property <bool> files-open: false;
+    property <int> file-index: 0;
+    out property <bool> positioning: false;
+
+    property <[CustomSection]> sections: CustomizeData.sections;
+    property <string> key: index < sections.length ? sections[index].key : "";
+    property <bool> art: key == "grid" || key == "hero" || key == "logo" || key == "icon";
+    // Art: the strip, then the rows. Theme: the rows. Match: Keep, then the games.
+    property <int> content-count: art ? 1 + CustomizeData.rows.length
+        : key == "match" ? 1 + CustomizeData.candidates.length
+        : CustomizeData.rows.length;
+    property <int> row-index: art ? content-index - 1 : content-index;
+    property <bool> on-strip: art && content-index == 0;
+    property <bool> on-slider: !on-strip && key != "match" && row-index >= 0
+        && row-index < CustomizeData.rows.length && CustomizeData.rows[row-index].slider;
+
+    property <length> list-top: 200px * Theme.scale;
+    property <length> list-width: 480px * Theme.scale;
+    property <length> rail-width: Theme.sp-24 * 2 + Theme.icon-size;
+    property <length> section-row-h: Theme.row-height + Theme.sp-16;
+    property <length> pane-x: Theme.safe-x + list-width + Theme.sp-48;
+
+    // The pane fades out, switches, then fades in when the section changes.
+    property <string> shown-key;
+    property <bool> fading: false;
+    changed key => {
+        fading = true;
+        CustomizeData.section-changed(key);
+    }
+    Timer {
+        interval: Theme.fast / 2;
+        running: fading;
+        triggered => {
+            shown-key = key;
+            fading = false;
+        }
+    }
+    changed pane => { CustomizeData.pane-focused(pane == 1); }
+
+    // Opens on section `section-index` (Rust knows which is which).
+    public function open(section-index: int) {
+        pane = 0;
+        content-index = 0;
+        strip-index = 0;
+        files-open = false;
+        positioning = false;
+        index = section-index;
+        shown-key = key;
+        fading = false;
+        CustomizeData.section-changed(key);
+    }
+
+    // The candidate in use (Rust says which when the list arrives): the strip starts there
+    // unless focus is already in it.
+    in-out property <int> current-candidate: 0;
+    public function focus-current() {
+        if !(pane == 1 && on-strip) {
+            strip-index = max(0, current-candidate);
+        }
+    }
+
+    function move-section(delta: int) -> NavResult {
+        let old = index;
+        index = max(0, min(sections.length - 1, index + delta));
+        if index == old { return NavResult.edge; }
+        content-index = 0;
+        strip-index = 0;
+        NavResult.moved
+    }
+
+    function enter-pane() {
+        pane = 1;
+        content-index = 0;
+        if art { strip-index = max(0, min(CustomizeData.candidates.length - 1, current-candidate)); }
+    }
+
+    function handle-files(action: UiAction) -> NavResult {
+        if action == UiAction.up || action == UiAction.down {
+            let old = file-index;
+            file-index = max(0, min(CustomizeData.files.length - 1, file-index + (action == UiAction.up ? -1 : 1)));
+            if file-index != old { CustomizeData.file-focused(file-index); }
+            return Nav.moved(file-index != old);
+        }
+        if action == UiAction.accept && CustomizeData.files.length > 0 {
+            files-open = false;
+            CustomizeData.file-chosen(file-index);
+            return NavResult.handled;
+        }
+        if action == UiAction.back || action == UiAction.left {
+            files-open = false;
+            CustomizeData.files-closed();
+            return action == UiAction.back ? NavResult.handled : NavResult.moved;
+        }
+        action == UiAction.right ? NavResult.edge : NavResult.handled
+    }
+
+    function handle-position(action: UiAction) -> NavResult {
+        if action == UiAction.left || action == UiAction.right {
+            CustomizeData.step("position", action == UiAction.left ? -1 : 1);
+            return NavResult.moved;
+        }
+        if action == UiAction.accept || action == UiAction.back {
+            positioning = false;
+            CustomizeData.position-done(action == UiAction.accept);
+            return NavResult.handled;
+        }
+        NavResult.handled
+    }
+
+    function accept-content() {
+        if on-strip {
+            if CustomizeData.candidates.length > 0 { CustomizeData.candidate(strip-index); }
+            return;
+        }
+        if key == "match" {
+            if content-index == 0 {
+                pane = 0;
+            } else {
+                CustomizeData.candidate(content-index - 1);
+                pane = 0;
+            }
+            return;
+        }
+        let row = CustomizeData.rows[row-index];
+        if row.key == "file" {
+            files-open = true;
+            file-index = 0;
+        }
+        if row.key == "position" {
+            positioning = true;
+        }
+        CustomizeData.row(row.key);
+    }
+
+    public function handle(action: UiAction) -> NavResult {
+        if positioning { return handle-position(action); }
+        if files-open { return handle-files(action); }
+        if pane == 0 {
+            if action == UiAction.up { return move-section(-1); }
+            if action == UiAction.down { return move-section(1); }
+            if (action == UiAction.right || action == UiAction.accept) && content-count > 0 {
+                enter-pane();
+                return action == UiAction.accept ? NavResult.handled : NavResult.moved;
+            }
+            if action == UiAction.back {
+                CustomizeData.closed();
+                close();
+                return NavResult.handled;
+            }
+            if action == UiAction.left || action == UiAction.right { return NavResult.edge; }
+            return Nav.used(action == UiAction.accept);
+        }
+        if action == UiAction.up || action == UiAction.down {
+            let old = content-index;
+            content-index = max(0, min(content-count - 1, content-index + (action == UiAction.up ? -1 : 1)));
+            return Nav.moved(content-index != old);
+        }
+        if on-strip && (action == UiAction.left || action == UiAction.right) {
+            if action == UiAction.left && strip-index == 0 {
+                pane = 0;
+                return NavResult.moved;
+            }
+            let old = strip-index;
+            strip-index = max(0, min(CustomizeData.candidates.length - 1, strip-index + (action == UiAction.left ? -1 : 1)));
+            return Nav.moved(strip-index != old);
+        }
+        if on-slider && (action == UiAction.left || action == UiAction.right) {
+            CustomizeData.step(CustomizeData.rows[row-index].key, action == UiAction.left ? -1 : 1);
+            return NavResult.moved;
+        }
+        if action == UiAction.accept { accept-content(); return NavResult.handled; }
+        if action == UiAction.left { pane = 0; return NavResult.moved; }
+        if action == UiAction.back { pane = 0; return NavResult.handled; }
+        if action == UiAction.right { return NavResult.edge; }
+        NavResult.ignored
+    }
+
+    background: Theme.bg-base;
+    clip: true;
+
+    // The game's hero, as on Home, dimmed behind the page (bare while positioning it).
+    if CustomizeData.hero.width > 0: HeroImage {
+        width: parent.width;
+        height: parent.height;
+        source: CustomizeData.hero;
+        position: CustomizeData.hero-x;
+    }
+    Rectangle {
+        background: #000000C8;
+        opacity: positioning ? 0 : 1;
+        animate opacity { duration: Theme.base; easing: ease-out; }
+    }
+
+    Rectangle {
+        opacity: positioning ? 0 : 1;
+        animate opacity { duration: Theme.base; easing: ease-out; }
+
+        // Header: the game's logo (or title), then "Customize".
+        HorizontalLayout {
+            x: Theme.safe-x;
+            y: Theme.safe-y + Theme.sp-16;
+            height: 96px * Theme.scale;
+            spacing: Theme.sp-24;
+            opacity: files-open ? 0 : 1;
+            animate opacity { duration: Theme.fast; easing: ease-out; }
+            if CustomizeData.logo.width > 0: Image {
+                width: min(280px * Theme.scale, self.height * CustomizeData.logo.width / max(1, CustomizeData.logo.height));
+                source: CustomizeData.logo;
+                image-fit: contain;
+                horizontal-alignment: left;
+            }
+            if CustomizeData.logo.width == 0: Text {
+                text: CustomizeData.title;
+                vertical-alignment: center;
+                font-size: Theme.display;
+                font-weight: Theme.semibold;
+                color: Theme.text-primary;
+                overflow: elide;
+            }
+            Text {
+                text: "Customize";
+                vertical-alignment: center;
+                font-size: Theme.title;
+                font-weight: Theme.semibold;
+                color: Theme.text-secondary;
+            }
+        }
+
+        // Right pane: the focused section's choices.
+        Rectangle {
+            x: pane-x;
+            y: list-top;
+            width: parent.width - self.x - Theme.safe-x;
+            height: parent.height - self.y - Theme.safe-y - Theme.sp-64;
+            opacity: fading || files-open ? 0 : 1;
+            animate opacity { duration: Theme.fast / 2; easing: ease-out; }
+
+            property <bool> has-preview: CustomizeData.current.width > 0 && (shown-key == "grid" || shown-key == "hero" || shown-key == "logo" || shown-key == "icon");
+            preview := Rectangle {
+                x: parent.width - self.width;
+                y: 0;
+                width: has-preview ? Sections.thumb-width(shown-key) : 0;
+                height: has-preview ? Sections.thumb-height(shown-key) : 0;
+                border-radius: Theme.radius-md;
+                background: shown-key == "logo" || shown-key == "icon" ? #FFFFFF14 : Theme.surface;
+                clip: true;
+                if has-preview: Image {
+                    width: parent.width;
+                    height: parent.height;
+                    source: CustomizeData.current;
+                    image-fit: shown-key == "logo" || shown-key == "icon" ? contain : cover;
+                }
+            }
+            info := VerticalLayout {
+                x: 0;
+                y: 0;
+                width: parent.width - preview.width - Theme.sp-24;
+                height: self.preferred-height;
+                alignment: start;
+                spacing: Theme.sp-8;
+                Text {
+                    text: CustomizeData.heading;
+                    font-size: Theme.heading;
+                    font-weight: Theme.semibold;
+                    color: Theme.text-primary;
+                }
+                Text {
+                    text: CustomizeData.source;
+                    font-size: Theme.body;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+                if CustomizeData.warning != "": HorizontalLayout {
+                    spacing: Theme.sp-8;
+                    Image {
+                        width: Theme.icon-size * 0.75;
+                        height: self.width;
+                        source: Icons.triangle-alert;
+                        colorize: Theme.warning;
+                    }
+                    Text {
+                        text: CustomizeData.warning;
+                        font-size: Theme.body;
+                        color: Theme.warning;
+                        wrap: word-wrap;
+                    }
+                }
+                if CustomizeData.note != "": Text {
+                    text: CustomizeData.note;
+                    font-size: Theme.body;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+            }
+
+            property <length> body-top: max(info.preferred-height, preview.height) + Theme.sp-24;
+
+            if shown-key == "grid" || shown-key == "hero" || shown-key == "logo" || shown-key == "icon": Rectangle {
+                y: body-top;
+                strip := CandidateStrip {
+                    y: 0;
+                    width: parent.width;
+                    section: shown-key;
+                    items: CustomizeData.candidates;
+                    focus-index: pane == 1 && on-strip ? strip-index : -1;
+                }
+                for row[i] in CustomizeData.rows: Rectangle {
+                    y: strip.height + Theme.sp-16 + i * (Theme.row-height + Theme.row-gap);
+                    height: Theme.row-height;
+                    border-radius: Theme.radius-md;
+                    background: pane == 1 && row-index == i ? Theme.surface-raised : transparent;
+                    ListRow {
+                        height: parent.height;
+                        icon: Sections.row-icon(row.key);
+                        label: row.label;
+                        value: row.value;
+                        show-divider: false;
+                    }
+                    FocusRing { shown: pane == 1 && row-index == i; }
+                }
+            }
+
+            if shown-key == "theme": Rectangle {
+                y: body-top;
+                for row[i] in CustomizeData.rows: Rectangle {
+                    y: i * (Theme.row-height + Theme.row-gap);
+                    height: Theme.row-height;
+                    border-radius: Theme.radius-md;
+                    background: pane == 1 && row-index == i ? Theme.surface-raised : transparent;
+                    ListRow {
+                        height: parent.height;
+                        icon: Sections.row-icon(row.key);
+                        label: row.label;
+                        value: row.slider ? "‹  " + row.value + "  ›" : row.value;
+                        value-color: row.slider ? Theme.text-primary : Theme.text-secondary;
+                        show-divider: false;
+                    }
+                    FocusRing { shown: pane == 1 && row-index == i; }
+                }
+            }
+
+            if shown-key == "match": MatchList {
+                y: body-top;
+                height: parent.height - self.y;
+                items: CustomizeData.candidates;
+                focus-index: pane == 1 ? content-index : -1;
+            }
+        }
+
+        // The file list, wide (the sections become a rail).
+        FileList {
+            x: Theme.safe-x + rail-width + Theme.sp-48;
+            y: Theme.safe-y + Theme.sp-24;
+            width: parent.width - self.x - Theme.safe-x;
+            height: parent.height - self.y - Theme.safe-y - Theme.sp-64;
+            opacity: files-open ? 1 : 0;
+            visible: self.opacity > 0;
+            animate opacity { duration: Theme.base; easing: ease-out; }
+            heading: CustomizeData.files-heading;
+            empty-note: CustomizeData.files-note;
+            files: CustomizeData.files;
+            focus-index: files-open ? file-index : -1;
+        }
+
+        SectionList {
+            x: Theme.safe-x;
+            y: files-open ? Theme.safe-y + Theme.sp-24 : list-top;
+            animate y { duration: Theme.base; easing: ease-in-out; }
+            width: files-open ? rail-width : list-width;
+            animate width { duration: Theme.base; easing: ease-in-out; }
+            row-h: section-row-h;
+            items: sections;
+            index: index;
+            focused: pane == 0 && !files-open;
+            rail: files-open;
+        }
+
+        HintBar {
+            x: Theme.safe-x;
+            width: parent.width - 2 * Theme.safe-x;
+            height: Theme.sp-32;
+            y: parent.height - Theme.safe-y - self.height;
+            hints: on-strip && pane == 1 && !files-open ? [
+                { input: "south", label: "Use this" },
+                { input: "east", label: "Back" },
+            ] : [
+                { input: "south", label: "Select" },
+                { input: "east", label: "Back" },
+            ];
+        }
+    }
+
+    // Positioning the hero: only the hero and these hints, on a dark pill (any art behind).
+    Rectangle {
+        x: parent.width - Theme.safe-x - self.width + Theme.sp-24;
+        y: parent.height - Theme.safe-y - self.height + Theme.sp-16;
+        width: position-hints.preferred-width + 2 * Theme.sp-24;
+        height: Theme.sp-32 + 2 * Theme.sp-16;
+        border-radius: self.height / 2;
+        background: Theme.scrim;
+        opacity: positioning ? 1 : 0;
+        animate opacity { duration: Theme.base; easing: ease-out; }
+    }
+    position-hints := HintBar {
+        x: Theme.safe-x;
+        width: parent.width - 2 * Theme.safe-x;
+        height: Theme.sp-32;
+        y: parent.height - Theme.safe-y - self.height;
+        opacity: positioning ? 1 : 0;
+        animate opacity { duration: Theme.base; easing: ease-out; }
+        hints: [
+            { input: "dpad_left", input2: "dpad_right", label: "Move" },
+            { input: "south", label: "Save" },
+            { input: "east", label: "Cancel" },
+        ];
+    }
+}

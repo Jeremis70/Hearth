@@ -11,7 +11,8 @@
 # HEARTH_DOWNLOADS is ./.dev-data/downloads (fill it with
 # `cargo run -p hearth-core --example make_fixtures`), so the real ~/Downloads is never read.
 # Default mode: gamescope (scripts/run-gamescope.sh), with --mock-sgdb=fixtures and
-# --games-dir ./.dev-data/games.
+# --games-dir ./.dev-data/test-games if it exists (HEARTH_TEST_GAMES overrides), else
+# ./.dev-data/games. --reset keeps the games folder (it lives outside the home).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -47,7 +48,11 @@ mkdir -p ./.dev-data/downloads
 
 export HEARTH_HOME="$home"
 export HEARTH_DOWNLOADS="${HEARTH_DOWNLOADS:-./.dev-data/downloads}"
-args=(--mock-sgdb=fixtures --games-dir ./.dev-data/games "$@")
+games="${HEARTH_TEST_GAMES:-./.dev-data/test-games}"
+if [[ ! -d "$games" ]]; then
+    games=./.dev-data/games
+fi
+args=(--mock-sgdb=fixtures --games-dir "$games" "$@")
 if [[ "$mode" == "windowed" ]]; then
     exec cargo run -p hearth-shell -- --windowed "${args[@]}"
 fi

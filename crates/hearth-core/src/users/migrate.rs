@@ -759,7 +759,10 @@ impl<'a> Migrator<'a> {
                 plan.not_backed_up.clone(),
                 plan.unattributed.clone(),
             ),
-            None => (count_sums(&marker.backup), 0, Vec::new(), Vec::new()),
+            None => {
+                let (files, bytes) = backup_totals(&marker.backup);
+                (files, bytes, Vec::new(), Vec::new())
+            }
         };
         Ok(Summary {
             backup: marker.backup.clone(),
@@ -973,9 +976,16 @@ fn hash_file(path: &Path) -> Result<(String, u64), MigrateError> {
     Ok((hex, size))
 }
 
-/// Lines of `SHA256SUMS` in a backup (for the summary of a resumed run).
-fn count_sums(backup: &Path) -> usize {
-    fs::read_to_string(backup.join("SHA256SUMS")).map_or(0, |t| t.lines().count())
+/// Files listed in a backup's `SHA256SUMS` and their total size (for the summary of a
+/// resumed run).
+fn backup_totals(backup: &Path) -> (usize, u64) {
+    let sums = fs::read_to_string(backup.join("SHA256SUMS")).unwrap_or_default();
+    sums.lines()
+        .filter_map(|line| line.split_once("  "))
+        .fold((0, 0), |(n, bytes), (_, name)| {
+            let size = fs::symlink_metadata(backup.join(name)).map_or(0, |m| m.len());
+            (n + 1, bytes + size)
+        })
 }
 
 /// Moved emulator files (text, up to 1 MiB) that still name an old folder.

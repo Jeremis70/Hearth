@@ -284,6 +284,7 @@ fn a_kill_after_any_step_resumes_to_the_same_result() {
             panic!("expected the run to resume after step {stop}");
         };
         assert!(summary.resumed);
+        assert!(summary.backed_up_files >= 14 && summary.backed_up_bytes > 0);
         assert_eq!(layout(home), reference, "stopped after step {stop}");
         check_migrated(home);
         assert_eq!(fs::read_dir(home.join("backup")).unwrap().count(), 1);

@@ -4,7 +4,7 @@
 //! Every write is a polkit `auth_admin` action in InputPlumber; members of `wheel` or
 //! `inputplumber` are allowed without a prompt by its shipped rules. Reads are open to anyone.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::path::Path;
 
 use zbus::fdo::ObjectManagerProxy;
@@ -388,7 +388,7 @@ fn power_from(status: &str, capacity: Option<u8>) -> Power {
 fn composite_paths(
     objects: &HashMap<
         OwnedObjectPath,
-        BTreeMap<zbus::names::OwnedInterfaceName, HashMap<String, OwnedVariant>>,
+        HashMap<zbus::names::OwnedInterfaceName, HashMap<String, OwnedVariant>>,
     >,
 ) -> Vec<String> {
     let mut paths: Vec<String> = objects

@@ -12,7 +12,7 @@
 //! ui_volume = 80                        # 0–100, a perceptual (dB) scale
 //! music_volume = 70
 //! mute = false
-//! music_in_overlay = true
+//! music_in_overlay = false  # the overlay pauses the game to talk: silence by default
 //! game_themes = true
 //! ```
 //!
@@ -153,7 +153,7 @@ impl Default for AudioSettings {
             ui_volume: 80,
             music_volume: 70,
             mute: false,
-            music_in_overlay: true,
+            music_in_overlay: false,
             game_themes: true,
         }
     }

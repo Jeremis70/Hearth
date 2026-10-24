@@ -111,6 +111,20 @@ pub fn default_games_dir() -> Option<PathBuf> {
     directories::BaseDirs::new().map(|dirs| dirs.home_dir().join("Games"))
 }
 
+/// Environment variable that replaces the user's Downloads folder (tests use a fixture one).
+pub const DOWNLOADS_ENV: &str = "HEARTH_DOWNLOADS";
+
+/// The Downloads folder offered by the file list: `HEARTH_DOWNLOADS`, else the user's XDG
+/// Downloads folder (even with `HEARTH_HOME` set). Only ever read.
+pub fn downloads_dir() -> Option<PathBuf> {
+    match std::env::var_os(DOWNLOADS_ENV) {
+        Some(dir) if !dir.is_empty() => Some(PathBuf::from(dir)),
+        _ => {
+            directories::UserDirs::new().and_then(|dirs| dirs.download_dir().map(Path::to_path_buf))
+        }
+    }
+}
+
 /// Resolved app directories.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DataDirs {

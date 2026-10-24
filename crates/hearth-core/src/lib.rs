@@ -9,6 +9,7 @@ pub mod config;
 pub mod controls;
 pub mod custom;
 pub mod extras;
+pub mod files;
 pub mod library;
 pub mod model;
 pub mod packs;

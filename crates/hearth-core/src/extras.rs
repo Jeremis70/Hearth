@@ -6,8 +6,8 @@
 //! ```text
 //! <games>/<system>/<any folder>/
 //!   <the ROM>
-//!   theme.ogg | theme.mp3 | theme.flac
-//!   grid.png | hero.png | logo.png | icon.png   (or .jpg, .webp)
+//!   theme.ogg | theme.mp3 | theme.flac | theme.wav
+//!   grid.png | hero.png | logo.png | icon.png   (or .jpg, .jpeg, .webp)
 //! ```
 //!
 //! A folder holding several games is only a grouping folder, and games laid out flat in the
@@ -25,8 +25,10 @@ use crate::art::{ArtKind, GameArt};
 use crate::custom::{CustomStore, Lookup};
 use crate::model::Game;
 
-const THEME_EXTENSIONS: [&str; 3] = ["ogg", "mp3", "flac"];
-const IMAGE_EXTENSIONS: [&str; 3] = ["png", "jpg", "webp"];
+/// Theme files Hearth plays.
+pub const THEME_EXTENSIONS: [&str; 4] = ["ogg", "mp3", "flac", "wav"];
+/// Image files Hearth shows.
+pub const IMAGE_EXTENSIONS: [&str; 4] = ["png", "jpg", "jpeg", "webp"];
 
 /// What can be looked up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -382,8 +382,7 @@ The working tree is clean.
     next launch (a profile can't express them);
   - user idea: the button test's trigger highlight could follow the pull (visual change);
   - user idea: a battery indicator when the pad is plugged in or unplugged ("charging · 45 %");
-  - the reconnect overlay and the notice card are placeholders (user); Kenney's controller
-    icons aren't in the repo, the card uses Lucide's gamepad.
+  - the reconnect overlay and the notice card: the card is done (round C.2, Kenney icons).
 - Later milestones (`docs/plan.md`):
   - Capture: panel and hold-to-screenshot, see `docs/design/overlay.md` §10.
   - ES-DE import, Steam, overlay dock actions, library grid, Uninstall.

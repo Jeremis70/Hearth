@@ -120,6 +120,24 @@ impl ArtCache {
         Ok(path)
     }
 
+    /// Notes where the cached `kind` was downloaded from.
+    pub fn set_source_url(&self, key: &ArtKey, kind: ArtKind, url: &str) {
+        let path = self.dir(key).join(format!("{}.url", kind.name()));
+        if let Err(err) = fs::write(&path, url) {
+            tracing::debug!(path = %path.display(), "can't note the art's source: {err}");
+        }
+    }
+
+    /// Where the cached `kind` was downloaded from, if noted.
+    pub fn source_url(&self, key: &ArtKey, kind: ArtKind) -> Option<String> {
+        fs::read_to_string(self.dir(key).join(format!("{}.url", kind.name()))).ok()
+    }
+
+    /// Where the Customize page's candidates and their thumbnails are cached.
+    pub fn candidates_dir(&self, key: &ArtKey) -> PathBuf {
+        self.dir(key).join("candidates")
+    }
+
     /// Deletes one game's cached art. Only folders inside the cache are touched.
     pub fn remove(&self, key: &ArtKey) -> io::Result<()> {
         let safe = key.as_str().split('/').all(|part| {

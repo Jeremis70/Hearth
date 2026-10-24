@@ -12,26 +12,34 @@
 //!
 //! A matched game whose cached files went missing downloads just those again, without a new
 //! search.
+//!
+//! The worker also serves the Customize page ([`customize`]): candidates to choose from,
+//! applying a choice, matching another game, and every change to the user's picks (so writes
+//! to a game's `custom.toml` never race).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::cache::{ArtCache, GameArt};
 use super::identity::{ArtKey, Identity, identify, pick_match};
 use super::provider::{ArtKind, MetadataProvider, ProviderError};
-use crate::custom::CustomStore;
-use crate::extras::Extras;
+use crate::custom::{Custom, CustomStore};
+use crate::extras::{Extra, Extras};
 use crate::library::{ArtCandidate, ArtStatus, Library, LibraryError, RemovedGame};
 use crate::model::{Game, GameId};
 
 /// How often the queue is looked at while Hearth runs.
 pub const QUEUE_CHECK: Duration = Duration::from_secs(60);
 
+mod customize;
+
+pub use customize::{Availability, Candidate, CandidateSet};
+
 /// What the worker tells the UI.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ArtEvent {
     /// The art to show for a game. Sent for every game when the library is loaded, and again
     /// whenever more art arrives.
@@ -44,11 +52,58 @@ pub enum ArtEvent {
         art: GameArt,
         /// The SteamGridDB game it matched, if any (for Properties).
         match_name: Option<String>,
+        /// Where the hero is cropped: 0 = its left edge … 1 = its right edge.
+        hero_position: f32,
+    },
+    /// Things to choose from, for the Customize page (answer to a candidates request). Thumbs
+    /// still missing follow as [`ArtEvent::Thumb`].
+    Candidates {
+        /// The game's art key.
+        key: ArtKey,
+        /// Which list.
+        set: CandidateSet,
+        /// The choices, best first.
+        items: Vec<Candidate>,
+        /// Whether they are fresh from SteamGridDB, or why not.
+        availability: Availability,
+    },
+    /// A candidate's thumbnail arrived.
+    Thumb {
+        /// The game's art key.
+        key: ArtKey,
+        /// Which list.
+        set: CandidateSet,
+        /// The candidate's id.
+        id: u64,
+        /// The thumbnail.
+        path: PathBuf,
+    },
+    /// A game's picks changed (after any change requested through [`ArtService`]).
+    Custom {
+        /// The game's art key.
+        key: ArtKey,
+        /// Its picks now.
+        custom: Custom,
+    },
+    /// A requested change failed; nothing changed.
+    Failed {
+        /// The game's art key.
+        key: ArtKey,
+        /// For the user ("Couldn't download the image").
+        message: String,
     },
 }
 
 enum Command {
     Library(Vec<Game>),
+    Candidates(ArtKey, CandidateSet),
+    Apply(ArtKey, ArtKind, u64),
+    PickFile(ArtKey, Extra, PathBuf),
+    Reset(ArtKey, Extra),
+    Rematch(ArtKey, u64, String),
+    HeroPosition(ArtKey, f32),
+    ThemeStart(ArtKey, f32),
+    RemoveTheme(ArtKey),
 }
 
 /// Handle to the art worker thread; once every clone is dropped, the thread stops after its
@@ -80,9 +135,10 @@ impl ArtService {
                     }
                 };
                 let mut worker = Worker::new(cache, picks, library, provider, Box::new(events));
+                worker.inbox = Some(rx);
                 loop {
-                    match rx.recv_timeout(QUEUE_CHECK) {
-                        Ok(Command::Library(games)) => worker.load(games),
+                    match worker.next_command() {
+                        Ok(command) => worker.handle(command),
                         Err(RecvTimeoutError::Timeout) => worker.retry_due(),
                         Err(RecvTimeoutError::Disconnected) => break,
                     }
@@ -93,7 +149,54 @@ impl ArtService {
 
     /// The library was (re)loaded: report art for these games and fetch what is missing.
     pub fn library_loaded(&self, games: Vec<Game>) {
-        if self.tx.send(Command::Library(games)).is_err() {
+        self.send(Command::Library(games));
+    }
+
+    /// Asks for `set`'s candidates for `key` ([`ArtEvent::Candidates`], then thumbs). A newer
+    /// request stops the thumbs of an older one.
+    pub fn candidates(&self, key: ArtKey, set: CandidateSet) {
+        self.send(Command::Candidates(key, set));
+    }
+
+    /// Uses the SteamGridDB image `asset` (from the last candidates of `kind`) as `key`'s
+    /// `kind`.
+    pub fn apply(&self, key: ArtKey, kind: ArtKind, asset: u64) {
+        self.send(Command::Apply(key, kind, asset));
+    }
+
+    /// Copies `file` in as `key`'s `extra`.
+    pub fn pick_file(&self, key: ArtKey, extra: Extra, file: PathBuf) {
+        self.send(Command::PickFile(key, extra, file));
+    }
+
+    /// Back to automatic for `key`'s `extra`.
+    pub fn reset(&self, key: ArtKey, extra: Extra) {
+        self.send(Command::Reset(key, extra));
+    }
+
+    /// Matches `key` to the SteamGridDB game `sgdb_id` instead: its automatic art is fetched
+    /// again; picks made from the old match go, picks from files stay, the hero is centered.
+    pub fn rematch(&self, key: ArtKey, sgdb_id: u64, name: String) {
+        self.send(Command::Rematch(key, sgdb_id, name));
+    }
+
+    /// Where `key`'s hero is cropped (0 to 1).
+    pub fn set_hero_position(&self, key: ArtKey, position: f32) {
+        self.send(Command::HeroPosition(key, position));
+    }
+
+    /// Seconds added to where `key`'s theme starts.
+    pub fn set_theme_start(&self, key: ArtKey, seconds: f32) {
+        self.send(Command::ThemeStart(key, seconds));
+    }
+
+    /// Removes `key`'s theme (see [`CustomStore::remove_theme`]).
+    pub fn remove_theme(&self, key: ArtKey) {
+        self.send(Command::RemoveTheme(key));
+    }
+
+    fn send(&self, command: Command) {
+        if self.tx.send(command).is_err() {
             tracing::warn!("the art worker has stopped");
         }
     }
@@ -116,6 +219,14 @@ struct Worker {
     picks: CustomStore,
     /// Where a game's own art comes from (ahead of the cache).
     extras: Extras,
+    /// Requests (none in tests that drive the worker directly).
+    inbox: Option<Receiver<Command>>,
+    /// Requests read early (while checking for newer ones), handled next.
+    pending: VecDeque<Command>,
+    /// Backoff for requests made from the Customize page.
+    net: customize::NetBackoff,
+    /// The last candidates listed per key and kind (to apply one by id).
+    listed: HashMap<(ArtKey, ArtKind), Vec<super::provider::Asset>>,
 }
 
 /// What to fetch for one key.
@@ -147,7 +258,80 @@ impl Worker {
             warned_no_key: false,
             extras: Extras::standard(picks.clone()),
             picks,
+            inbox: None,
+            pending: VecDeque::new(),
+            net: customize::NetBackoff::default(),
+            listed: HashMap::new(),
         }
+    }
+
+    fn next_command(&mut self) -> Result<Command, RecvTimeoutError> {
+        if let Some(command) = self.pending.pop_front() {
+            return Ok(command);
+        }
+        match &self.inbox {
+            Some(inbox) => inbox.recv_timeout(QUEUE_CHECK),
+            None => Err(RecvTimeoutError::Disconnected),
+        }
+    }
+
+    /// True once a newer candidates request is waiting (the current thumbs can stop).
+    fn superseded(&mut self) -> bool {
+        if let Some(inbox) = &self.inbox {
+            while let Ok(command) = inbox.try_recv() {
+                self.pending.push_back(command);
+            }
+        }
+        self.pending
+            .iter()
+            .any(|c| matches!(c, Command::Candidates(..)))
+    }
+
+    fn handle(&mut self, command: Command) {
+        match command {
+            Command::Library(games) => self.load(games),
+            Command::Candidates(key, set) => self.candidates(&key, set),
+            Command::Apply(key, kind, asset) => self.apply(&key, kind, asset),
+            Command::PickFile(key, extra, file) => {
+                let done = self.picks.pick_file(&key, extra, &file);
+                self.changed(&key, done.map(drop), "Couldn't copy the file");
+            }
+            Command::Reset(key, extra) => {
+                let done = self.picks.reset(&key, extra);
+                self.changed(&key, done, "Couldn't reset it");
+            }
+            Command::Rematch(key, sgdb_id, name) => self.rematch(&key, sgdb_id, name),
+            Command::HeroPosition(key, position) => {
+                let done = self.picks.set_hero_position(&key, position);
+                self.changed(&key, done, "Couldn't save the position");
+            }
+            Command::ThemeStart(key, seconds) => {
+                let done = self.picks.set_theme_start(&key, seconds);
+                self.changed(&key, done, "Couldn't save the start");
+            }
+            Command::RemoveTheme(key) => {
+                let done = self.picks.remove_theme(&key).map(drop);
+                self.changed(&key, done, "Couldn't remove the theme");
+            }
+        }
+    }
+
+    /// After a change to `key`'s picks: the new art and picks, or what failed.
+    fn changed(&self, key: &ArtKey, done: std::io::Result<()>, failure: &str) {
+        if let Err(err) = done {
+            tracing::warn!(%key, "{failure}: {err}");
+            (self.events)(ArtEvent::Failed {
+                key: key.clone(),
+                message: failure.to_owned(),
+            });
+            return;
+        }
+        let status = self.library.art_status(key).ok().flatten();
+        self.report(key, status.as_ref());
+        (self.events)(ArtEvent::Custom {
+            key: key.clone(),
+            custom: self.picks.load(key),
+        });
     }
 
     fn load(&mut self, games: Vec<Game>) {
@@ -264,6 +448,7 @@ impl Worker {
             }
             match self.fetch(&key, job) {
                 Ok(status) => {
+                    self.net.succeeded();
                     if let Err(err) = self.library.set_art_status(&key, &status, unix_now()) {
                         tracing::warn!("can't save the art result for {key}: {err}");
                     }
@@ -274,6 +459,7 @@ impl Worker {
                     self.queue(&key, &error);
                     queued += 1;
                     if matches!(err, ProviderError::Network(_)) {
+                        self.net.failed();
                         offline = Some(error);
                     } else {
                         tracing::info!(%key, "artwork failed, will retry: {error}");
@@ -381,6 +567,9 @@ impl Worker {
             }
             if let Err(err) = self.cache.store(key, kind, &asset.extension, &bytes) {
                 tracing::warn!("can't cache the {} of {key}: {err}", kind.name());
+            } else {
+                // So the Customize page can mark the automatic choice among the candidates.
+                self.cache.set_source_url(key, kind, &asset.url);
             }
         }
         Ok(status)
@@ -395,12 +584,14 @@ impl Worker {
             Some(ArtStatus::Matched { sgdb_name, .. }) => Some(sgdb_name.clone()),
             _ => None,
         };
+        let hero_position = self.picks.load(key).hero_position();
         for game in &known.games {
             (self.events)(ArtEvent::Art {
                 game: game.id.clone(),
                 key: key.clone(),
                 art: self.cache.resolve(key, &self.extras.art(game)),
                 match_name: match_name.clone(),
+                hero_position,
             });
         }
     }
@@ -474,16 +665,16 @@ mod tests {
     use crate::rom_header::tests::{disc, n64_rom};
     use crate::testdir::tempdir;
 
-    struct Setup {
-        _dir: tempfile::TempDir,
-        root: PathBuf,
-        db: PathBuf,
-        cache: ArtCache,
-        picks: CustomStore,
-        games: Vec<Game>,
+    pub(super) struct Setup {
+        pub(super) _dir: tempfile::TempDir,
+        pub(super) root: PathBuf,
+        pub(super) db: PathBuf,
+        pub(super) cache: ArtCache,
+        pub(super) picks: CustomStore,
+        pub(super) games: Vec<Game>,
     }
 
-    fn setup() -> Setup {
+    pub(super) fn setup() -> Setup {
         let dir = tempdir();
         let root = dir.path().join("Games");
         std::fs::create_dir_all(root.join("gc")).unwrap();
@@ -561,16 +752,15 @@ mod tests {
         events
             .iter()
             .rev()
-            .find_map(
-                |ArtEvent::Art {
-                     game,
-                     art,
-                     match_name,
-                     ..
-                 }| {
-                    (game.as_str() == id).then(|| (art.clone(), match_name.clone()))
-                },
-            )
+            .find_map(|event| match event {
+                ArtEvent::Art {
+                    game,
+                    art,
+                    match_name,
+                    ..
+                } if game.as_str() == id => Some((art.clone(), match_name.clone())),
+                _ => None,
+            })
             .unwrap()
     }
 
@@ -654,7 +844,7 @@ mod tests {
         assert!(
             events
                 .iter()
-                .all(|ArtEvent::Art { art, .. }| art.is_empty())
+                .all(|e| matches!(e, ArtEvent::Art { art, .. } if art.is_empty()))
         );
         let queue = worker.library.art_queue().unwrap();
         assert_eq!(queue.len(), 3);
@@ -701,7 +891,7 @@ mod tests {
         assert!(
             events
                 .iter()
-                .all(|ArtEvent::Art { art, .. }| art.is_empty())
+                .all(|e| matches!(e, ArtEvent::Art { art, .. } if art.is_empty()))
         );
         assert!(worker.warned_no_key);
     }

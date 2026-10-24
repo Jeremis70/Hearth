@@ -316,11 +316,14 @@ pub fn start(
                 key,
                 art,
                 match_name,
+                ..
             } => {
                 super::startup::note("first art event");
                 loader.submit(&game, &key, &art);
                 defer(move |c| c.set_art_match(&game, match_name));
             }
+            // The Customize page's answers (not built yet).
+            other => tracing::debug!(?other, "art event"),
         },
     );
     match spawned {

@@ -1986,6 +1986,7 @@ dependencies = [
 name = "hearth-core"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "directories",
  "image",
  "nix",

@@ -1,7 +1,8 @@
 //! Where Hearth keeps its config, data and cache.
 //!
 //! In development `HEARTH_HOME` points at a single folder (usually `./.dev-data`) holding
-//! `config/`, `data/` and `cache/`. Without it, the XDG directories are used.
+//! `config/`, `data/`, `cache/`, `profiles/` and the rest. Without it, the XDG directories are
+//! used (everything but config and cache under the data directory).
 
 use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
@@ -9,6 +10,8 @@ use std::io::{self, Read, Seek, Write};
 use std::path::{Path, PathBuf};
 
 use directories::ProjectDirs;
+
+use crate::users::{ProfileDirs, ProfileId};
 use nix::fcntl::{Flock, FlockArg};
 
 /// Environment variable that overrides every Hearth directory.
@@ -135,6 +138,9 @@ pub struct DataDirs {
     dolphin: PathBuf,
     runtime: PathBuf,
     packs: PathBuf,
+    profiles: PathBuf,
+    emulators: PathBuf,
+    backup: PathBuf,
 }
 
 impl DataDirs {
@@ -158,6 +164,9 @@ impl DataDirs {
                     dolphin: dirs.data_dir().join("dolphin"),
                     runtime: dirs.data_dir().join("runtime"),
                     packs: dirs.data_dir().join("packs"),
+                    profiles: dirs.data_dir().join("profiles"),
+                    emulators: dirs.data_dir().join("emulators"),
+                    backup: dirs.data_dir().join("backup"),
                 })
             }
         }
@@ -172,6 +181,9 @@ impl DataDirs {
             dolphin: root.join("dolphin"),
             runtime: root.join("runtime"),
             packs: root.join("packs"),
+            profiles: root.join("profiles"),
+            emulators: root.join("emulators"),
+            backup: root.join("backup"),
         }
     }
 
@@ -181,9 +193,9 @@ impl DataDirs {
             &self.config,
             &self.data,
             &self.cache,
-            &self.retroarch,
-            &self.dolphin,
             &self.runtime,
+            &self.profiles,
+            &self.emulators,
         ] {
             std::fs::create_dir_all(dir).map_err(|source| PathsError::Create {
                 path: dir.clone(),
@@ -208,14 +220,47 @@ impl DataDirs {
         &self.cache
     }
 
-    /// Hearth's isolated RetroArch profile (config, saves, states, logs).
-    pub fn retroarch(&self) -> &Path {
+    /// Where RetroArch's directory was before profiles (round D). Only the migration into
+    /// `profiles/default/` reads it.
+    pub fn legacy_retroarch(&self) -> &Path {
         &self.retroarch
     }
 
-    /// Hearth's isolated Dolphin user directory (config, saves, NAND, logs).
-    pub fn dolphin(&self) -> &Path {
+    /// Where Dolphin's user directory was before profiles (round D). Only the migration reads
+    /// it.
+    pub fn legacy_dolphin(&self) -> &Path {
         &self.dolphin
+    }
+
+    /// One folder per user profile (`crate::users`).
+    pub fn profiles(&self) -> &Path {
+        &self.profiles
+    }
+
+    /// Emulator files shared by every profile (BIOS, `retroarch/system`).
+    pub fn emulators(&self) -> &Path {
+        &self.emulators
+    }
+
+    /// Backups made before moving data (`backup/<timestamp>/`).
+    pub fn backup(&self) -> &Path {
+        &self.backup
+    }
+
+    /// The folders of profile `id`.
+    pub fn profile(&self, id: &ProfileId) -> ProfileDirs {
+        ProfileDirs::new(id.clone(), &self.profiles, &self.emulators)
+    }
+
+    /// Progress of the move into profiles (`crate::users::migrate`).
+    pub fn migration_marker(&self) -> PathBuf {
+        self.profiles.join("migration.toml")
+    }
+
+    /// Controls files shared by every profile: `device.toml` (names of this box's pads).
+    /// Before profiles, the user's controls files were here too.
+    pub fn shared_controls(&self) -> PathBuf {
+        self.config.join("controls")
     }
 
     /// Files generated for one run and read by other processes (InputPlumber profiles).
@@ -260,8 +305,15 @@ mod tests {
         assert_eq!(dirs.config(), Path::new("./.dev-data/config"));
         assert_eq!(dirs.data(), Path::new("./.dev-data/data"));
         assert_eq!(dirs.cache(), Path::new("./.dev-data/cache"));
-        assert_eq!(dirs.retroarch(), Path::new("./.dev-data/retroarch"));
-        assert_eq!(dirs.dolphin(), Path::new("./.dev-data/dolphin"));
+        assert_eq!(dirs.legacy_retroarch(), Path::new("./.dev-data/retroarch"));
+        assert_eq!(dirs.legacy_dolphin(), Path::new("./.dev-data/dolphin"));
+        assert_eq!(dirs.profiles(), Path::new("./.dev-data/profiles"));
+        assert_eq!(dirs.emulators(), Path::new("./.dev-data/emulators"));
+        assert_eq!(dirs.backup(), Path::new("./.dev-data/backup"));
+        assert_eq!(
+            dirs.migration_marker(),
+            Path::new("./.dev-data/profiles/migration.toml")
+        );
         assert_eq!(dirs.packs(), Path::new("./.dev-data/packs"));
         assert_eq!(dirs.art_cache(), Path::new("./.dev-data/cache/art"));
         assert_eq!(

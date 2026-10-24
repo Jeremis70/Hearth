@@ -344,8 +344,8 @@ fn main() -> anyhow::Result<()> {
         overlay,
         compositor,
         systems,
-        profile: RetroArchProfile::new(dirs.retroarch()),
-        dolphin: DolphinProfile::new(dirs.dolphin(), dolphin),
+        profile: RetroArchProfile::new(dirs.legacy_retroarch()),
+        dolphin: DolphinProfile::new(dirs.legacy_dolphin(), dolphin),
         controls_dir,
         runtime_dir: dirs.runtime().to_path_buf(),
         activity: input.activity.clone(),
@@ -505,7 +505,7 @@ fn print_controls(
         controls::PadTarget::Physical
     };
     let device = controls::device(&pads, controls_dir);
-    let retroarch = RetroArchProfile::new(dirs.retroarch());
+    let retroarch = RetroArchProfile::new(dirs.legacy_retroarch());
     let input = controls::game_input(system, game, kind, controls_dir, device, &retroarch, pad);
     print!("{}", input.describe(game));
     Ok(())

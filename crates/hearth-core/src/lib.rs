@@ -21,6 +21,7 @@ pub mod scan;
 pub mod session;
 pub mod systems;
 pub mod title;
+pub mod users;
 
 #[cfg(test)]
 pub(crate) mod testdir;

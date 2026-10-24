@@ -40,11 +40,23 @@ impl ThemeSource for LocalThemeFile {
 
 /// The local theme file of `rom`, if there is one.
 pub fn local_theme(rom: &Path) -> Option<PathBuf> {
-    let (dir, stem) = (rom.parent()?, rom.file_stem()?.to_string_lossy());
+    local_theme_candidates(rom).into_iter().find(|path| {
+        let found = path.is_file();
+        tracing::debug!(path = %path.display(), found, "theme lookup");
+        found
+    })
+}
+
+/// The files [`local_theme`] tries, in order.
+pub fn local_theme_candidates(rom: &Path) -> Vec<PathBuf> {
+    let (Some(dir), Some(stem)) = (rom.parent(), rom.file_stem()) else {
+        return Vec::new();
+    };
+    let stem = stem.to_string_lossy();
     THEME_EXTENSIONS
         .iter()
         .map(|ext| dir.join(format!("{stem}-theme.{ext}")))
-        .find(|path| path.is_file())
+        .collect()
 }
 
 /// Every source, first match wins.

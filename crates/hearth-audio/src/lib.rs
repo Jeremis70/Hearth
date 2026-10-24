@@ -89,7 +89,7 @@ impl Default for Volumes {
     fn default() -> Self {
         Self {
             ui: 80,
-            music: 50,
+            music: 70,
             mute: false,
         }
     }

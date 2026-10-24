@@ -431,7 +431,6 @@ pub fn install(setup: Setup) {
         setup.library_db.clone(),
         setup.art_provider,
         setup.display_settings.animated_art,
-        art_loader.clone(),
     );
     load_library(LibraryLoad {
         db: setup.library_db.clone(),
@@ -1691,7 +1690,7 @@ impl Controller {
         hero_position: f32,
         paths: hearth_core::art::GameArt,
     ) {
-        self.art_keys.insert(game.clone(), key);
+        self.art_keys.insert(game.clone(), key.clone());
         let art = self.art.entry(game.clone()).or_default();
         art.match_name = match_name;
         // While the hero is being positioned, the page's position wins.
@@ -1700,6 +1699,11 @@ impl Controller {
         if !positioning {
             art.hero_position = Some(hero_position);
         }
+        self.art_loader.submit(
+            game,
+            &key,
+            &anim::shown_art(&paths, self.display_settings.animates()),
+        );
         let old = self.art_paths.insert(game.clone(), paths);
         self.anim_art_changed(game, old.as_ref());
         if moved {
@@ -2294,6 +2298,15 @@ impl Controller {
         }
         self.fill_audio_rows();
         self.apply_motion();
+        // The stills follow: an animated asset's own still while it may play, the static
+        // image otherwise.
+        let animates = d.animates();
+        for (game, art) in &self.art_paths {
+            if let Some(key) = self.art_keys.get(game) {
+                self.art_loader
+                    .submit(game, key, &anim::shown_art(art, animates));
+            }
+        }
         self.anim_sync();
     }
 

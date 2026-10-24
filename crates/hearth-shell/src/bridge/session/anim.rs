@@ -29,6 +29,26 @@ const LATE_SPAN: Duration = Duration::from_secs(2);
 /// The kinds that animate on Home.
 const KINDS: [ArtKind; 2] = [ArtKind::Hero, ArtKind::Logo];
 
+/// The art Home and the Customize page show: with animation on, a hero or logo that has an
+/// animated version shows that version's own still (its first frame, a logo's most opaque),
+/// so the animation starts from the image already on screen; with it off (or Reduce motion),
+/// the static image.
+pub(super) fn shown_art(
+    art: &hearth_core::art::GameArt,
+    animates: bool,
+) -> hearth_core::art::GameArt {
+    let mut shown = art.clone();
+    if animates {
+        if let Some(hero) = &art.hero_animated {
+            shown.hero = Some(hero.clone());
+        }
+        if let Some(logo) = &art.logo_animated {
+            shown.logo = Some(logo.clone());
+        }
+    }
+    shown
+}
+
 /// One playing hero or logo.
 struct Track {
     info: Option<TrackInfo>,

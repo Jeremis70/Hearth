@@ -309,14 +309,14 @@ pub fn decode_fit(path: &Path, max_w: u32, max_h: u32) -> Option<SharedPixelBuff
     ))
 }
 
-/// Starts the art worker; its paths go to `loader`, match names to the session.
+/// Starts the art worker; its paths and match names go to the session (which hands the paths
+/// to the [`ArtLoader`]).
 pub fn start(
     cache: ArtCache,
     picks: CustomStore,
     library_db: PathBuf,
     provider: Option<Box<dyn MetadataProvider>>,
     animated: bool,
-    loader: ArtLoader,
 ) -> Option<ArtService> {
     let spawned =
         ArtService::spawn(
@@ -334,7 +334,8 @@ pub fn start(
                     hero_position,
                 } => {
                     super::startup::note("first art event");
-                    loader.submit(&game, &key, &art);
+                    // The session decides which of a still and its animated version Home
+                    // shows (Animated artwork, Reduce motion) and hands that to the loader.
                     defer(move |c| c.set_art_meta(&game, key, match_name, hero_position, art));
                 }
                 // The Customize page's answers.

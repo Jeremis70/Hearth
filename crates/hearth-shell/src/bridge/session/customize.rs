@@ -704,8 +704,8 @@ impl Controller {
         let Section::Art(kind) = state.section else {
             return None;
         };
-        self.art_paths
-            .get(&state.game.id)?
+        let art = self.art_paths.get(&state.game.id)?;
+        super::anim::shown_art(art, self.display_settings.animates())
             .get(kind)
             .map(Path::to_path_buf)
     }

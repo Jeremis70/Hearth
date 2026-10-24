@@ -46,6 +46,10 @@ const MIN_DELAY_MS: u32 = 20;
 const DEFAULT_DELAY_MS: u32 = 100;
 /// How many frames a logo's still is chosen from.
 const STILL_SCAN: usize = 300;
+/// Held while an `.anim` file is written: the art loader (for a still) and an animation
+/// thread may ask for the same file at once, and the second must wait for the first rather
+/// than decode it all again.
+static WRITING: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Animated image formats Hearth plays.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -517,6 +521,9 @@ impl ArtCache {
         class: DisplayClass,
         max_bytes: u64,
     ) -> Result<SizedAnim, ImageError> {
+        let _writing = WRITING
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let target = self.anim_path(key, kind, source, class);
         let too_large = target.with_extension("toolarge");
         let still = target.with_extension("still");
@@ -951,11 +958,12 @@ mod tests {
             .unwrap();
         assert!(a.ends_with("sized/1080p/logo.qoi"));
         assert!(b.ends_with("sized/1080p/logo-animated-still.qoi"));
-        assert!(
-            cache
-                .anim_path(&key(), ArtKind::Logo, &animated, class)
-                .ends_with("sized/1080p/logo-animated.anim")
-        );
+        let anim = cache.anim_path(&key(), ArtKind::Logo, &animated, class);
+        assert!(anim.ends_with("sized/1080p/logo-animated.anim"));
+        // Decoded once: making the still made the frames, and the still is their still frame.
+        let mut reader = AnimReader::open(&anim).unwrap();
+        let still = image::open(&b).unwrap().to_rgba8();
+        assert_eq!(still, reader.frame(reader.still_index()).unwrap());
     }
 
     #[test]

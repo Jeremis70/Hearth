@@ -140,8 +140,7 @@ impl ArtCache {
         if !super::cache::is_stale(&target, source) {
             return Ok(target);
         }
-        // An animated source's still: see `animation::still`.
-        let image = super::animation::still(source, kind)?;
+        let image = self.still_of(key, kind, source, class)?;
         let (w, h) = fit(image.width(), image.height(), class.bounds(kind));
         let image = if (w, h) == (image.width(), image.height()) {
             image
@@ -162,6 +161,29 @@ impl ArtCache {
             .save_with_format(&tmp, image::ImageFormat::Qoi)?;
         fs::rename(&tmp, &target)?;
         Ok(target)
+    }
+
+    /// What a display copy shows. An animated source is decoded once, into its `.anim` file
+    /// (`animation`), and its still is that file's still frame: the animation then starts
+    /// from exactly the image on screen, and the first play doesn't decode it all again.
+    /// Logos' frames are 1× Home's box there, half the still's usual 2×, which is what Home
+    /// draws at this class. If no `.anim` file can be made: `animation::still`.
+    fn still_of(
+        &self,
+        key: &ArtKey,
+        kind: ArtKind,
+        source: &Path,
+        class: DisplayClass,
+    ) -> Result<image::DynamicImage, image::ImageError> {
+        use super::animation::{AnimReader, SizedAnim};
+        if super::animation::probe(source).is_some()
+            && let Ok(SizedAnim::File(path)) = self.sized_anim(key, kind, source, class, u64::MAX)
+            && let Ok(mut reader) = AnimReader::open(&path)
+            && let Ok(frame) = reader.frame(reader.still_index())
+        {
+            return Ok(image::DynamicImage::ImageRgba8(frame));
+        }
+        super::animation::still(source, kind)
     }
 
     /// Deletes `key`'s display copies made for any class but `keep`.

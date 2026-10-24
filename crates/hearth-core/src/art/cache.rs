@@ -1,7 +1,9 @@
 //! The art cache on disk, local override files, and the pre-blurred hero.
 //!
 //! Layout: `<cache>/art/<art key>/{grid,hero,logo,icon}.<ext>` plus `hero-blur.png`
-//! (the blurred, downscaled hero behind Home's widgets: Slint has no backdrop blur).
+//! (the blurred, downscaled hero behind Home's widgets: Slint has no backdrop blur), and the
+//! automatic animated hero and logo beside their stills: `{hero,logo}-animated.<ext>`
+//! (`{kind}-animated.none` once looked up and none was taken).
 //!
 //! The game's own art (`crate::extras`: `grid`, `hero`, `logo`, `icon` in its game folder)
 //! always wins over the cache. A hero of its own gets its own blurred copy
@@ -34,6 +36,10 @@ pub struct GameArt {
     pub logo: Option<PathBuf>,
     /// Small icon.
     pub icon: Option<PathBuf>,
+    /// The hero's animated version, when there is one (`hero` is then its still).
+    pub hero_animated: Option<PathBuf>,
+    /// The logo's animated version, when there is one (`logo` is then its still).
+    pub logo_animated: Option<PathBuf>,
 }
 
 impl GameArt {
@@ -56,6 +62,15 @@ impl GameArt {
             ArtKind::Icon => &mut self.icon,
         };
         *slot = Some(path);
+    }
+
+    /// The animated version of `kind`, if any (heroes and logos only).
+    pub fn animated(&self, kind: ArtKind) -> Option<&Path> {
+        match kind {
+            ArtKind::Hero => self.hero_animated.as_deref(),
+            ArtKind::Logo => self.logo_animated.as_deref(),
+            ArtKind::Grid | ArtKind::Icon => None,
+        }
     }
 
     /// True if nothing is set.
@@ -90,6 +105,58 @@ impl ArtCache {
             .find(|path| path.is_file())
     }
 
+    /// The cached animated `kind` (hero or logo), if any.
+    pub fn cached_animated(&self, key: &ArtKey, kind: ArtKind) -> Option<PathBuf> {
+        let dir = self.dir(key);
+        EXTENSIONS
+            .iter()
+            .map(|ext| dir.join(format!("{}.{ext}", animated_stem(kind))))
+            .find(|path| path.is_file())
+    }
+
+    /// True once the animated `kind` was looked up: one is cached, or none was taken.
+    pub fn animated_looked_up(&self, key: &ArtKey, kind: ArtKind) -> bool {
+        self.cached_animated(key, kind).is_some() || self.no_animated_marker(key, kind).is_file()
+    }
+
+    /// Notes that `key` has no automatic animated `kind` (none exists, or none small enough),
+    /// so it isn't looked up again.
+    pub fn mark_no_animated(&self, key: &ArtKey, kind: ArtKind) -> io::Result<()> {
+        let path = self.no_animated_marker(key, kind);
+        fs::create_dir_all(self.dir(key))?;
+        fs::write(path, b"")
+    }
+
+    fn no_animated_marker(&self, key: &ArtKey, kind: ArtKind) -> PathBuf {
+        self.dir(key).join(format!("{}.none", animated_stem(kind)))
+    }
+
+    /// Stores a downloaded animated `kind` beside the still (see [`Self::store`]).
+    pub fn store_animated(
+        &self,
+        key: &ArtKey,
+        kind: ArtKind,
+        extension: &str,
+        bytes: &[u8],
+    ) -> io::Result<PathBuf> {
+        let path = self.store_as(key, animated_stem(kind), extension, bytes)?;
+        let _ = fs::remove_file(self.no_animated_marker(key, kind));
+        Ok(path)
+    }
+
+    /// Notes where the cached animated `kind` was downloaded from.
+    pub fn set_animated_source_url(&self, key: &ArtKey, kind: ArtKind, url: &str) {
+        let path = self.dir(key).join(format!("{}.url", animated_stem(kind)));
+        if let Err(err) = fs::write(&path, url) {
+            tracing::debug!(path = %path.display(), "can't note the art's source: {err}");
+        }
+    }
+
+    /// Where the cached animated `kind` was downloaded from, if noted.
+    pub fn animated_source_url(&self, key: &ArtKey, kind: ArtKind) -> Option<String> {
+        fs::read_to_string(self.dir(key).join(format!("{}.url", animated_stem(kind)))).ok()
+    }
+
     /// The blurred hero made from the cached hero.
     pub fn blurred_hero(&self, key: &ArtKey) -> PathBuf {
         self.dir(key).join("hero-blur.png")
@@ -108,13 +175,23 @@ impl ArtCache {
         extension: &str,
         bytes: &[u8],
     ) -> io::Result<PathBuf> {
+        self.store_as(key, kind.name(), extension, bytes)
+    }
+
+    fn store_as(
+        &self,
+        key: &ArtKey,
+        stem: &str,
+        extension: &str,
+        bytes: &[u8],
+    ) -> io::Result<PathBuf> {
         let dir = self.dir(key);
         fs::create_dir_all(&dir)?;
-        let path = dir.join(format!("{}.{extension}", kind.name()));
-        let tmp = dir.join(format!(".{}.{extension}.part", kind.name()));
+        let path = dir.join(format!("{stem}.{extension}"));
+        let tmp = dir.join(format!(".{stem}.{extension}.part"));
         fs::write(&tmp, bytes)?;
         for ext in EXTENSIONS.iter().filter(|e| **e != extension) {
-            let _ = fs::remove_file(dir.join(format!("{}.{ext}", kind.name())));
+            let _ = fs::remove_file(dir.join(format!("{stem}.{ext}")));
         }
         fs::rename(&tmp, &path)?;
         Ok(path)
@@ -158,14 +235,29 @@ impl ArtCache {
     /// The art to show: the game's own (`local`, from `crate::extras::Extras::art`) first,
     /// then the cache. Makes the blurred hero if it is missing or older than its hero (slow:
     /// call off the UI thread).
+    ///
+    /// A local hero or logo is animated when its content is (whatever its extension); it then
+    /// is both the still (made from it, see `animation::still`) and the animated version, and
+    /// the cache's animated one isn't used. Without a local one, the cache's still and
+    /// animated versions go together.
     pub fn resolve(&self, key: &ArtKey, local: &GameArt) -> GameArt {
         let mut art = GameArt::default();
         for kind in ArtKind::ALL {
-            let path = local
-                .get(kind)
-                .map(Path::to_path_buf)
-                .or_else(|| self.cached(key, kind));
-            if let Some(path) = path {
+            let local_path = local.get(kind).map(Path::to_path_buf);
+            let animated = match &local_path {
+                Some(path) => super::animation::probe(path).map(|_| path.clone()),
+                None => self.cached_animated(key, kind),
+            };
+            // Without a still of its own, the animated one gives the still.
+            let still = local_path
+                .or_else(|| self.cached(key, kind))
+                .or_else(|| animated.clone());
+            match kind {
+                ArtKind::Hero => art.hero_animated = animated,
+                ArtKind::Logo => art.logo_animated = animated,
+                ArtKind::Grid | ArtKind::Icon => {}
+            }
+            if let Some(path) = still {
                 art.set(kind, path);
             }
         }
@@ -183,6 +275,16 @@ impl ArtCache {
             art.hero_blur = blurred.is_file().then_some(blurred);
         }
         art
+    }
+}
+
+/// File name stem of the animated `kind` in the cache.
+fn animated_stem(kind: ArtKind) -> &'static str {
+    match kind {
+        ArtKind::Hero => "hero-animated",
+        ArtKind::Logo => "logo-animated",
+        ArtKind::Grid => "grid-animated",
+        ArtKind::Icon => "icon-animated",
     }
 }
 

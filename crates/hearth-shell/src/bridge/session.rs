@@ -419,6 +419,7 @@ pub fn install(setup: Setup) {
         setup.picks.clone(),
         setup.library_db.clone(),
         setup.art_provider,
+        true,
         art_loader.clone(),
     );
     load_library(LibraryLoad {

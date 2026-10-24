@@ -315,29 +315,32 @@ pub fn start(
     picks: CustomStore,
     library_db: PathBuf,
     provider: Option<Box<dyn MetadataProvider>>,
+    animated: bool,
     loader: ArtLoader,
 ) -> Option<ArtService> {
-    let spawned = ArtService::spawn(
-        cache,
-        picks,
-        library_db,
-        provider,
-        move |event| match event {
-            ArtEvent::Art {
-                game,
-                key,
-                art,
-                match_name,
-                hero_position,
-            } => {
-                super::startup::note("first art event");
-                loader.submit(&game, &key, &art);
-                defer(move |c| c.set_art_meta(&game, match_name, hero_position, art));
-            }
-            // The Customize page's answers.
-            other => defer(move |c| c.on_customize_event(other)),
-        },
-    );
+    let spawned =
+        ArtService::spawn(
+            cache,
+            picks,
+            library_db,
+            provider,
+            animated,
+            move |event| match event {
+                ArtEvent::Art {
+                    game,
+                    key,
+                    art,
+                    match_name,
+                    hero_position,
+                } => {
+                    super::startup::note("first art event");
+                    loader.submit(&game, &key, &art);
+                    defer(move |c| c.set_art_meta(&game, match_name, hero_position, art));
+                }
+                // The Customize page's answers.
+                other => defer(move |c| c.on_customize_event(other)),
+            },
+        );
     match spawned {
         Ok(service) => Some(service),
         Err(err) => {

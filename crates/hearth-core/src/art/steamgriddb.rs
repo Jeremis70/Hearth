@@ -1,8 +1,10 @@
 //! SteamGridDB (API v2) as a [`MetadataProvider`], over blocking `ureq`.
 //!
-//! Every image request asks for static, safe images only (`types=static`, `nsfw=false`,
-//! `humor=false`, `epilepsy=false`) in formats Hearth decodes, and takes the highest community
-//! score. The API is a handful of GETs with a bearer key, so no client crate is used.
+//! Every image request asks for safe images only (`nsfw=false`, `humor=false`,
+//! `epilepsy=false`) in formats Hearth decodes, and takes the highest community score. Static
+//! (`types=static`) and animated (`types=animated`, heroes and logos: animated WebP or APNG)
+//! images are separate requests. The API is a handful of GETs with a bearer key, so no client
+//! crate is used.
 
 use std::time::Duration;
 
@@ -113,16 +115,30 @@ impl SteamGridDb {
         kind: ArtKind,
         dimensions: Option<&str>,
     ) -> Result<Vec<Image>, ProviderError> {
+        self.images_of(id, kind, Types::Static, dimensions)
+    }
+
+    fn images_of(
+        &self,
+        id: u64,
+        kind: ArtKind,
+        types: Types,
+        dimensions: Option<&str>,
+    ) -> Result<Vec<Image>, ProviderError> {
         let collection = match kind {
             ArtKind::Grid => "grids",
             ArtKind::Hero => "heroes",
             ArtKind::Logo => "logos",
             ArtKind::Icon => "icons",
         };
+        let (types, mimes) = match types {
+            Types::Static => ("static", mimes(kind)),
+            Types::Animated => ("animated", ANIMATED_MIMES),
+        };
         let mut path = format!(
-            "/{collection}/game/{id}?types=static&nsfw=false&humor=false&epilepsy=false\
+            "/{collection}/game/{id}?types={types}&nsfw=false&humor=false&epilepsy=false\
              &mimes={}",
-            encode(mimes(kind))
+            encode(mimes)
         );
         if let Some(dimensions) = dimensions {
             path.push_str(&format!("&dimensions={}", encode(dimensions)));
@@ -164,6 +180,7 @@ impl MetadataProvider for SteamGridDb {
         Ok(best.map(|image| AssetRef {
             extension: extension(&image.mime, &image.url),
             url: image.url,
+            ..AssetRef::default()
         }))
     }
 
@@ -191,7 +208,71 @@ impl MetadataProvider for SteamGridDb {
         Ok(images.into_iter().map(asset).collect())
     }
 
+    fn animated_assets(&self, id: u64, kind: ArtKind) -> Result<Vec<Asset>, ProviderError> {
+        if !matches!(kind, ArtKind::Hero | ArtKind::Logo) {
+            return Ok(Vec::new());
+        }
+        let mut images = self.images_of(id, kind, Types::Animated, None)?;
+        // Like `assets`: heroes largest first, then the highest score.
+        let area = |i: &Image| {
+            if kind == ArtKind::Hero {
+                u64::from(i.width) * u64::from(i.height)
+            } else {
+                0
+            }
+        };
+        images.sort_by_key(|i| (std::cmp::Reverse(area(i)), std::cmp::Reverse(i.score)));
+        images.truncate(MAX_CANDIDATES);
+        Ok(images
+            .into_iter()
+            .map(|image| {
+                let mut asset = asset(image);
+                asset.full.animated = true;
+                asset.full.size = self.content_length(&asset.full.url);
+                // SteamGridDB's thumbs of animated images are videos (.webm), which Hearth
+                // doesn't decode: the image itself is its preview.
+                asset.thumb = asset.full.clone();
+                asset
+            })
+            .collect())
+    }
+
     fn download(&self, asset: &AssetRef) -> Result<Vec<u8>, ProviderError> {
+        self.download_at_most(asset, MAX_DOWNLOAD)?
+            .ok_or_else(|| ProviderError::Invalid("image larger than 30 MiB".into()))
+    }
+
+    fn download_limited(
+        &self,
+        asset: &AssetRef,
+        max: u64,
+    ) -> Result<Option<Vec<u8>>, ProviderError> {
+        self.download_at_most(asset, max.min(MAX_DOWNLOAD))
+    }
+}
+
+impl SteamGridDb {
+    /// The size of the file at `url` (a HEAD request), if the CDN says.
+    fn content_length(&self, url: &str) -> Option<u64> {
+        let response = self.agent.head(url).call().ok()?;
+        if response.status().as_u16() != 200 {
+            return None;
+        }
+        response
+            .headers()
+            .get("content-length")?
+            .to_str()
+            .ok()?
+            .parse()
+            .ok()
+    }
+
+    /// Downloads `asset`, or `Ok(None)` once it turns out larger than `max` bytes.
+    fn download_at_most(
+        &self,
+        asset: &AssetRef,
+        max: u64,
+    ) -> Result<Option<Vec<u8>>, ProviderError> {
         // Image URLs are on SteamGridDB's CDN: no key needed, so don't send it.
         let mut response = self
             .agent
@@ -205,14 +286,32 @@ impl MetadataProvider for SteamGridDb {
                 what: "image download".into(),
             });
         }
-        response
-            .body_mut()
-            .with_config()
-            .limit(MAX_DOWNLOAD)
-            .read_to_vec()
-            .map_err(|err| ProviderError::Network(err.to_string()))
+        let declared: Option<u64> = response
+            .headers()
+            .get("content-length")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse().ok());
+        if declared.is_some_and(|len| len > max) {
+            return Ok(None);
+        }
+        match response.body_mut().with_config().limit(max).read_to_vec() {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(ureq::Error::BodyExceedsLimit(_)) => Ok(None),
+            Err(err) => Err(ProviderError::Network(err.to_string())),
+        }
     }
 }
+
+/// Which images to ask for.
+#[derive(Debug, Clone, Copy)]
+enum Types {
+    Static,
+    Animated,
+}
+
+/// The formats to ask for with `types=animated` (heroes and logos): the API refuses GIF there
+/// (HTTP 400), and its WebM videos aren't decoded here.
+const ANIMATED_MIMES: &str = "image/png,image/webp";
 
 /// The formats to ask for: ones the `image` crate decodes here, among those the API accepts
 /// for each kind (any other value is an HTTP 400). Logos are PNG or WebP only; icons are PNG
@@ -282,10 +381,12 @@ fn asset(image: Image) -> Asset {
         thumb: AssetRef {
             extension: extension("", &thumb_url),
             url: thumb_url,
+            ..AssetRef::default()
         },
         full: AssetRef {
             extension: extension(&image.mime, &image.url),
             url: image.url,
+            ..AssetRef::default()
         },
         width: image.width,
         height: image.height,

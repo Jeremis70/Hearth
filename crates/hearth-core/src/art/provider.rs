@@ -48,12 +48,16 @@ pub struct CatalogGame {
 }
 
 /// One downloadable image.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AssetRef {
     /// Full-size image URL.
     pub url: String,
-    /// File extension for the cache (`png`, `jpg`, `webp`).
+    /// File extension for the cache (`png`, `jpg`, `webp`, `gif`).
     pub extension: String,
+    /// Listed as animated by the provider (its content is checked again once downloaded).
+    pub animated: bool,
+    /// Download size in bytes, when known before downloading.
+    pub size: Option<u64>,
 }
 
 /// One image a provider offers for a game, with a small preview of it.
@@ -113,8 +117,26 @@ pub trait MetadataProvider: Send {
     /// choose from).
     fn assets(&self, id: u64, kind: ArtKind) -> Result<Vec<Asset>, ProviderError>;
 
+    /// Every animated, safe image of `kind` for the game `id`, the best first, with its
+    /// download size when the provider can tell. Only heroes and logos animate; other kinds
+    /// (and providers without animated art) give none.
+    fn animated_assets(&self, _id: u64, _kind: ArtKind) -> Result<Vec<Asset>, ProviderError> {
+        Ok(Vec::new())
+    }
+
     /// Downloads an image.
     fn download(&self, asset: &AssetRef) -> Result<Vec<u8>, ProviderError>;
+
+    /// Downloads an image unless it is larger than `max` bytes (then `Ok(None)`, ideally
+    /// without downloading it all).
+    fn download_limited(
+        &self,
+        asset: &AssetRef,
+        max: u64,
+    ) -> Result<Option<Vec<u8>>, ProviderError> {
+        let bytes = self.download(asset)?;
+        Ok((bytes.len() as u64 <= max).then_some(bytes))
+    }
 }
 
 impl<T: MetadataProvider + Sync> MetadataProvider for std::sync::Arc<T> {
@@ -130,13 +152,31 @@ impl<T: MetadataProvider + Sync> MetadataProvider for std::sync::Arc<T> {
         (**self).assets(id, kind)
     }
 
+    fn animated_assets(&self, id: u64, kind: ArtKind) -> Result<Vec<Asset>, ProviderError> {
+        (**self).animated_assets(id, kind)
+    }
+
     fn download(&self, asset: &AssetRef) -> Result<Vec<u8>, ProviderError> {
         (**self).download(asset)
+    }
+
+    fn download_limited(
+        &self,
+        asset: &AssetRef,
+        max: u64,
+    ) -> Result<Option<Vec<u8>>, ProviderError> {
+        (**self).download_limited(asset, max)
     }
 }
 
 /// How many images [`MockMetadataProvider::fixtures`] offers per kind.
 pub const FIXTURE_ASSETS: u64 = 6;
+/// How many animated heroes and logos [`MockMetadataProvider::fixtures`] offers: the first an
+/// APNG, the second a GIF that claims [`FIXTURE_BIG`] bytes (bigger than any automatic
+/// download, so it downloads only when picked).
+pub const FIXTURE_ANIMATED: u64 = 2;
+/// The size the second animated fixture claims.
+pub const FIXTURE_BIG: u64 = 12_000_000;
 
 /// In-memory provider: never touches the network.
 ///
@@ -150,6 +190,7 @@ pub const FIXTURE_ASSETS: u64 = 6;
 pub struct MockMetadataProvider {
     fixtures: bool,
     offline: bool,
+    static_only: bool,
     games: Vec<(CatalogGame, Vec<ArtKind>)>,
     calls: Mutex<HashMap<&'static str, usize>>,
 }
@@ -166,6 +207,12 @@ impl MockMetadataProvider {
             fixtures: true,
             ..Self::default()
         }
+    }
+
+    /// Offers no animated images.
+    pub fn static_only(mut self) -> Self {
+        self.static_only = true;
+        self
     }
 
     /// Fails every call with a network error.
@@ -220,6 +267,18 @@ impl MockMetadataProvider {
         AssetRef {
             url: format!("{scheme}://{id}/{}/{n}", kind.name()),
             extension: "png".into(),
+            ..AssetRef::default()
+        }
+    }
+
+    /// Animated fixture `n` (see [`FIXTURE_ANIMATED`]). Its thumb is the image itself, like
+    /// SteamGridDB's (whose own animated thumbs are videos).
+    fn animated_ref(id: u64, kind: ArtKind, n: u64) -> AssetRef {
+        AssetRef {
+            url: format!("mock-anim://{id}/{}/{n}", kind.name()),
+            extension: if n == 0 { "png" } else { "gif" }.into(),
+            animated: true,
+            size: Some(if n == 0 { 400_000 } else { FIXTURE_BIG }),
         }
     }
 }
@@ -288,6 +347,26 @@ impl MetadataProvider for MockMetadataProvider {
             .collect())
     }
 
+    fn animated_assets(&self, id: u64, kind: ArtKind) -> Result<Vec<Asset>, ProviderError> {
+        self.count("animated_assets")?;
+        if !self.fixtures || self.static_only || !matches!(kind, ArtKind::Hero | ArtKind::Logo) {
+            return Ok(Vec::new());
+        }
+        let (width, height) = mock_size(kind, false);
+        Ok((0..FIXTURE_ANIMATED)
+            .map(|n| {
+                let full = Self::animated_ref(id, kind, n);
+                Asset {
+                    id: id * 100 + 50 + n,
+                    thumb: full.clone(),
+                    full,
+                    width,
+                    height,
+                }
+            })
+            .collect())
+    }
+
     fn download(&self, asset: &AssetRef) -> Result<Vec<u8>, ProviderError> {
         self.count("download")?;
         let invalid = || ProviderError::Invalid(asset.url.clone());
@@ -303,29 +382,58 @@ impl MetadataProvider for MockMetadataProvider {
             .bytes()
             .fold(0u8, |h, b| h.wrapping_mul(13).wrapping_add(b))
             .wrapping_add(u8::try_from(n * 40 % 256).unwrap_or(0));
+        if scheme == "mock-anim" {
+            return Ok(mock_animation(kind, n, seed));
+        }
         let (w, h) = mock_size(kind, scheme == "mock-thumb");
-        // A gradient with n + 1 bright bars: each image looks different, and a hero's bars
-        // show where it is cropped.
-        let bars = n + 1;
-        let image = image::RgbaImage::from_fn(w, h, |x, y| {
-            let t = u8::try_from(x * 255 / w).unwrap_or(255);
-            let alpha = if kind == ArtKind::Logo && (y < h / 6 || y > h - h / 6) {
-                0
-            } else {
-                255
-            };
-            let bar = (x * (2 * bars + 1) / w) % 2 == 1 && y > h / 3 && y < h * 2 / 3;
-            if bar {
-                image::Rgba([255, 255, 255, alpha])
-            } else {
-                image::Rgba([seed, t, 255 - seed / 2, alpha])
-            }
-        });
+        let image = mock_image(kind, w, h, n + 1, seed, 0);
         let mut png = Vec::new();
         image
             .write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
             .map_err(|err| ProviderError::Invalid(err.to_string()))?;
         Ok(png)
+    }
+}
+
+/// A gradient with `bars` bright bars, shifted right by `shift` pixels: each image looks
+/// different, and a hero's bars show where it is cropped. Logos have transparent bands.
+fn mock_image(kind: ArtKind, w: u32, h: u32, bars: u32, seed: u8, shift: u32) -> image::RgbaImage {
+    image::RgbaImage::from_fn(w, h, |x, y| {
+        let t = u8::try_from(x * 255 / w).unwrap_or(255);
+        let alpha = if kind == ArtKind::Logo && (y < h / 6 || y > h - h / 6) {
+            0
+        } else {
+            255
+        };
+        let bar = ((x + w - shift % w) * (2 * bars + 1) / w) % 2 == 1 && y > h / 3 && y < h * 2 / 3;
+        if bar {
+            image::Rgba([255, 255, 255, alpha])
+        } else {
+            image::Rgba([seed, t, 255 - seed / 2, alpha])
+        }
+    })
+}
+
+/// Animated fixture `n`: 12 frames of bars sliding right at 80 ms (an APNG for `n` = 0, a GIF
+/// otherwise). Logos fade in over their first frames, so the still must be a later one.
+fn mock_animation(kind: ArtKind, n: u32, seed: u8) -> Vec<u8> {
+    const FRAMES: u32 = 12;
+    let (w, h) = mock_size(kind, false);
+    let frames: Vec<image::RgbaImage> = (0..FRAMES)
+        .map(|i| {
+            let mut frame = mock_image(kind, w, h, 3, seed, w * i / FRAMES);
+            if kind == ArtKind::Logo && i < 4 {
+                for pixel in frame.pixels_mut() {
+                    pixel[3] = u8::try_from(u32::from(pixel[3]) * i / 4).unwrap_or(0);
+                }
+            }
+            frame
+        })
+        .collect();
+    if n == 0 {
+        super::animation::samples::apng_from(&frames, 80)
+    } else {
+        super::animation::samples::gif_from(frames, 80)
     }
 }
 

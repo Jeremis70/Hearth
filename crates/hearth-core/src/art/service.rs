@@ -13,6 +13,13 @@
 //! A matched game whose cached files went missing downloads just those again, without a new
 //! search.
 //!
+//! With animated art on ([`ArtService::set_animated`]), a matched game also gets the best
+//! animated hero and logo beside their stills (one more lookup each, same queue and backoff):
+//! logos up to the usual download limit, heroes only under [`AUTO_ANIMATED_HERO_MAX`] (bigger
+//! ones stay among the Customize page's candidates and download when picked). A kind looked
+//! up once isn't looked up again, whether one was taken or not; turning animation off never
+//! deletes them, so turning it back on needs no download.
+//!
 //! The worker also serves the Customize page ([`customize`]): candidates to choose from,
 //! applying a choice, matching another game, and every change to the user's picks (so writes
 //! to a game's `custom.toml` never race).
@@ -33,6 +40,13 @@ use crate::model::{Game, GameId};
 
 /// How often the queue is looked at while Hearth runs.
 pub const QUEUE_CHECK: Duration = Duration::from_secs(60);
+/// The largest animated hero downloaded without being picked (10 MB). Animated heroes run
+/// from ~0.2 MB to ~30 MB on SteamGridDB.
+pub const AUTO_ANIMATED_HERO_MAX: u64 = 10_000_000;
+/// The largest animated logo downloaded without being picked (the provider's own cap).
+pub const AUTO_ANIMATED_LOGO_MAX: u64 = 30 * 1024 * 1024;
+/// The kinds that animate.
+pub const ANIMATED_KINDS: [ArtKind; 2] = [ArtKind::Hero, ArtKind::Logo];
 
 mod customize;
 
@@ -104,6 +118,7 @@ enum Command {
     HeroPosition(ArtKey, f32),
     ThemeStart(ArtKey, f32),
     RemoveTheme(ArtKey),
+    Animated(bool),
     /// Thumbnails left over from a list (resumed when nothing else waits).
     Thumbs(customize::ThumbWork),
 }
@@ -117,12 +132,13 @@ pub struct ArtService {
 
 impl ArtService {
     /// Starts the worker. Without a `provider` (no API key) only local and cached art is
-    /// shown.
+    /// shown. `animated`: whether animated heroes and logos are fetched too.
     pub fn spawn(
         cache: ArtCache,
         picks: CustomStore,
         library_db: PathBuf,
         provider: Option<Box<dyn MetadataProvider>>,
+        animated: bool,
         events: impl Fn(ArtEvent) + Send + 'static,
     ) -> std::io::Result<Self> {
         let (tx, rx) = mpsc::channel();
@@ -137,6 +153,7 @@ impl ArtService {
                     }
                 };
                 let mut worker = Worker::new(cache, picks, library, provider, Box::new(events));
+                worker.animated = animated;
                 worker.inbox = Some(rx);
                 loop {
                     match worker.next_command() {
@@ -197,6 +214,12 @@ impl ArtService {
         self.send(Command::RemoveTheme(key));
     }
 
+    /// Whether animated heroes and logos are fetched (and offered first). Turning it on
+    /// fetches the ones never looked up.
+    pub fn set_animated(&self, on: bool) {
+        self.send(Command::Animated(on));
+    }
+
     fn send(&self, command: Command) {
         if self.tx.send(command).is_err() {
             tracing::warn!("the art worker has stopped");
@@ -232,17 +255,21 @@ struct Worker {
     listed: HashMap<(ArtKey, ArtKind), (Vec<super::provider::Asset>, Availability)>,
     /// Thumbnails put off for a request that came in meanwhile.
     backlog: Option<customize::ThumbWork>,
+    /// Fetch animated heroes and logos too.
+    animated: bool,
 }
 
 /// What to fetch for one key.
 enum Job {
     /// Never looked up: search, then download everything.
     Full,
-    /// Matched before; these kinds are missing from the cache.
+    /// Matched before; these kinds are missing from the cache, and these animated kinds were
+    /// never looked up.
     Missing {
         sgdb_id: u64,
         sgdb_name: String,
         kinds: Vec<ArtKind>,
+        animated: Vec<ArtKind>,
     },
 }
 
@@ -268,6 +295,7 @@ impl Worker {
             net: customize::NetBackoff::default(),
             listed: HashMap::new(),
             backlog: None,
+            animated: true,
         }
     }
 
@@ -330,6 +358,34 @@ impl Worker {
                 let done = self.picks.remove_theme(&key).map(drop);
                 self.changed(&key, done, "Couldn't remove the theme");
             }
+            Command::Animated(on) => self.set_animated(on),
+        }
+    }
+
+    fn set_animated(&mut self, on: bool) {
+        if self.animated == on {
+            return;
+        }
+        self.animated = on;
+        // The Customize page's lists put animated images first only while it's on.
+        let listed: Vec<(ArtKey, ArtKind)> = self.listed.keys().cloned().collect();
+        for (key, kind) in listed {
+            self.send_art_list(&key, kind);
+        }
+        if !on || self.provider.is_none() {
+            return;
+        }
+        let mut keys: Vec<ArtKey> = self.games.keys().cloned().collect();
+        keys.sort();
+        let jobs: Vec<(ArtKey, Job)> = keys
+            .into_iter()
+            .filter_map(|key| {
+                let status = self.library.art_status(&key).ok().flatten();
+                self.job_for(&key, status).map(|job| (key, job))
+            })
+            .collect();
+        if !jobs.is_empty() {
+            self.run(jobs);
         }
     }
 
@@ -454,13 +510,26 @@ impl Worker {
                     .into_iter()
                     .filter(|kind| self.cache.cached(key, *kind).is_none())
                     .collect();
-                (!missing.is_empty()).then_some(Job::Missing {
+                let animated = self.animated_to_look_up(key);
+                (!missing.is_empty() || !animated.is_empty()).then_some(Job::Missing {
                     sgdb_id,
                     sgdb_name,
                     kinds: missing,
+                    animated,
                 })
             }
         }
+    }
+
+    /// The animated kinds `key` still needs looked up (none while animation is off).
+    fn animated_to_look_up(&self, key: &ArtKey) -> Vec<ArtKind> {
+        if !self.animated {
+            return Vec::new();
+        }
+        ANIMATED_KINDS
+            .into_iter()
+            .filter(|kind| !self.cache.animated_looked_up(key, *kind))
+            .collect()
     }
 
     fn run(&mut self, jobs: Vec<(ArtKey, Job)>) {
@@ -520,12 +589,13 @@ impl Worker {
         let Some(known) = self.games.get(key) else {
             return Err(FetchError::Unknown);
         };
-        let (sgdb_id, sgdb_name, kinds) = match job {
+        let (sgdb_id, sgdb_name, kinds, animated) = match job {
             Job::Missing {
                 sgdb_id,
                 sgdb_name,
                 kinds,
-            } => (sgdb_id, sgdb_name, kinds),
+                animated,
+            } => (sgdb_id, sgdb_name, kinds, animated),
             Job::Full => {
                 let mut found = None;
                 let mut considered = Vec::new();
@@ -554,7 +624,12 @@ impl Worker {
                     return Ok(ArtStatus::NoMatch);
                 };
                 tracing::info!(%key, id = hit.id, name = %hit.name, "matched on SteamGridDB");
-                (hit.id, hit.name, ArtKind::ALL.to_vec())
+                (
+                    hit.id,
+                    hit.name,
+                    ArtKind::ALL.to_vec(),
+                    self.animated_to_look_up(key),
+                )
             }
         };
         // Look up every kind first and save the match with the kinds that exist, so a failed
@@ -599,7 +674,79 @@ impl Worker {
                 self.cache.set_source_url(key, kind, &asset.url);
             }
         }
+        for kind in animated {
+            self.fetch_animated(provider, key, sgdb_id, kind)?;
+        }
         Ok(status)
+    }
+
+    /// Looks up and downloads the automatic animated `kind`: the best one small enough
+    /// ([`AUTO_ANIMATED_HERO_MAX`], [`AUTO_ANIMATED_LOGO_MAX`]) whose content really
+    /// animates. Remembers when there is none.
+    fn fetch_animated(
+        &self,
+        provider: &dyn MetadataProvider,
+        key: &ArtKey,
+        sgdb_id: u64,
+        kind: ArtKind,
+    ) -> Result<(), FetchError> {
+        let max = if kind == ArtKind::Hero {
+            AUTO_ANIMATED_HERO_MAX
+        } else {
+            AUTO_ANIMATED_LOGO_MAX
+        };
+        let assets = match provider.animated_assets(sgdb_id, kind) {
+            Ok(assets) => assets,
+            Err(err) if err.is_permanent() => {
+                tracing::warn!(%key, kind = kind.name(), "skipping animated art: {err}");
+                Vec::new()
+            }
+            Err(err) => return Err(err.into()),
+        };
+        // Unknown sizes are tried too: the download stops at `max`.
+        for asset in assets
+            .iter()
+            .filter(|a| a.full.size.is_none_or(|s| s <= max))
+        {
+            let Some(bytes) = provider.download_limited(&asset.full, max)? else {
+                continue;
+            };
+            let Some(format) = super::animation::probe_bytes(&bytes) else {
+                tracing::info!(%key, kind = kind.name(), id = asset.id, "listed as animated, isn't");
+                continue;
+            };
+            match self
+                .cache
+                .store_animated(key, kind, format.extension(), &bytes)
+            {
+                Ok(_) => {
+                    self.cache
+                        .set_animated_source_url(key, kind, &asset.full.url);
+                    tracing::info!(
+                        %key,
+                        kind = kind.name(),
+                        id = asset.id,
+                        bytes = bytes.len(),
+                        format = format.name(),
+                        "animated art cached"
+                    );
+                }
+                Err(err) => {
+                    tracing::warn!("can't cache the animated {} of {key}: {err}", kind.name());
+                }
+            }
+            return Ok(());
+        }
+        tracing::info!(
+            %key,
+            kind = kind.name(),
+            listed = assets.len(),
+            "no animated art small enough to take automatically"
+        );
+        if let Err(err) = self.cache.mark_no_animated(key, kind) {
+            tracing::warn!("can't note the animated {} of {key}: {err}", kind.name());
+        }
+        Ok(())
     }
 
     /// Sends the art on disk for every game with `key`.
@@ -844,6 +991,116 @@ mod tests {
         assert_eq!(last_art(&events, "oot").0, oot_art(&s));
         assert_eq!(provider.calls("search") + provider.calls("best_asset"), 0);
         assert!(worker.library.art_queue().unwrap().is_empty());
+    }
+
+    /// Like the fixtures, but the animated images come biggest first.
+    struct BigFirst(MockMetadataProvider);
+    impl MetadataProvider for BigFirst {
+        fn search(&self, name: &str) -> Result<Vec<super::super::CatalogGame>, ProviderError> {
+            self.0.search(name)
+        }
+        fn best_asset(
+            &self,
+            id: u64,
+            kind: ArtKind,
+        ) -> Result<Option<super::super::AssetRef>, ProviderError> {
+            self.0.best_asset(id, kind)
+        }
+        fn assets(
+            &self,
+            id: u64,
+            kind: ArtKind,
+        ) -> Result<Vec<super::super::Asset>, ProviderError> {
+            self.0.assets(id, kind)
+        }
+        fn animated_assets(
+            &self,
+            id: u64,
+            kind: ArtKind,
+        ) -> Result<Vec<super::super::Asset>, ProviderError> {
+            let mut list = self.0.animated_assets(id, kind)?;
+            list.reverse();
+            Ok(list)
+        }
+        fn download(&self, asset: &super::super::AssetRef) -> Result<Vec<u8>, ProviderError> {
+            self.0.download(asset)
+        }
+    }
+
+    #[test]
+    fn animated_heroes_and_logos_come_beside_their_stills_and_are_looked_up_once() {
+        let s = setup();
+        let (_, events) = load(&s, Some(Arc::new(MockMetadataProvider::fixtures())));
+        let (tp, _) = last_art(&events, "tp");
+        let hero = tp.hero_animated.clone().unwrap();
+        assert!(hero.ends_with("gc/GZ2E01/hero-animated.png"));
+        assert_eq!(
+            super::super::animation::probe(&hero),
+            Some(super::super::AnimFormat::Apng)
+        );
+        assert!(
+            tp.hero.as_ref().unwrap().ends_with("gc/GZ2E01/hero.png"),
+            "the still stays"
+        );
+        assert!(tp.logo_animated.is_some());
+        assert_eq!(tp.animated(ArtKind::Grid), None);
+
+        let again = Arc::new(MockMetadataProvider::fixtures());
+        load(&s, Some(again.clone()));
+        assert_eq!(again.calls("animated_assets"), 0);
+    }
+
+    #[test]
+    fn animated_art_waits_until_turned_on() {
+        let s = setup();
+        let provider = Arc::new(MockMetadataProvider::fixtures());
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let sink = events.clone();
+        let mut worker = Worker::new(
+            s.cache.clone(),
+            s.picks.clone(),
+            Library::open(&s.db).unwrap(),
+            Some(Box::new(provider.clone())),
+            Box::new(move |e| sink.lock().unwrap().push(e)),
+        );
+        worker.animated = false;
+        worker.load(s.games.clone());
+        assert_eq!(provider.calls("animated_assets"), 0);
+        assert!(
+            last_art(&events.lock().unwrap(), "tp")
+                .0
+                .hero_animated
+                .is_none()
+        );
+
+        worker.handle(Command::Animated(true));
+        assert!(provider.calls("animated_assets") > 0);
+        assert!(
+            last_art(&events.lock().unwrap(), "tp")
+                .0
+                .hero_animated
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn heroes_too_big_to_take_automatically_are_skipped_without_downloading() {
+        let s = setup();
+        let provider = BigFirst(MockMetadataProvider::fixtures());
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let sink = events.clone();
+        let mut worker = Worker::new(
+            s.cache.clone(),
+            s.picks.clone(),
+            Library::open(&s.db).unwrap(),
+            Some(Box::new(provider)),
+            Box::new(move |e| sink.lock().unwrap().push(e)),
+        );
+        worker.load(s.games.clone());
+        let key = ArtKey::from_stored("gc/GZ2E01");
+        let url = s.cache.animated_source_url(&key, ArtKind::Hero).unwrap();
+        assert!(url.ends_with("/hero/0"), "the small one: {url}");
+        assert!(s.cache.cached_animated(&key, ArtKind::Hero).is_some());
     }
 
     #[test]

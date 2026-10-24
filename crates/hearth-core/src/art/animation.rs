@@ -623,38 +623,59 @@ pub mod samples {
 
     /// A GIF of [`frames`], `delay_ms` per frame, looping.
     pub fn gif(w: u32, h: u32, n: u32, delay_ms: u32) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        {
-            let mut encoder = image::codecs::gif::GifEncoder::new(&mut bytes);
-            let _ = encoder.set_repeat(image::codecs::gif::Repeat::Infinite);
-            let delay = Delay::from_numer_denom_ms(delay_ms, 1);
-            let _ = encoder.encode_frames(
-                frames(w, h, n)
-                    .into_iter()
-                    .map(|f| Frame::from_parts(f, 0, 0, delay)),
-            );
-        }
-        bytes
+        gif_from(frames(w, h, n), delay_ms)
     }
 
     /// An APNG of [`frames`], `delay_ms` per frame, looping.
     pub fn apng(w: u32, h: u32, n: u32, delay_ms: u32) -> Vec<u8> {
+        apng_from(&frames(w, h, n), delay_ms)
+    }
+
+    /// A looping GIF of `frames`, `delay_ms` each (empty if encoding fails).
+    pub fn gif_from(frames: Vec<RgbaImage>, delay_ms: u32) -> Vec<u8> {
         let mut bytes = Vec::new();
         {
-            let mut encoder = png::Encoder::new(Cursor::new(&mut bytes), w, h);
+            let mut encoder = image::codecs::gif::GifEncoder::new_with_speed(&mut bytes, 30);
+            let delay = Delay::from_numer_denom_ms(delay_ms, 1);
+            let encoded = encoder
+                .set_repeat(image::codecs::gif::Repeat::Infinite)
+                .and_then(|()| {
+                    encoder.encode_frames(
+                        frames
+                            .into_iter()
+                            .map(|f| Frame::from_parts(f, 0, 0, delay)),
+                    )
+                });
+            if encoded.is_err() {
+                return Vec::new();
+            }
+        }
+        bytes
+    }
+
+    /// A looping APNG of `frames` (all the same size), `delay_ms` each (empty if encoding
+    /// fails).
+    pub fn apng_from(frames: &[RgbaImage], delay_ms: u32) -> Vec<u8> {
+        let Some(first) = frames.first() else {
+            return Vec::new();
+        };
+        let mut bytes = Vec::new();
+        let encoded = (|| -> Result<(), png::EncodingError> {
+            let mut encoder =
+                png::Encoder::new(Cursor::new(&mut bytes), first.width(), first.height());
             encoder.set_color(png::ColorType::Rgba);
             encoder.set_depth(png::BitDepth::Eight);
-            let _ = encoder.set_animated(n, 0);
-            let _ = encoder.set_frame_delay(u16::try_from(delay_ms).unwrap_or(100), 1000);
-            let Ok(mut writer) = encoder.write_header() else {
-                return Vec::new();
-            };
-            for frame in frames(w, h, n) {
-                if writer.write_image_data(frame.as_raw()).is_err() {
-                    return Vec::new();
-                }
+            encoder.set_compression(png::Compression::Fast);
+            encoder.set_animated(u32::try_from(frames.len()).unwrap_or(1), 0)?;
+            encoder.set_frame_delay(u16::try_from(delay_ms).unwrap_or(100), 1000)?;
+            let mut writer = encoder.write_header()?;
+            for frame in frames {
+                writer.write_image_data(frame.as_raw())?;
             }
-            let _ = writer.finish();
+            writer.finish()
+        })();
+        if encoded.is_err() {
+            return Vec::new();
         }
         bytes
     }

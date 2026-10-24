@@ -4,13 +4,15 @@
 //! `cargo run -p hearth-core --example art_probe -- "<name>"`
 //! `cargo run -p hearth-core --example art_probe -- --rom <system> <path>`
 //! `cargo run -p hearth-core --example art_probe -- --candidates <system> <path>`: what the
-//! Customize page would list ("Wrong game?" games, then the match's heroes).
+//! Customize page would list ("Wrong game?" games, the match's heroes, then its animated heroes
+//! and logos with their sizes and whether Hearth would take them automatically).
 //!
 //! The key comes from HEARTH_STEAMGRIDDB_KEY, else `<HEARTH_HOME or XDG config>/hearth.toml`.
 
 use std::path::Path;
 
 use hearth_core::art::identity::{identify, pick_match};
+use hearth_core::art::service::{AUTO_ANIMATED_HERO_MAX, AUTO_ANIMATED_LOGO_MAX};
 use hearth_core::art::{ArtKind, MetadataProvider, SteamGridDb};
 use hearth_core::config::{Config, STEAMGRIDDB_KEY_ENV};
 use hearth_core::model::SystemId;
@@ -118,6 +120,41 @@ fn list_candidates(
             f64::from(hero.width) / f64::from(hero.height.max(1)),
             hero.thumb.extension
         );
+    }
+    for kind in [ArtKind::Hero, ArtKind::Logo] {
+        let max = if kind == ArtKind::Hero {
+            AUTO_ANIMATED_HERO_MAX
+        } else {
+            AUTO_ANIMATED_LOGO_MAX
+        };
+        let animated = provider.animated_assets(hit.id, kind)?;
+        let under = animated
+            .iter()
+            .filter(|a| a.full.size.is_some_and(|s| s <= max))
+            .count();
+        println!(
+            "animated {}: {} ({under} under the automatic limit of {:.1} MB)",
+            if kind == ArtKind::Hero {
+                "heroes"
+            } else {
+                "logos"
+            },
+            animated.len(),
+            max as f64 / 1e6
+        );
+        for a in &animated {
+            println!(
+                "  {} {}x{} {} .{}",
+                a.id,
+                a.width,
+                a.height,
+                a.full.size.map_or("size unknown".into(), |s| format!(
+                    "{:.1} MB",
+                    s as f64 / 1e6
+                )),
+                a.full.extension
+            );
+        }
     }
     Ok(())
 }

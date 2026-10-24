@@ -8,6 +8,10 @@
 //! Cache, next to the game's art: `<cache>/art/<key>/candidates/<kind>.json` (the list) and
 //! `candidates/<kind>/<asset id>.<ext>` (thumbs); `candidates/games/<sgdb id>.<ext>` for
 //! "Wrong game?" (the game list itself is in the library).
+//!
+//! Heroes and logos list animated images too (first while animated art is on). Their
+//! "thumb" is the image itself (SteamGridDB's are videos), fetched only up to
+//! [`THUMB_ANIMATED_MAX`]; a bigger one shows no preview until it is picked.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -23,6 +27,8 @@ use crate::library::{ArtCandidate, ArtStatus, art_retry_delay};
 
 /// How many games "Wrong game?" offers.
 const MAX_GAMES: usize = 8;
+/// The largest animated image fetched as its own preview.
+pub const THUMB_ANIMATED_MAX: u64 = super::AUTO_ANIMATED_HERO_MAX;
 
 /// Which list of candidates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -51,10 +57,14 @@ pub struct Candidate {
     pub name: String,
     /// Games: the search that found it.
     pub detail: String,
-    /// The thumbnail, once cached.
+    /// The thumbnail, once cached (for an animated image, the image itself).
     pub thumb: Option<PathBuf>,
     /// What is used now.
     pub current: bool,
+    /// An animated image.
+    pub animated: bool,
+    /// Its download size, when known (shown for animated images too big to preview).
+    pub size: Option<u64>,
 }
 
 /// Whether a list came fresh from SteamGridDB, or why not.
@@ -125,6 +135,10 @@ struct Cached {
     thumb_extension: String,
     width: u32,
     height: u32,
+    #[serde(default)]
+    animated: bool,
+    #[serde(default)]
+    size: Option<u64>,
 }
 
 impl From<&Asset> for Cached {
@@ -137,6 +151,8 @@ impl From<&Asset> for Cached {
             thumb_extension: a.thumb.extension.clone(),
             width: a.width,
             height: a.height,
+            animated: a.full.animated,
+            size: a.full.size,
         }
     }
 }
@@ -148,10 +164,14 @@ impl From<Cached> for Asset {
             full: AssetRef {
                 url: c.url,
                 extension: c.extension,
+                animated: c.animated,
+                size: c.size,
             },
             thumb: AssetRef {
                 url: c.thumb,
                 extension: c.thumb_extension,
+                animated: c.animated,
+                size: c.size,
             },
             width: c.width,
             height: c.height,
@@ -261,7 +281,7 @@ impl Worker {
             .unwrap_or_default();
         let (assets, availability) = match self.may_call() {
             Err(blocked) => (cached, blocked.into()),
-            Ok(()) => match self.provider_assets(sgdb_id, kind) {
+            Ok(()) => match self.provider_art_list(sgdb_id, kind) {
                 Ok(fresh) => {
                     self.net.succeeded();
                     self.save_list(key, kind, &fresh);
@@ -275,13 +295,22 @@ impl Worker {
         self.send_art_list(key, kind);
         let set = CandidateSet::Art(kind);
         if availability == Availability::Live {
-            let missing: Vec<(u64, AssetRef)> = assets
+            let missing: Vec<(u64, AssetRef)> = self
+                .ordered(assets)
                 .into_iter()
+                .filter(|a| a.thumb.size.is_none_or(|s| s <= THUMB_ANIMATED_MAX))
                 .filter(|a| self.cached_thumb(key, set, a.id).is_none())
                 .map(|a| (a.id, a.thumb))
                 .collect();
             self.fetch_thumbs(key, set, missing);
         }
+    }
+
+    /// `assets` in the order they're offered: animated ones first while animated art is on,
+    /// last otherwise (each group in the provider's order).
+    fn ordered(&self, mut assets: Vec<Asset>) -> Vec<Asset> {
+        assets.sort_by_key(|a| a.full.animated != self.animated);
+        assets
     }
 
     /// Sends the images listed last for `key`'s `kind`, marking the one in use: the picked
@@ -293,8 +322,15 @@ impl Worker {
         };
         let custom = self.picks.load(key);
         let entry = custom.entry(Extra::Art(kind));
-        let auto_url = self.cache.source_url(key, kind);
-        let items = assets
+        // The automatic one in use: the animated one while animated art is on and there is one.
+        let auto_url = self
+            .animated
+            .then(|| self.cache.animated_source_url(key, kind))
+            .flatten()
+            .filter(|_| self.cache.cached_animated(key, kind).is_some())
+            .or_else(|| self.cache.source_url(key, kind));
+        let items = self
+            .ordered(assets.clone())
             .iter()
             .map(|a| Candidate {
                 id: a.id,
@@ -310,6 +346,8 @@ impl Worker {
                     Some(Source::File | Source::None) => false,
                     None => auto_url.as_deref() == Some(a.full.url.as_str()),
                 },
+                animated: a.full.animated,
+                size: a.full.size,
             })
             .collect();
         self.send_list(key, CandidateSet::Art(kind), items, *availability);
@@ -328,6 +366,25 @@ impl Worker {
             Some(provider) => provider.assets(sgdb_id, kind),
             None => Ok(Vec::new()),
         }
+    }
+
+    /// The images of `kind` to choose from: animated ones (heroes and logos), then static.
+    /// Both are listed whatever the setting, so turning it on or off needs no new request.
+    fn provider_art_list(&self, sgdb_id: u64, kind: ArtKind) -> Result<Vec<Asset>, ProviderError> {
+        let Some(provider) = self.provider.as_deref() else {
+            return Ok(Vec::new());
+        };
+        let mut list = match provider.animated_assets(sgdb_id, kind) {
+            Ok(list) => list,
+            // Static images still help when the animated request alone is refused.
+            Err(err) if err.is_permanent() => {
+                tracing::warn!(kind = kind.name(), "no animated candidates: {err}");
+                Vec::new()
+            }
+            Err(err) => return Err(err),
+        };
+        list.extend(provider.assets(sgdb_id, kind)?);
+        Ok(list)
     }
 
     fn save_list(&self, key: &ArtKey, kind: ArtKind, assets: &[Asset]) {
@@ -381,6 +438,8 @@ impl Worker {
                 detail: c.query.clone(),
                 thumb: self.cached_thumb(key, set, c.sgdb_id),
                 current: matched == Some(c.sgdb_id),
+                animated: false,
+                size: None,
             })
             .collect();
         self.send_list(key, set, items.clone(), availability);
@@ -446,16 +505,24 @@ impl Worker {
             let Some(provider) = self.provider.as_deref() else {
                 return;
             };
-            let bytes = match provider.download(&thumb) {
-                Ok(bytes) if image::guess_format(&bytes).is_ok() => bytes,
+            let fetched = if thumb.animated {
+                provider.download_limited(&thumb, THUMB_ANIMATED_MAX)
+            } else {
+                provider.download(&thumb).map(Some)
+            };
+            let bytes = match fetched {
+                Ok(Some(bytes)) if image::guess_format(&bytes).is_ok() => bytes,
                 Ok(_) => continue,
                 Err(err) => {
                     self.call_failed(&err);
                     return;
                 }
             };
+            // An animated preview is named by what it is (`.png` APNG, `.webp`, `.gif`).
+            let extension = crate::art::animation::probe_bytes(&bytes)
+                .map_or(thumb.extension.as_str(), |f| f.extension());
             let dir = self.thumb_dir(key, set);
-            let path = dir.join(format!("{id}.{}", thumb.extension));
+            let path = dir.join(format!("{id}.{extension}"));
             let stored = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&path, bytes));
             match stored {
                 Ok(()) => (self.events)(ArtEvent::Thumb {
@@ -500,8 +567,14 @@ impl Worker {
             );
             return;
         };
-        let downloaded = match (self.may_call(), self.provider.as_deref()) {
-            (Ok(()), Some(provider)) => provider.download(&asset.full),
+        // An animated image already fetched as its own preview needs no second download.
+        let preview = (asset.full.animated && asset.thumb.url == asset.full.url)
+            .then(|| self.cached_thumb(key, CandidateSet::Art(kind), asset.id))
+            .flatten()
+            .and_then(|path| std::fs::read(path).ok());
+        let downloaded = match (preview, self.may_call(), self.provider.as_deref()) {
+            (Some(bytes), _, _) => Ok(bytes),
+            (None, Ok(()), Some(provider)) => provider.download(&asset.full),
             _ => {
                 let err = std::io::Error::other("SteamGridDB can't be reached");
                 self.changed(key, Err(err), "Can't reach SteamGridDB");
@@ -525,9 +598,11 @@ impl Worker {
                 return;
             }
         };
+        let extension = crate::art::animation::probe_bytes(&bytes)
+            .map_or(asset.full.extension.as_str(), |f| f.extension());
         let done = self
             .picks
-            .pick_asset(key, kind, asset.id, &asset.full.extension, &bytes)
+            .pick_asset(key, kind, asset.id, extension, &bytes)
             .map(drop);
         self.changed(key, done, "Couldn't save the image");
     }
@@ -563,6 +638,7 @@ impl Worker {
             sgdb_id,
             sgdb_name: name,
             kinds: ArtKind::ALL.to_vec(),
+            animated: self.animated_to_look_up(key),
         };
         if self.provider.is_some() {
             self.run(vec![(key.clone(), job)]);
@@ -576,6 +652,7 @@ mod tests {
 
     use super::*;
     use crate::art::MockMetadataProvider;
+    use crate::art::provider::FIXTURE_ASSETS;
     use crate::art::service::Command;
     use crate::art::service::tests::{Setup, setup};
     use crate::custom::Lookup;
@@ -628,7 +705,7 @@ mod tests {
     #[test]
     fn heroes_are_listed_with_thumbs_and_the_automatic_one_marked() {
         let s = setup();
-        let mut run = Run::new(&s, Arc::new(MockMetadataProvider::fixtures()));
+        let mut run = Run::new(&s, Arc::new(MockMetadataProvider::fixtures().static_only()));
         run.take();
         let set = CandidateSet::Art(ArtKind::Hero);
         run.worker.candidates(&tp(), set);
@@ -673,9 +750,83 @@ mod tests {
     }
 
     #[test]
+    fn animated_images_are_offered_first_and_big_ones_download_when_picked() {
+        let s = setup();
+        let provider = Arc::new(MockMetadataProvider::fixtures());
+        let mut run = Run::new(&s, provider.clone());
+        run.take();
+        let set = CandidateSet::Art(ArtKind::Hero);
+        run.worker.candidates(&tp(), set);
+        let events = run.take();
+        let (items, _) = events
+            .iter()
+            .find_map(|e| match e {
+                ArtEvent::Candidates {
+                    items,
+                    availability,
+                    ..
+                } => Some((items.clone(), *availability)),
+                _ => None,
+            })
+            .unwrap();
+        let fixtures = (FIXTURE_ASSETS + crate::art::provider::FIXTURE_ANIMATED) as usize;
+        assert_eq!(items.len(), fixtures);
+        assert!(items[0].animated && items[1].animated && !items[2].animated);
+        assert!(
+            items[0].current,
+            "the automatic hero is the small animated one"
+        );
+        assert_eq!(items[1].size, Some(crate::art::provider::FIXTURE_BIG));
+        let thumbs: Vec<u64> = events
+            .iter()
+            .filter_map(|e| match e {
+                ArtEvent::Thumb { id, .. } => Some(*id),
+                _ => None,
+            })
+            .collect();
+        assert!(thumbs.contains(&items[0].id));
+        assert!(!thumbs.contains(&items[1].id), "too big to preview");
+        assert_eq!(thumbs.len(), fixtures - 1);
+
+        // The small one's preview is the image: picking it downloads nothing more.
+        let downloads = provider.calls("download");
+        run.worker.apply(&tp(), ArtKind::Hero, items[0].id);
+        assert_eq!(provider.calls("download"), downloads);
+
+        // The big one downloads when picked, and the pick animates.
+        run.worker.apply(&tp(), ArtKind::Hero, items[1].id);
+        assert_eq!(provider.calls("download"), downloads + 1);
+        let Lookup::Found(path) = s.picks.find(&tp(), Extra::Art(ArtKind::Hero)) else {
+            panic!("no pick");
+        };
+        assert!(
+            path.ends_with("hero.gif"),
+            "named by its content: {}",
+            path.display()
+        );
+        let art = run
+            .take()
+            .into_iter()
+            .rev()
+            .find_map(|e| match e {
+                ArtEvent::Art { art, .. } => Some(art),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(art.hero_animated.as_deref(), Some(path.as_path()));
+        assert_eq!(art.hero.as_deref(), Some(path.as_path()));
+
+        // With animation off, the static ones come first.
+        run.worker.handle(Command::Animated(false));
+        let (items, _) = run.list(set);
+        assert!(!items[0].animated && items[fixtures - 1].animated);
+        assert!(items[fixtures - 1].current, "still the pick");
+    }
+
+    #[test]
     fn offline_shows_saved_candidates_and_waits_before_trying_again() {
         let s = setup();
-        let mut run = Run::new(&s, Arc::new(MockMetadataProvider::fixtures()));
+        let mut run = Run::new(&s, Arc::new(MockMetadataProvider::fixtures().static_only()));
         let set = CandidateSet::Art(ArtKind::Logo);
         run.worker.candidates(&tp(), set);
         run.take();
@@ -723,8 +874,10 @@ mod tests {
     #[test]
     fn a_refused_key_is_not_reported_as_offline() {
         let s = setup();
-        let mut run = Run::new(&s, Arc::new(MockMetadataProvider::fixtures()));
-        run.worker.provider = Some(Box::new(RefusesImages(MockMetadataProvider::fixtures())));
+        let mut run = Run::new(&s, Arc::new(MockMetadataProvider::fixtures().static_only()));
+        run.worker.provider = Some(Box::new(RefusesImages(
+            MockMetadataProvider::fixtures().static_only(),
+        )));
         let set = CandidateSet::Art(ArtKind::Hero);
         run.worker.candidates(&tp(), set);
         let (_, availability) = run.list(set);
@@ -744,7 +897,7 @@ mod tests {
     #[test]
     fn art_of_unknown_origin_is_not_claimed_and_changes_remark_the_list() {
         let s = setup();
-        let mut run = Run::new(&s, Arc::new(MockMetadataProvider::fixtures()));
+        let mut run = Run::new(&s, Arc::new(MockMetadataProvider::fixtures().static_only()));
         // Art cached before Hearth noted where it came from.
         std::fs::remove_file(s.cache.dir(&tp()).join("hero.url")).unwrap();
         let set = CandidateSet::Art(ArtKind::Hero);
@@ -771,7 +924,7 @@ mod tests {
     #[test]
     fn requests_go_before_thumbnails_which_resume_afterwards() {
         let s = setup();
-        let mut run = Run::new(&s, Arc::new(MockMetadataProvider::fixtures()));
+        let mut run = Run::new(&s, Arc::new(MockMetadataProvider::fixtures().static_only()));
         let set = CandidateSet::Art(ArtKind::Logo);
         let (tx, rx) = std::sync::mpsc::channel();
         run.worker.inbox = Some(rx);
@@ -809,7 +962,7 @@ mod tests {
     #[test]
     fn rematching_replaces_the_art_and_drops_only_steamgriddb_picks() {
         let s = setup();
-        let mut run = Run::new(&s, Arc::new(MockMetadataProvider::fixtures()));
+        let mut run = Run::new(&s, Arc::new(MockMetadataProvider::fixtures().static_only()));
         run.worker
             .candidates(&tp(), CandidateSet::Art(ArtKind::Hero));
         let first = match &run.list(CandidateSet::Art(ArtKind::Hero)).0[..] {

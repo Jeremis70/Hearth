@@ -249,6 +249,11 @@ pub struct Applied {
     pub backed_up: bool,
     #[serde(default)]
     pub files: BTreeMap<String, BTreeMap<String, BTreeMap<String, String>>>,
+    /// Settings left to the user because the file holds a value Hearth doesn't offer: file →
+    /// setting id → the choice Hearth wanted then. Hearth takes them back when its own value
+    /// changes (the user changed it in Hearth).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub yielded: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 impl Applied {

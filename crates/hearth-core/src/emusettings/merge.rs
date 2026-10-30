@@ -53,6 +53,9 @@ pub struct FilePlan<'a> {
     pub settings: Vec<Wanted<'a>>,
     /// (section, key) removed if present (locked keys that mustn't be overridden here).
     pub strip: Vec<(String, String)>,
+    /// Whether a missing key means the emulator's default (its main files), or only "not set
+    /// here" (a game INI: lower layers, Dolphin's shipped game fixes included, then apply).
+    pub missing_is_default: bool,
 }
 
 impl<'a> FilePlan<'a> {
@@ -64,6 +67,15 @@ impl<'a> FilePlan<'a> {
             locked: Vec::new(),
             settings: Vec::new(),
             strip: Vec::new(),
+            missing_is_default: true,
+        }
+    }
+
+    /// A plan for a game INI, where a missing key isn't the default.
+    pub fn game(rel: impl Into<String>, style: Style) -> Self {
+        Self {
+            missing_is_default: false,
+            ..Self::new(rel, style)
         }
     }
 
@@ -88,7 +100,8 @@ pub struct Adopted {
 pub struct Report {
     /// Settings changed outside Hearth whose new value Hearth takes over.
     pub adopted: Vec<Adopted>,
-    /// Settings changed outside Hearth to a value Hearth has no choice for: left alone.
+    /// Settings changed outside Hearth to a value Hearth has no choice for (or removed from a
+    /// game INI): left to the user until they are changed in Hearth.
     pub foreign: Vec<String>,
     /// Locked keys that held another value (`file [section] key`).
     pub restored: Vec<String>,
@@ -125,6 +138,8 @@ pub fn merge(dir: &Path, plans: &[FilePlan<'_>], applied: &mut Applied) -> std::
         let before = ConfigDoc::load(&path, plan.style)?;
         let mut doc = before.clone();
         let old = applied.files.remove(&plan.rel).unwrap_or_default();
+        let old_yielded = applied.yielded.remove(&plan.rel).unwrap_or_default();
+        let mut yielded = std::collections::BTreeMap::new();
         let mut record = Applied::default();
         let rec = record.files.entry(plan.rel.clone()).or_default();
         let was = |s: &str, k: &str| -> Option<&str> {
@@ -157,11 +172,32 @@ pub fn merge(dir: &Path, plans: &[FilePlan<'_>], applied: &mut Applied) -> std::
         for want in &plan.settings {
             let s = want.setting;
             let section = want.section.as_str();
-            let keys = s.all_keys();
-            let applied_before = keys.iter().any(|k| was(section, k).is_some());
-            let in_file = s.read(|k| doc.get(section, k).map(str::to_owned));
-            let hearth_wrote = s.read(|k| was(section, k).map(str::to_owned));
-            let target = if applied_before && in_file != hearth_wrote {
+            let fallback = plan.missing_is_default;
+            let in_file = s.read_with(|k| doc.get(section, k).map(str::to_owned), fallback);
+            let target = if let Some(then) = old_yielded.get(&s.id) {
+                // Left to the user last time: still theirs unless Hearth's value changed since,
+                // or the file now holds a value Hearth offers.
+                match in_file {
+                    _ if *then != want.choice => want.choice.clone(),
+                    Some(choice) => {
+                        if choice != want.choice {
+                            report.adopted.push(Adopted {
+                                setting: s.id.clone(),
+                                layer: want.layer,
+                                choice: choice.to_owned(),
+                            });
+                        }
+                        choice.to_owned()
+                    }
+                    None => {
+                        yielded.insert(s.id.clone(), then.clone());
+                        continue;
+                    }
+                }
+            } else if s.all_keys().iter().any(|k| was(section, k).is_some())
+                && in_file != s.read_with(|k| was(section, k).map(str::to_owned), fallback)
+            {
+                // Changed outside Hearth since Hearth wrote it.
                 match in_file {
                     Some(choice) => {
                         report.adopted.push(Adopted {
@@ -172,9 +208,8 @@ pub fn merge(dir: &Path, plans: &[FilePlan<'_>], applied: &mut Applied) -> std::
                         choice.to_owned()
                     }
                     None => {
-                        // Not a value Hearth offers: the user's; Hearth stops managing it
-                        // until it is changed in Hearth again.
                         report.foreign.push(s.id.clone());
+                        yielded.insert(s.id.clone(), want.choice.clone());
                         continue;
                     }
                 }
@@ -182,12 +217,14 @@ pub fn merge(dir: &Path, plans: &[FilePlan<'_>], applied: &mut Applied) -> std::
                 want.choice.clone()
             };
             for (key, value) in s.keys_for(&target) {
-                // A missing key already means the emulator's default.
                 let keep = match doc.get(section, key) {
                     Some(have) => same_value(Some(kind_of(s, key)), have, value),
-                    None => s
-                        .default_value(key)
-                        .is_some_and(|d| same_value(Some(kind_of(s, key)), d, value)),
+                    // In a main file a missing key already means the emulator's default.
+                    None => {
+                        fallback
+                            && s.default_value(key)
+                                .is_some_and(|d| same_value(Some(kind_of(s, key)), d, value))
+                    }
                 };
                 if !keep {
                     doc.set(section, key, value);
@@ -198,13 +235,27 @@ pub fn merge(dir: &Path, plans: &[FilePlan<'_>], applied: &mut Applied) -> std::
             }
         }
 
-        // Keys Hearth wrote before and doesn't manage any more.
+        // Keys Hearth wrote before and doesn't manage any more (keys of a setting left to the
+        // user stay theirs).
+        let yielded_keys: Vec<(&str, &str)> = plan
+            .settings
+            .iter()
+            .filter(|w| yielded.contains_key(&w.setting.id))
+            .flat_map(|w| {
+                w.setting
+                    .all_keys()
+                    .into_iter()
+                    .map(move |k| (w.section.as_str(), k))
+            })
+            .collect();
         for (section, keys) in &old {
             for (key, value) in keys {
                 let managed = rec.iter().any(|(s, ks)| {
                     s.eq_ignore_ascii_case(section)
                         && ks.keys().any(|k| k.eq_ignore_ascii_case(key))
-                });
+                }) || yielded_keys
+                    .iter()
+                    .any(|(s, k)| s.eq_ignore_ascii_case(section) && k.eq_ignore_ascii_case(key));
                 if managed {
                     continue;
                 }
@@ -230,6 +281,9 @@ pub fn merge(dir: &Path, plans: &[FilePlan<'_>], applied: &mut Applied) -> std::
             report.written.push(plan.rel.clone());
         }
         applied.files.extend(record.files);
+        if !yielded.is_empty() {
+            applied.yielded.insert(plan.rel.clone(), yielded);
+        }
     }
     Ok(report)
 }
@@ -288,7 +342,7 @@ mod tests {
                 layer: Layer::Console,
             });
         }
-        let mut per_game = FilePlan::new(GAME, Style::Ini);
+        let mut per_game = FilePlan::game(GAME, Style::Ini);
         for (id, choice) in game {
             let setting = schema.setting(id).unwrap();
             per_game.settings.push(Wanted {
@@ -501,5 +555,32 @@ mod tests {
         let report = run(dir.path(), &schema, &[]);
         assert_eq!(report.foreign, ["internal_resolution"]);
         assert_eq!(read(dir.path(), GFX), gfx);
+        // Still the user's at the next launches…
+        assert_eq!(run(dir.path(), &schema, &[]), Report::default());
+        assert_eq!(read(dir.path(), GFX), gfx);
+        // …until it is changed in Hearth.
+        let mut applied = Applied::load(dir.path());
+        let mut p = plans(&schema, &[]);
+        p[1].settings[0].choice = "3".into();
+        merge(dir.path(), &p, &mut applied).unwrap();
+        assert!(read(dir.path(), GFX).contains("InternalResolution = 3"));
+        assert!(applied.yielded.is_empty());
+    }
+
+    #[test]
+    fn a_game_value_equal_to_the_default_is_still_written() {
+        // Missing from a game INI means "not set here": Dolphin's shipped fixes would apply.
+        let dir = tempdir();
+        let schema = Schema::dolphin();
+        run(dir.path(), &schema, &[("arbitrary_mipmaps", "False")]);
+        assert_eq!(
+            read(dir.path(), GAME),
+            "[Video_Enhancements]\nArbitraryMipmapDetection = False\n"
+        );
+        // The user removes it in Dolphin: theirs now, not written back.
+        fs::write(dir.path().join(GAME), "[Video_Enhancements]\n").unwrap();
+        let report = run(dir.path(), &schema, &[("arbitrary_mipmaps", "False")]);
+        assert_eq!(report.foreign, ["arbitrary_mipmaps"]);
+        assert_eq!(read(dir.path(), GAME), "[Video_Enhancements]\n");
     }
 }

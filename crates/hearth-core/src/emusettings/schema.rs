@@ -145,6 +145,19 @@ impl Setting {
     /// The choice id matching what a file holds (`get` gives a key's value, `None` if
     /// missing; a missing key reads as the default choice's value). `None`: no choice matches.
     pub fn read(&self, get: impl Fn(&str) -> Option<String>) -> Option<&str> {
+        self.read_with(get, true)
+    }
+
+    /// Like [`Setting::read`]; with `missing_is_default` false (a game INI, where a missing
+    /// key means "not set here"), a missing own key reads as `None`.
+    pub fn read_with(
+        &self,
+        get: impl Fn(&str) -> Option<String>,
+        missing_is_default: bool,
+    ) -> Option<&str> {
+        if !missing_is_default && get(&self.key).is_none() {
+            return None;
+        }
         let default = self.choice(&self.default)?;
         let value_of = |key: &str| -> Option<String> {
             get(key).or_else(|| {

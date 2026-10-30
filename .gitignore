@@ -2,3 +2,6 @@
 /.dev-data
 /docs/reference/
 /assets/controllers/source/
+/.claude/settings.local.json
+/.claude/inhibit.sh
+/.claude/inhibit.pid

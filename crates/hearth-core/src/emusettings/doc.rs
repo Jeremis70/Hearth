@@ -199,7 +199,13 @@ impl ConfigDoc {
             }
         }
         if section.is_empty() {
-            Some(end.unwrap_or(0))
+            // No key yet: after the leading comments, before the first section.
+            let first_section = self
+                .lines
+                .iter()
+                .position(|l| matches!(l, Line::Section { .. }))
+                .unwrap_or(self.lines.len());
+            Some(end.unwrap_or(first_section))
         } else {
             end
         }
@@ -323,6 +329,17 @@ mod tests {
         assert!(doc.remove("A", "y"));
         assert!(!doc.remove("A", "y"));
         assert_eq!(doc.to_string(), "[A]\nx = 4\n");
+    }
+
+    #[test]
+    fn first_keys_go_after_a_leading_comment() {
+        let mut doc = ConfigDoc::parse("# header\n", Style::Cfg);
+        doc.set("", "a", "1");
+        doc.set("", "b", "2");
+        assert_eq!(doc.to_string(), "# header\na = \"1\"\nb = \"2\"\n");
+        let mut doc = ConfigDoc::parse("# header\n[S]\nk = v\n", Style::Ini);
+        doc.set("", "top", "1");
+        assert_eq!(doc.to_string(), "# header\ntop = 1\n[S]\nk = v\n");
     }
 
     #[test]

@@ -8,6 +8,7 @@ pub mod art;
 pub mod config;
 pub mod controls;
 pub mod custom;
+pub mod emusettings;
 pub mod extras;
 pub mod files;
 pub mod library;

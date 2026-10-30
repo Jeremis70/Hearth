@@ -280,6 +280,8 @@ pub struct Controller {
     anim: anim::AnimPlayer,
     /// The Customize page, while open.
     customize: Option<customize::CustomizeState>,
+    /// The emulator whose Settings page is open (`dolphin`).
+    emu_open: Option<String>,
     /// A theme previewed on the Customize page (wins over Home's music).
     preview: Option<SoundFile>,
     /// Waits for focus to settle on an audio file before previewing it.
@@ -408,6 +410,7 @@ pub fn install(setup: Setup) {
             defer(move |c| c.open_customize(&id, &section));
         });
         customize::wire(&app);
+        emulators::wire(&app);
         let settings = app.global::<SettingsData>();
         settings.on_controller_item(|key| {
             let key = key.to_string();
@@ -550,12 +553,14 @@ pub fn install(setup: Setup) {
         pad_lost: None,
         anim: anim::AnimPlayer::default(),
         customize: None,
+        emu_open: None,
         preview: None,
         preview_timer: slint::Timer::default(),
     };
     CONTROLLER.with(|cell| *cell.borrow_mut() = Some(controller));
     with(Controller::fill_display_items);
     with(Controller::fill_audio_rows);
+    with(Controller::fill_emulators);
     with(Controller::apply_motion);
     with(|c| c.sync_music(director::FADE_IN));
     if let Some((title, text)) = setup.config_problem {
@@ -1373,6 +1378,8 @@ impl Controller {
             Instant::now(),
         ));
         self.closing = false;
+        // "Restart <game> to apply" on its emulator's settings.
+        self.refresh_emulators();
         if self.compositor.controls_focus() {
             self.set_mode(Mode::Launching);
             self.toast(&controls_problem.unwrap_or_else(|| format!("Starting {title}…")));
@@ -1775,6 +1782,7 @@ impl Controller {
         let _ = self.compositor.focus(&[SHELL_APP_ID]);
         self.set_mode(Mode::Shell);
         self.refresh();
+        self.refresh_emulators();
         self.show_home(true);
         let message = if success || closed_by_us {
             format!("{title}: {}", models::format_session_total(played))

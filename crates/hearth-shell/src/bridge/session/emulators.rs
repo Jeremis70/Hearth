@@ -2,12 +2,92 @@
 //! dev socket words. The values live in `hearth_core::emusettings`; they reach the emulator at
 //! its next launch (`DolphinProfile::prepare`).
 
-use hearth_core::emusettings::merge;
+use std::rc::Rc;
+
+use hearth_core::emusettings::{EmulatorSettings, Setting, merge};
 use hearth_core::model::Game;
 use hearth_core::profiles::dolphin::GameRef;
 use hearth_core::systems::EmulatorKind;
+use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
-use super::Controller;
+use super::{Controller, with};
+use crate::bridge::models::set_category_status;
+use crate::{AppWindow, EmuRow, SettingsCategory, SettingsData};
+
+/// Emulators listed in Settings, by key.
+const EMULATORS: [(&str, &str); 2] = [("dolphin", "Dolphin"), ("retroarch", "RetroArch")];
+
+/// Connects Settings → Emulators to the controller.
+pub(super) fn wire(app: &AppWindow) {
+    let settings = app.global::<SettingsData>();
+    // Synchronous: the page is shown right after.
+    settings.on_open_emulator(|key| {
+        with(|c| c.open_emulator(&key));
+    });
+    settings.on_emu_step(|key, step| with(|c| c.emu_step(&key, step)).unwrap_or(false));
+    settings.on_emu_reset(|| {
+        with(Controller::emu_reset);
+    });
+}
+
+/// "Balanced", "Custom".
+fn status(settings: &EmulatorSettings) -> String {
+    let shared = settings.shared();
+    settings.resolved(&shared).status().unwrap_or_default()
+}
+
+fn model<T: Clone + 'static>(rows: Vec<T>) -> ModelRc<T> {
+    ModelRc::from(Rc::new(VecModel::from(rows)))
+}
+
+/// The preset row: the active preset (or Custom) and what it does.
+fn preset_row(settings: &EmulatorSettings) -> EmuRow {
+    let recommended = settings
+        .recommended()
+        .map(|p| format!(" Recommended for this GPU: {}.", p.label))
+        .unwrap_or_default();
+    EmuRow {
+        key: "preset".into(),
+        label: "Preset".into(),
+        value: status(settings).into(),
+        description: format!("Sets the rows below for speed or for looks.{recommended}").into(),
+        note: Default::default(),
+        marked: false,
+        action: false,
+    }
+}
+
+/// A setting's row with its current value (`value` is a choice id).
+fn setting_row(setting: &Setting, value: &str) -> EmuRow {
+    EmuRow {
+        key: setting.id.as_str().into(),
+        label: setting.label.as_str().into(),
+        value: setting.label_of(value).into(),
+        description: setting.description.as_str().into(),
+        note: Default::default(),
+        marked: false,
+        action: false,
+    }
+}
+
+fn action_row(key: &str, label: &str, description: &str) -> EmuRow {
+    EmuRow {
+        key: key.into(),
+        label: label.into(),
+        value: Default::default(),
+        description: description.into(),
+        note: Default::default(),
+        marked: false,
+        action: true,
+    }
+}
+
+/// The choice `step` places from `current` in `setting`, if there is one.
+fn stepped<'a>(setting: &'a Setting, current: &str, step: i32) -> Option<&'a str> {
+    let at = setting.choices.iter().position(|c| c.id == current)?;
+    let to = at.checked_add_signed(step as isize)?;
+    setting.choices.get(to).map(|c| c.id.as_str())
+}
 
 impl Controller {
     /// The game whose art key is `key` (`gc/GZ2E01`).
@@ -132,5 +212,153 @@ impl Controller {
 
     /// Updates whatever shows emulator settings (Settings → Emulators, the Game settings page)
     /// after a change.
-    pub(super) fn refresh_emulators(&mut self) {}
+    pub(super) fn refresh_emulators(&mut self) {
+        self.fill_emulators();
+        if let Some(key) = self.emu_open.clone() {
+            self.fill_emulator_page(&key);
+        }
+    }
+
+    /// The running (or frozen) game, if it runs in `kind`.
+    pub(super) fn running_in(&self, kind: EmulatorKind) -> Option<&Game> {
+        let active = self.active.as_ref()?;
+        let emulator = self.systems.get(&active.game.system)?.emulator()?;
+        (emulator.kind == kind).then_some(&active.game)
+    }
+
+    /// "Applies next launch", or "Restart <game> to apply" while a game of `kind` runs.
+    pub(super) fn applies_note(&self, kind: EmulatorKind) -> String {
+        self.running_in(kind).map_or_else(
+            || "Applies next launch".to_owned(),
+            |game| format!("Restart {} to apply", game.title),
+        )
+    }
+
+    /// Settings → Emulators: the list and the category's status.
+    pub(super) fn fill_emulators(&mut self) {
+        let Some(app) = self.app.upgrade() else {
+            return;
+        };
+        let dolphin = status(self.dolphin.settings());
+        let rows: Vec<SettingsCategory> = EMULATORS
+            .iter()
+            .map(|(key, label)| SettingsCategory {
+                key: (*key).into(),
+                label: (*label).into(),
+                status: if *key == "dolphin" {
+                    dolphin.as_str().into()
+                } else {
+                    Default::default()
+                },
+            })
+            .collect();
+        app.global::<SettingsData>().set_emulators(model(rows));
+        set_category_status(&app, "emulators", &format!("Dolphin · {dolphin}"));
+    }
+
+    fn open_emulator(&mut self, key: &str) {
+        self.emu_open = Some(key.to_owned());
+        self.fill_emulator_page(key);
+    }
+
+    /// An emulator's page: Dolphin's preset, rows and Reset; RetroArch's message.
+    fn fill_emulator_page(&mut self, key: &str) {
+        let Some(app) = self.app.upgrade() else {
+            return;
+        };
+        let data = app.global::<SettingsData>();
+        let label = EMULATORS
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map_or(key, |(_, l)| l);
+        data.set_emu_title(label.into());
+        if key != "dolphin" {
+            data.set_emu_rows(model(Vec::new()));
+            data.set_emu_message("More settings coming soon.".into());
+            return;
+        }
+        let settings = self.dolphin.settings();
+        let shared = settings.shared();
+        let resolved = settings.resolved(&shared);
+        let mut rows = vec![preset_row(settings)];
+        rows.extend(
+            settings
+                .schema()
+                .settings
+                .iter()
+                .map(|s| setting_row(s, &resolved.console(s).0)),
+        );
+        rows.push(action_row(
+            "reset",
+            "Reset to defaults",
+            "Every setting goes back to the preset recommended for this box.",
+        ));
+        let rows_model = data.get_emu_rows();
+        if rows_model.row_count() == rows.len() {
+            // Same rows: update in place, so focus and scrolling stay put.
+            for (i, row) in rows.into_iter().enumerate() {
+                if rows_model.row_data(i).as_ref() != Some(&row) {
+                    rows_model.set_row_data(i, row);
+                }
+            }
+        } else {
+            data.set_emu_rows(model(rows));
+        }
+        data.set_emu_note(self.applies_note(EmulatorKind::Dolphin).into());
+    }
+
+    /// Left/Right on a row of the open emulator page; false at the first or last choice.
+    fn emu_step(&mut self, key: &str, step: i32) -> bool {
+        if self.emu_open.as_deref() != Some("dolphin") {
+            return false;
+        }
+        let settings = self.dolphin.settings().clone();
+        let result = if key == "preset" {
+            let shared = settings.shared();
+            let current = settings
+                .resolved(&shared)
+                .preset()
+                .map(|p| p.id.clone())
+                .unwrap_or_default();
+            let presets = &settings.schema().presets;
+            let at = presets.iter().position(|p| p.id == current).unwrap_or(0);
+            let custom = settings.resolved(&shared).is_custom();
+            // From Custom, a step goes to the next preset, or (at the end of the list)
+            // back to the one the rows came from.
+            let next = at
+                .checked_add_signed(step as isize)
+                .filter(|to| *to < presets.len());
+            let to = if custom { next.or(Some(at)) } else { next };
+            match to {
+                Some(to) => settings.set_preset(Some(&presets[to].id)),
+                None => return false,
+            }
+        } else {
+            let Some(setting) = settings.schema().setting(key) else {
+                return false;
+            };
+            let shared = settings.shared();
+            let current = settings.resolved(&shared).console(setting).0;
+            match stepped(setting, &current, step) {
+                Some(choice) => settings.set_console(key, choice),
+                None => return false,
+            }
+        };
+        if let Err(err) = result {
+            tracing::warn!("can't save the emulator settings: {err}");
+            self.toast("Couldn't save the setting");
+            return false;
+        }
+        self.refresh_emulators();
+        true
+    }
+
+    /// Reset to defaults (confirmed on the page).
+    fn emu_reset(&mut self) {
+        if let Err(err) = self.dolphin.settings().reset_console() {
+            tracing::warn!("can't reset the emulator settings: {err}");
+            self.toast("Couldn't reset the settings");
+        }
+        self.refresh_emulators();
+    }
 }

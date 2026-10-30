@@ -7,6 +7,8 @@ import { ControlsScreen } from "../controls/screen.slint";
 import { NetworkPane } from "network.slint";
 import { ControllersPane, PadPage } from "controllers.slint";
 import { DisplayPane } from "display.slint";
+import { EmulatorsPane, EmulatorPage } from "emulators.slint";
+import { ConfirmDialog } from "../components/dialog.slint";
 
 export global Settings {
     public pure function icon-for(key: string) -> image {
@@ -20,7 +22,6 @@ export global Settings {
 
     public pure function placeholder-for(key: string) -> string {
         if key == "folders" { return "Add and rescan game folders with a controller folder picker. Arrives in M1."; }
-        if key == "emulators" { return "Detected emulators, default per console and BIOS status. Arrives in M2."; }
         "Suspend, restart, power off and About. Arrives with the power backend."
     }
 }
@@ -29,6 +30,7 @@ export global Settings {
 enum SettingsPage {
     none,
     pad,        // one controller's page (in the right pane)
+    emulator,   // one emulator's settings (in the right pane)
     controls,   // a console's controls drawing (wide: the list becomes a rail)
     test,       // the button test (wide)
 }
@@ -106,11 +108,15 @@ export component SettingsScreen inherits Rectangle {
     property <int> content-index: 0;
     property <SettingsPage> page: SettingsPage.none;
     property <int> pad-index: 0;    // the controller whose page is open
+    property <int> emu-index: 0;    // the focused row of the emulator page
+    property <bool> confirm-open: false;    // "Reset to defaults?"
+    property <int> confirm-index: 1;
     property <int> count: SettingsData.categories.length;
     property <string> key: SettingsData.categories[index].key;
     property <int> pad-count: SettingsData.pads.length;
     property <int> content-count: key == "network" ? SettingsData.wifi.length
         : key == "controllers" ? pad-count + SettingsData.controller-items.length
+        : key == "emulators" ? SettingsData.emulators.length
         : key == "display" ? (picking ? SettingsData.pack-choices.length
             : SettingsData.display-items.length + SettingsData.audio-rows.length)
         : 0;
@@ -131,7 +137,8 @@ export component SettingsScreen inherits Rectangle {
 
     // The right pane fades out, switches, then fades in (`fast` in all), so two lists are
     // never drawn over each other.
-    property <string> view: page == SettingsPage.pad ? "pad" : key;
+    property <string> view: page == SettingsPage.pad ? "pad"
+        : page == SettingsPage.emulator ? "emulator" : key;
     property <string> shown-view;
     property <bool> fading: false;
     init => { shown-view = view; }
@@ -163,6 +170,7 @@ export component SettingsScreen inherits Rectangle {
         page = SettingsPage.none;
         content-index = 0;
         picking = false;
+        confirm-open = false;
         shown-view = view;
         fading = false;
     }
@@ -196,6 +204,11 @@ export component SettingsScreen inherits Rectangle {
 
     function accept-content() {
         if key == "network" { SettingsData.wifi-selected(SettingsData.wifi[content-index].ssid); }
+        if key == "emulators" {
+            SettingsData.open-emulator(SettingsData.emulators[content-index].key);
+            emu-index = 0;
+            page = SettingsPage.emulator;
+        }
         if key == "controllers" {
             if content-index < pad-count {
                 pad-index = content-index;
@@ -217,12 +230,61 @@ export component SettingsScreen inherits Rectangle {
         }
     }
 
+    // An emulator's page: Up/Down move, Left/Right step the value (Accept steps forward), Accept
+    // on Reset asks first; Back returns to the emulator list.
+    function handle-emulator(action: UiAction) -> NavResult {
+        if confirm-open {
+            if action == UiAction.left || action == UiAction.right {
+                let old = confirm-index;
+                confirm-index = action == UiAction.left ? 0 : 1;
+                return Nav.moved(confirm-index != old);
+            }
+            if action == UiAction.back { confirm-open = false; return NavResult.handled; }
+            if action == UiAction.accept {
+                confirm-open = false;
+                if confirm-index == 0 { SettingsData.emu-reset(); }
+                return NavResult.handled;
+            }
+            return NavResult.edge;
+        }
+        let rows = SettingsData.emu-rows.length;
+        if action == UiAction.back {
+            page = SettingsPage.none;
+            return NavResult.handled;
+        }
+        if rows == 0 {
+            return action == UiAction.accept ? NavResult.handled : NavResult.edge;
+        }
+        if action == UiAction.up || action == UiAction.down {
+            let old = emu-index;
+            emu-index = max(0, min(rows - 1, emu-index + (action == UiAction.up ? -1 : 1)));
+            return Nav.moved(emu-index != old);
+        }
+        let row = SettingsData.emu-rows[emu-index];
+        if row.action {
+            if action == UiAction.accept {
+                confirm-index = 1;
+                confirm-open = true;
+                return NavResult.handled;
+            }
+            return NavResult.edge;
+        }
+        if action == UiAction.left || action == UiAction.right || action == UiAction.accept {
+            let moved = SettingsData.emu-step(row.key, action == UiAction.left ? -1 : 1);
+            return moved ? NavResult.moved : NavResult.edge;
+        }
+        NavResult.ignored
+    }
+
     public function handle(action: UiAction) -> NavResult {
         if page == SettingsPage.controls {
             return controls.handle(action);
         }
         if page == SettingsPage.test {
             return NavResult.quiet;
+        }
+        if page == SettingsPage.emulator {
+            return handle-emulator(action);
         }
         if page == SettingsPage.pad {
             if action == UiAction.accept {
@@ -329,7 +391,13 @@ export component SettingsScreen inherits Rectangle {
             picking: picking;
             picking-label: SettingsData.display-items[picking-row].label;
         }
-        if shown-view == "folders" || shown-view == "emulators" || shown-view == "system": Text {
+        if shown-view == "emulators": EmulatorsPane {
+            focus-index: pane == 1 ? content-index : -1;
+        }
+        if shown-view == "emulator": EmulatorPage {
+            focus-index: emu-index;
+        }
+        if shown-view == "folders" || shown-view == "system": Text {
             x: Theme.sp-24;
             y: Theme.sp-24;
             width: parent.width - 2 * Theme.sp-24;
@@ -373,6 +441,13 @@ export component SettingsScreen inherits Rectangle {
         index: index;
         focused: pane == 0 && page == SettingsPage.none;
         rail: wide;
+    }
+
+    if confirm-open: ConfirmDialog {
+        heading: "Reset " + SettingsData.emu-title + " settings?";
+        message: "Every setting goes back to Hearth's defaults for this box. Games' own settings stay.";
+        confirm-label: "Reset";
+        index: confirm-index;
     }
 
     HintBar {

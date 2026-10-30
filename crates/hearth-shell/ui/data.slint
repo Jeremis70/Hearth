@@ -43,6 +43,20 @@ export struct SettingsCategory {
     status: string,
 }
 
+// One row of an emulator's settings (Settings → Emulators → Dolphin, or a game's Game
+// settings page): `action` rows (Reset) run on Accept; the others step through their choices
+// with Left/Right (Accept steps forward). `marked`: changed for this game (accent dot);
+// `note`: a second line ("Custom for this game", "Dolphin sets On for this game").
+export struct EmuRow {
+    key: string,
+    label: string,
+    value: string,
+    description: string,
+    note: string,
+    marked: bool,
+    action: bool,
+}
+
 // Settings → Display & sound, below the pack rows: a volume (`slider`, 0–100 in steps of 10)
 // or an on/off option.
 // A row of Display & sound under the packs: volumes, music options, then animation.
@@ -212,6 +226,18 @@ export global SettingsData {
     in property <[AudioRow]> audio-rows;
     // A volume step (-1/+1) or a toggle (0); applies at once and is saved.
     callback audio-change(/* key */ string, /* step */ int);
+    // Emulators: one row per emulator (key "dolphin" / "retroarch", status "Balanced").
+    // `open-emulator` fills its page: `emu-rows` (empty: `emu-message` instead) and `emu-note`
+    // ("Applies next launch", or "Restart <game> to apply" while that emulator's game runs).
+    in property <[SettingsCategory]> emulators;
+    in property <[EmuRow]> emu-rows;
+    in property <string> emu-title;
+    in property <string> emu-message;
+    in property <string> emu-note;
+    callback open-emulator(/* key */ string);
+    // A row's step (-1/+1); false when it can't move (first or last choice).
+    callback emu-step(/* row key */ string, /* step */ int) -> bool;
+    callback emu-reset();
 }
 
 export global Status {

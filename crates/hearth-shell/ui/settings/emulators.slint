@@ -1,0 +1,192 @@
+import { Theme } from "../theme.slint";
+import { Icons } from "../icons.slint";
+import { SettingsData, EmuRow } from "../data.slint";
+import { ListRow } from "../components/list_row.slint";
+
+component Focus inherits Rectangle {
+    in property <int> index;
+    x: 0;
+    y: max(0, index) * (Theme.row-height + Theme.row-gap);
+    animate y { duration: Theme.fast; easing: ease-out; }
+    height: Theme.row-height;
+    border-radius: Theme.radius-md;
+    background: Theme.surface-raised;
+    border-width: Theme.focus-ring-width;
+    border-color: Theme.focus-ring;
+    drop-shadow-blur: Theme.focus-glow-radius;
+    drop-shadow-color: Theme.focus-glow;
+    opacity: index >= 0 ? 1 : 0;
+    animate opacity { duration: Theme.fast; easing: ease-out; }
+}
+
+// Settings → Emulators: one row per emulator with its status ("Balanced"), opening its page.
+export component EmulatorsPane inherits Rectangle {
+    in property <int> focus-index: -1;
+    Focus {
+        width: parent.width;
+        index: focus-index;
+    }
+    for emu[i] in SettingsData.emulators: ListRow {
+        x: 0;
+        y: i * (Theme.row-height + Theme.row-gap);
+        width: parent.width;
+        icon: Icons.cpu;
+        label: emu.label;
+        value: emu.status;
+        trailing-icon: Icons.chevron-right;
+        has-trailing-icon: true;
+        show-divider: i != focus-index && i + 1 != focus-index;
+    }
+}
+
+// A settings row: label, then the value between ‹ › when focused; an accent dot when changed
+// for this game, a second line under the label for its note.
+export component EmuRowView inherits Rectangle {
+    in property <EmuRow> data;
+    in property <bool> focused;
+    in property <bool> show-divider;
+    height: Theme.row-height;
+
+    HorizontalLayout {
+        padding-left: Theme.sp-24;
+        padding-right: Theme.sp-24;
+        spacing: Theme.sp-16;
+        if data.action: Image {
+            source: Icons.reset;
+            width: Theme.icon-size;
+            height: Theme.icon-size;
+            y: (parent.height - self.height) / 2;
+            colorize: Theme.text-primary;
+        }
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            spacing: Theme.sp-4;
+            HorizontalLayout {
+                spacing: Theme.sp-8;
+                alignment: start;
+                Text {
+                    text: data.label;
+                    font-size: Theme.body-lg;
+                    font-weight: Theme.medium;
+                    color: Theme.text-primary;
+                    overflow: elide;
+                }
+                if data.marked: Rectangle {
+                    width: 10px * Theme.scale;
+                    height: self.width;
+                    y: (parent.height - self.height) / 2;
+                    border-radius: self.width / 2;
+                    background: Theme.accent;
+                }
+            }
+            if data.note != "": Text {
+                text: data.note;
+                font-size: Theme.caption;
+                color: data.marked ? Theme.accent : Theme.text-secondary;
+                overflow: elide;
+            }
+        }
+        if !data.action: Text {
+            text: focused ? "‹  " + data.value + "  ›" : data.value;
+            vertical-alignment: center;
+            horizontal-alignment: right;
+            font-size: Theme.body;
+            color: focused ? Theme.text-primary : Theme.text-secondary;
+        }
+    }
+    if show-divider: Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        x: Theme.sp-16;
+        width: parent.width - 2 * Theme.sp-16;
+        background: Theme.divider;
+    }
+}
+
+// A scrolling list of setting rows with the focused row's description and when it applies
+// below. Used by an emulator's page in Settings and by a game's Game settings page.
+export component EmuRows inherits Rectangle {
+    in property <[EmuRow]> rows;
+    in property <int> focus-index: -1;
+    in property <string> note;
+
+    property <length> step: Theme.row-height + Theme.row-gap;
+    property <length> footer-h: 2 * Theme.body * 1.5 + Theme.caption * 1.5 + Theme.sp-32;
+    property <length> view-h: self.height - footer-h;
+    // Keeps the focused row in view, with one row of context when there is more.
+    property <length> scroll: max(0, min(rows.length * step - view-h,
+        (max(0, focus-index) + 2) * step - view-h));
+
+    Rectangle {
+        y: 0;
+        height: view-h;
+        clip: true;
+        Rectangle {
+            y: -scroll;
+            animate y { duration: Theme.fast; easing: ease-out; }
+            height: rows.length * step;
+            Focus {
+                width: parent.width;
+                index: focus-index;
+            }
+            for row[i] in rows: EmuRowView {
+                x: 0;
+                y: i * step;
+                width: parent.width;
+                data: row;
+                focused: i == focus-index;
+                show-divider: i != focus-index && i + 1 != focus-index;
+            }
+        }
+    }
+
+    if focus-index >= 0 && focus-index < rows.length: VerticalLayout {
+        x: Theme.sp-24;
+        y: view-h + Theme.sp-16;
+        width: parent.width - 2 * Theme.sp-24;
+        spacing: Theme.sp-8;
+        Text {
+            text: rows[focus-index].description;
+            font-size: Theme.body;
+            color: Theme.text-secondary;
+            wrap: word-wrap;
+            overflow: elide;
+            max-height: 2 * Theme.body * 1.5;
+        }
+        if !rows[focus-index].action: Text {
+            text: note;
+            font-size: Theme.caption;
+            color: Theme.text-secondary;
+        }
+    }
+}
+
+// One emulator's page (in the right pane): its title, then its rows (or a message).
+export component EmulatorPage inherits Rectangle {
+    in property <int> focus-index;
+    title := Text {
+        x: Theme.sp-24;
+        y: 0;
+        text: SettingsData.emu-title;
+        font-size: Theme.heading;
+        font-weight: Theme.semibold;
+        color: Theme.text-primary;
+    }
+    if SettingsData.emu-rows.length == 0: Text {
+        x: Theme.sp-24;
+        y: title.height + Theme.sp-24;
+        width: parent.width - 2 * Theme.sp-24;
+        text: SettingsData.emu-message;
+        wrap: word-wrap;
+        font-size: Theme.body-lg;
+        color: Theme.text-secondary;
+    }
+    if SettingsData.emu-rows.length > 0: EmuRows {
+        y: title.height + Theme.sp-24;
+        height: parent.height - self.y;
+        rows: SettingsData.emu-rows;
+        focus-index: focus-index;
+        note: SettingsData.emu-note;
+    }
+}

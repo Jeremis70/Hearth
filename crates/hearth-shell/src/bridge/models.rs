@@ -6,7 +6,7 @@ use std::thread;
 use std::time::Duration;
 
 use hearth_core::library::LibraryEntry;
-use hearth_core::model::GameId;
+use hearth_core::model::{GameId, SystemId};
 use hearth_core::systems::Systems;
 use hearth_platform::network::{NetworkBackend, WifiNetwork};
 use slint::{Color, ComponentHandle, Model, ModelRc, SharedString, VecModel};
@@ -158,6 +158,7 @@ pub fn home_tiles(
             art_b,
             running: Some(&e.game.id) == running,
             favorite: e.favorite,
+            game_settings: has_game_settings(systems, &e.game.system),
             art: tile_art.grid,
             hero: tile_art.hero,
             hero_x: tile_art
@@ -192,6 +193,15 @@ pub fn home_tiles(
         .chain(games)
         .chain(std::iter::once(library))
         .collect()
+}
+
+/// Whether games of `system` have a Game settings page (per-game emulator settings: Dolphin's
+/// for now).
+pub fn has_game_settings(systems: &Systems, system: &SystemId) -> bool {
+    systems
+        .get(system)
+        .and_then(|s| s.emulator())
+        .is_some_and(|e| e.kind == hearth_core::systems::EmulatorKind::Dolphin)
 }
 
 /// Updates the Home tile row: row by row when the same tiles are there in the same order (so

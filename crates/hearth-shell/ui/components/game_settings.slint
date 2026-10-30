@@ -1,0 +1,60 @@
+import { Theme } from "../theme.slint";
+import { HomeData } from "../data.slint";
+import { EmuRows } from "../settings/emulators.slint";
+import { HintBar } from "hint_bar.slint";
+
+// A game's Game settings (Home → Options → Game settings, or Properties): the emulator
+// settings that may differ per game. A row changed for this game has an accent dot and "Custom
+// for this game"; Options resets that row; the last row resets them all. The owner handles
+// navigation; Back closes it.
+export component GameSettingsPanel inherits Rectangle {
+    in property <int> index;
+
+    background: Theme.scrim;
+
+    // Opaque under the card's translucent surface, like the Options menu: Home's row would
+    // show through the list.
+    Rectangle {
+        width: min(1280px * Theme.scale, parent.width - 2 * Theme.safe-x);
+        height: parent.height - 2 * Theme.safe-y;
+        border-radius: Theme.radius-lg;
+        background: Theme.bg-base;
+    }
+    Rectangle {
+        width: min(1280px * Theme.scale, parent.width - 2 * Theme.safe-x);
+        height: parent.height - 2 * Theme.safe-y;
+        border-radius: Theme.radius-lg;
+        background: Theme.surface-raised;
+
+        title := Text {
+            x: Theme.sp-48;
+            y: Theme.sp-48;
+            width: parent.width - 2 * Theme.sp-48;
+            text: HomeData.game-settings-title;
+            font-size: Theme.title;
+            font-weight: Theme.semibold;
+            color: Theme.text-primary;
+            overflow: elide;
+        }
+        EmuRows {
+            x: Theme.sp-24;
+            y: title.y + title.height + Theme.sp-24;
+            width: parent.width - 2 * Theme.sp-24;
+            height: parent.height - self.y - hints.height - Theme.sp-48;
+            rows: HomeData.game-settings-rows;
+            focus-index: index;
+            note: HomeData.game-settings-note;
+        }
+        hints := HintBar {
+            x: Theme.sp-48;
+            width: parent.width - 2 * Theme.sp-48;
+            height: Theme.sp-32;
+            y: parent.height - Theme.sp-32 - self.height;
+            hints: [
+                { input: "dpad", label: "Change" },
+                { input: "start", label: "Reset row" },
+                { input: "east", label: "Back" },
+            ];
+        }
+    }
+}

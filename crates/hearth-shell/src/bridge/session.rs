@@ -282,6 +282,8 @@ pub struct Controller {
     customize: Option<customize::CustomizeState>,
     /// The emulator whose Settings page is open (`dolphin`).
     emu_open: Option<String>,
+    /// The game whose Game settings page was opened last.
+    game_settings_open: Option<GameId>,
     /// A theme previewed on the Customize page (wins over Home's music).
     preview: Option<SoundFile>,
     /// Waits for focus to settle on an audio file before previewing it.
@@ -554,6 +556,7 @@ pub fn install(setup: Setup) {
         anim: anim::AnimPlayer::default(),
         customize: None,
         emu_open: None,
+        game_settings_open: None,
         preview: None,
         preview_timer: slint::Timer::default(),
     };
@@ -2231,6 +2234,7 @@ impl Controller {
             path: game.path.display().to_string().into(),
             size: size.into(),
             match_name: match_name.into(),
+            game_settings: models::has_game_settings(&self.systems, &game.system),
         });
     }
 

@@ -10,6 +10,7 @@ import { Widget } from "components/widget.slint";
 import { HintBar } from "components/hint_bar.slint";
 import { OptionsMenu, MenuItem } from "components/menu.slint";
 import { PropertiesPanel } from "components/properties.slint";
+import { GameSettingsPanel } from "components/game_settings.slint";
 import { ConfirmDialog } from "components/dialog.slint";
 
 export enum HomeZone { topbar, row, hero, widgets }
@@ -172,7 +173,16 @@ export component Home inherits Rectangle {
     // Options menu, Properties and the Close game confirmation for the current cell.
     property <bool> menu-open: false;
     property <int> menu-index: 0;
-    property <[MenuItem]> menu-items: [
+    property <[MenuItem]> menu-items: current.game-settings ? [
+        current.running ? { key: "close", label: "Close game", danger: true } : { key: "play", label: "Play" },
+        { key: "controls", label: "Controls for this game" },
+        { key: "favorite", label: "Favorite", checked: current.favorite },
+        { key: "art", label: "Artwork" },
+        { key: "theme", label: "Theme music" },
+        { key: "match", label: "Wrong game?" },
+        { key: "game_settings", label: "Game settings" },
+        { key: "properties", label: "Properties" },
+    ] : [
         current.running ? { key: "close", label: "Close game", danger: true } : { key: "play", label: "Play" },
         { key: "controls", label: "Controls for this game" },
         { key: "favorite", label: "Favorite", checked: current.favorite },
@@ -182,7 +192,13 @@ export component Home inherits Rectangle {
         { key: "properties", label: "Properties" },
     ];
     property <bool> properties-open: false;
-    property <int> properties-index: 0;     // its actions: Artwork, Theme music, Wrong game?
+    // Its actions: Artwork, Theme music, Wrong game?, and Game settings for Dolphin games.
+    property <int> properties-index: 0;
+    // A game's Game settings, over Home (and over Properties when opened from there).
+    property <bool> game-settings-open: false;
+    property <int> game-settings-index: 0;
+    property <bool> game-settings-confirm: false;
+    property <int> game-settings-confirm-index: 1;
     property <bool> confirm-open: false;
     property <int> confirm-index: 0;
 
@@ -241,7 +257,64 @@ export component Home inherits Rectangle {
         widget-index = 0;
         menu-open = false;
         properties-open = false;
+        game-settings-open = false;
+        game-settings-confirm = false;
         confirm-open = false;
+    }
+
+    function open-game-settings() {
+        HomeData.open-game-settings(current.id);
+        game-settings-index = 0;
+        game-settings-open = true;
+    }
+
+    // Up/Down move, Left/Right step (Accept steps forward), Options resets the row, Accept on
+    // the last row asks to reset them all; Back closes.
+    function handle-game-settings(action: UiAction) -> NavResult {
+        if game-settings-confirm {
+            if action == UiAction.left || action == UiAction.right {
+                let old = game-settings-confirm-index;
+                game-settings-confirm-index = action == UiAction.left ? 0 : 1;
+                return Nav.moved(game-settings-confirm-index != old);
+            }
+            if action == UiAction.back { game-settings-confirm = false; return NavResult.handled; }
+            if action == UiAction.accept {
+                game-settings-confirm = false;
+                if game-settings-confirm-index == 0 { HomeData.game-setting-reset(""); }
+                return NavResult.handled;
+            }
+            return NavResult.edge;
+        }
+        let rows = HomeData.game-settings-rows.length;
+        if action == UiAction.back {
+            game-settings-open = false;
+            return NavResult.handled;
+        }
+        if rows == 0 { return NavResult.handled; }
+        if action == UiAction.up || action == UiAction.down {
+            let old = game-settings-index;
+            game-settings-index = max(0, min(rows - 1, game-settings-index + (action == UiAction.up ? -1 : 1)));
+            return Nav.moved(game-settings-index != old);
+        }
+        let row = HomeData.game-settings-rows[game-settings-index];
+        if row.action {
+            if action == UiAction.accept {
+                game-settings-confirm-index = 1;
+                game-settings-confirm = true;
+                return NavResult.handled;
+            }
+            return NavResult.edge;
+        }
+        if action == UiAction.options {
+            if !row.marked { return NavResult.edge; }
+            HomeData.game-setting-reset(row.key);
+            return NavResult.handled;
+        }
+        if action == UiAction.left || action == UiAction.right || action == UiAction.accept {
+            let moved = HomeData.game-setting-step(row.key, action == UiAction.left ? -1 : 1);
+            return moved ? NavResult.moved : NavResult.edge;
+        }
+        NavResult.handled
     }
 
     function activate-current() {
@@ -307,6 +380,8 @@ export component Home inherits Rectangle {
                 activate-current();
             } else if key == "controls" {
                 HomeData.open-game-controls(current.id);
+            } else if key == "game_settings" {
+                open-game-settings();
             } else if key == "properties" {
                 HomeData.request-properties(current.id);
                 properties-open = true;
@@ -346,12 +421,20 @@ export component Home inherits Rectangle {
         if confirm-open {
             return handle-confirm(action);
         }
+        if game-settings-open {
+            return handle-game-settings(action);
+        }
         // Properties stays open under the Customize page: Back from there returns here.
         if properties-open {
             if action == UiAction.up || action == UiAction.down {
+                let last = HomeData.properties.game-settings ? 3 : 2;
                 let old = properties-index;
-                properties-index = max(0, min(2, properties-index + (action == UiAction.up ? -1 : 1)));
+                properties-index = max(0, min(last, properties-index + (action == UiAction.up ? -1 : 1)));
                 return Nav.moved(properties-index != old);
+            }
+            if action == UiAction.accept && properties-index == 3 {
+                open-game-settings();
+                return NavResult.handled;
             }
             if action == UiAction.accept {
                 HomeData.customize(current.id, properties-index == 0 ? "art" : properties-index == 1 ? "theme" : "match");
@@ -754,6 +837,17 @@ export component Home inherits Rectangle {
     if properties-open: PropertiesPanel {
         data: HomeData.properties;
         index: properties-index;
+    }
+
+    if game-settings-open: GameSettingsPanel {
+        index: game-settings-index;
+    }
+
+    if game-settings-confirm: ConfirmDialog {
+        heading: "Reset " + current.title + " to console defaults?";
+        message: "This game's own settings go; it uses the console's settings again.";
+        confirm-label: "Reset";
+        index: game-settings-confirm-index;
     }
 
     if confirm-open: ConfirmDialog {

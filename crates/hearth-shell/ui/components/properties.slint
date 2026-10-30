@@ -79,6 +79,7 @@ export component PropertiesPanel inherits Rectangle {
             Action { icon: Icons.image; label: "Artwork"; focused: index == 0; }
             Action { icon: Icons.music; label: "Theme music"; focused: index == 1; }
             Action { icon: Icons.help; label: "Wrong game?"; focused: index == 2; }
+            if data.game-settings: Action { icon: Icons.cpu; label: "Game settings"; focused: index == 3; }
         }
     }
 }

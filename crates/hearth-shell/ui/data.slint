@@ -16,6 +16,7 @@ export struct HomeTile {
     art-b: color,
     running: bool,      // this game's session is running (frozen or not)
     favorite: bool,
+    game-settings: bool, // the game has a Game settings page (Dolphin games)
     // Art; empty images (width 0) mean "not there": placeholders are drawn instead.
     art: image,         // square grid
     hero: image,        // sharp banner for the hero zone
@@ -35,6 +36,7 @@ export struct GameProperties {
     path: string,
     size: string,
     match-name: string, // SteamGridDB game it matched, or why there is none
+    game-settings: bool, // a "Game settings" row (Dolphin games)
 }
 
 export struct SettingsCategory {
@@ -112,6 +114,15 @@ export global HomeData {
     callback request-properties(/* game id */ string);
     // Opens the Customize page on a section ("art", "theme" or "match").
     callback customize(/* game id */ string, /* section */ string);
+    // A game's Game settings page (emulator settings for that game only): `open-game-settings`
+    // fills `game-settings-rows` (synchronously); a step (-1/+1) changes a row (false when it
+    // can't move); a reset removes one row's override, or all of them (key "").
+    in property <string> game-settings-title;
+    in property <[EmuRow]> game-settings-rows;
+    in property <string> game-settings-note;
+    callback open-game-settings(/* game id */ string);
+    callback game-setting-step(/* row key */ string, /* step */ int) -> bool;
+    callback game-setting-reset(/* row key, "" for all */ string);
     // The focused game's animated hero and logo (README §6 "Animated art"): frames flip from
     // Rust; `anim-id` is the game they belong to. Each `-on` fades its frames in over the
     // still once the first is there, and out when it stops.

@@ -113,7 +113,9 @@ export component EmuRows inherits Rectangle {
 
     property <length> step: Theme.row-height + Theme.row-gap;
     property <length> footer-h: 2 * Theme.body * 1.5 + Theme.caption * 1.5 + Theme.sp-32;
-    property <length> view-h: self.height - footer-h;
+    // Whole rows only: a row cut by the edge would read as a glitch.
+    property <int> visible-rows: max(1, floor((self.height - footer-h + Theme.row-gap) / step));
+    property <length> view-h: visible-rows * step - Theme.row-gap;
     // Keeps the focused row in view, with one row of context when there is more.
     property <length> scroll: max(0, min(rows.length * step - view-h,
         (max(0, focus-index) + 2) * step - view-h));

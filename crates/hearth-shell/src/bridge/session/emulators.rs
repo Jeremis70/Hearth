@@ -4,15 +4,17 @@
 
 use std::rc::Rc;
 
-use hearth_core::emusettings::{EmulatorSettings, Setting, merge};
-use hearth_core::model::Game;
+use std::collections::BTreeMap;
+
+use hearth_core::emusettings::{EmulatorSettings, Scope, Setting, merge};
+use hearth_core::model::{Game, GameId};
 use hearth_core::profiles::dolphin::GameRef;
 use hearth_core::systems::EmulatorKind;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use super::{Controller, with};
 use crate::bridge::models::set_category_status;
-use crate::{AppWindow, EmuRow, SettingsCategory, SettingsData};
+use crate::{AppWindow, EmuRow, HomeData, SettingsCategory, SettingsData};
 
 /// Emulators listed in Settings, by key.
 const EMULATORS: [(&str, &str); 2] = [("dolphin", "Dolphin"), ("retroarch", "RetroArch")];
@@ -28,6 +30,50 @@ pub(super) fn wire(app: &AppWindow) {
     settings.on_emu_reset(|| {
         with(Controller::emu_reset);
     });
+    let home = app.global::<HomeData>();
+    // Synchronous, like request-properties: the page is shown right after.
+    home.on_open_game_settings(|id| {
+        let id = GameId::new(id.as_str());
+        with(|c| c.open_game_settings(&id));
+    });
+    home.on_game_setting_step(|key, step| {
+        with(|c| c.game_setting_step(&key, step)).unwrap_or(false)
+    });
+    home.on_game_setting_reset(|key| {
+        with(|c| c.game_setting_reset(&key));
+    });
+}
+
+/// What a per-game row shows: the game's own value, else what Dolphin's shipped game INI sets
+/// (it beats the console's), else the console's; and whether the game has its own.
+fn game_value(
+    settings: &EmulatorSettings,
+    setting: &Setting,
+    game: &BTreeMap<String, String>,
+    shipped: &BTreeMap<String, String>,
+) -> (String, GameSource) {
+    if let Some(v) = game
+        .get(&setting.id)
+        .filter(|v| setting.choice(v).is_some())
+    {
+        return (v.clone(), GameSource::Game);
+    }
+    if let Some(v) = shipped.get(&setting.id) {
+        return (v.clone(), GameSource::Dolphin);
+    }
+    let shared = settings.shared();
+    (
+        settings.resolved(&shared).console(setting).0,
+        GameSource::Console,
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GameSource {
+    Console,
+    /// Dolphin's own game settings (`Sys/GameSettings`).
+    Dolphin,
+    Game,
 }
 
 /// "Balanced", "Custom".
@@ -217,6 +263,126 @@ impl Controller {
         if let Some(key) = self.emu_open.clone() {
             self.fill_emulator_page(&key);
         }
+        if let Some(id) = self.game_settings_open.clone() {
+            self.fill_game_settings(&id);
+        }
+    }
+
+    /// The Dolphin reference of a game by id.
+    fn game_ref(&self, id: &GameId) -> Option<(Game, GameRef)> {
+        let game = self.entries.iter().find(|e| &e.game.id == id)?.game.clone();
+        let game_ref = GameRef::for_game(&game, &self.picks)?;
+        Some((game, game_ref))
+    }
+
+    fn open_game_settings(&mut self, id: &GameId) {
+        self.game_settings_open = Some(id.clone());
+        self.fill_game_settings(id);
+    }
+
+    /// A game's Game settings page: its per-game rows, then "Reset to console defaults".
+    fn fill_game_settings(&mut self, id: &GameId) {
+        let Some(app) = self.app.upgrade() else {
+            return;
+        };
+        let home = app.global::<HomeData>();
+        let Some((game, game_ref)) = self.game_ref(id) else {
+            let title = self
+                .entries
+                .iter()
+                .find(|e| &e.game.id == id)
+                .map_or_else(String::new, |e| e.game.title.clone());
+            home.set_game_settings_title(format!("{title} · no disc id, no game settings").into());
+            home.set_game_settings_rows(model(Vec::new()));
+            return;
+        };
+        let settings = self.dolphin.settings();
+        let overrides = settings.game(&game_ref.dir);
+        let shipped = self.dolphin.shipped_game_values(&game_ref.id);
+        let mut rows: Vec<EmuRow> = settings
+            .schema()
+            .settings
+            .iter()
+            .filter(|s| s.scope == Scope::PerGame)
+            .map(|s| {
+                let (value, source) = game_value(settings, s, &overrides, &shipped);
+                let mut row = setting_row(s, &value);
+                row.marked = source == GameSource::Game;
+                row.note = match source {
+                    GameSource::Game => "Custom for this game".into(),
+                    GameSource::Dolphin => "Set by Dolphin for this game".into(),
+                    GameSource::Console => Default::default(),
+                };
+                row
+            })
+            .collect();
+        rows.push(action_row(
+            "reset",
+            "Reset to console defaults",
+            "Removes this game's own settings: it uses the console's again.",
+        ));
+        home.set_game_settings_title(format!("{} · Game settings", game.title).into());
+        let rows_model = home.get_game_settings_rows();
+        if rows_model.row_count() == rows.len() {
+            for (i, row) in rows.into_iter().enumerate() {
+                if rows_model.row_data(i).as_ref() != Some(&row) {
+                    rows_model.set_row_data(i, row);
+                }
+            }
+        } else {
+            home.set_game_settings_rows(model(rows));
+        }
+        home.set_game_settings_note(self.applies_note(EmulatorKind::Dolphin).into());
+    }
+
+    /// Left/Right on a row of the Game settings page: the game gets its own value.
+    fn game_setting_step(&mut self, key: &str, step: i32) -> bool {
+        let Some((_, game_ref)) = self
+            .game_settings_open
+            .clone()
+            .and_then(|id| self.game_ref(&id))
+        else {
+            return false;
+        };
+        let settings = self.dolphin.settings().clone();
+        let Some(setting) = settings.schema().setting(key) else {
+            return false;
+        };
+        let overrides = settings.game(&game_ref.dir);
+        let shipped = self.dolphin.shipped_game_values(&game_ref.id);
+        let (current, _) = game_value(&settings, setting, &overrides, &shipped);
+        let Some(choice) = stepped(setting, &current, step) else {
+            return false;
+        };
+        if let Err(err) = settings.set_game(&game_ref.dir, key, Some(choice)) {
+            tracing::warn!("can't save the game's setting: {err}");
+            self.toast("Couldn't save the setting");
+            return false;
+        }
+        self.refresh_emulators();
+        true
+    }
+
+    /// Removes one override of the open game (`key`), or all of them (`""`).
+    fn game_setting_reset(&mut self, key: &str) {
+        let Some((_, game_ref)) = self
+            .game_settings_open
+            .clone()
+            .and_then(|id| self.game_ref(&id))
+        else {
+            return;
+        };
+        let settings = self.dolphin.settings();
+        let done = if key.is_empty() {
+            settings.reset_game(&game_ref.dir)
+        } else {
+            settings.set_game(&game_ref.dir, key, None)
+        };
+        if let Err(err) = done {
+            tracing::warn!("can't reset the game's settings: {err}");
+            self.toast("Couldn't reset the settings");
+        }
+        self.refresh_emulators();
     }
 
     /// The running (or frozen) game, if it runs in `kind`.

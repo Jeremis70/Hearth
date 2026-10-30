@@ -1,0 +1,266 @@
+# Dolphin settings Hearth shows in Settings → Emulators and on a game's Game settings page.
+#
+# Every key below was checked against Dolphin's source at the installed version
+# (Core/Config/GraphicsSettings.cpp, Core/Config/MainSettings.cpp, VideoCommon/VideoConfig.h,
+# ConfigLoaders/GameConfigLoader.cpp). Keys Hearth doesn't list here are the user's: Hearth never
+# writes them.
+#
+# file:     "Main" (Config/Dolphin.ini) or "GFX" (Config/GFX.ini). A per-game value goes into
+#           GameSettings/<game id>.ini, where GFX sections are prefixed "Video_" and Main.Core
+#           is "Core".
+# type:     "bool" (True/False, shown On/Off) or "choice".
+# choices:  value is what the file holds; id (default: value) is what Hearth stores; set holds
+#           other keys of the same section that the choice writes too.
+# default:  the choice id Dolphin uses when the key is missing.
+# scope:    "console" (shared by every profile) or "per_game" (also overridable per game).
+# applies:  "next_launch" or "restart_game".
+
+emulator = "dolphin"
+verified_with = "Dolphin 2609"
+# Used when no GPU rule below matches.
+default_preset = "balanced"
+
+[[setting]]
+id = "backend"
+label = "Graphics backend"
+description = "How Dolphin talks to the GPU. Vulkan is often smoother; OpenGL is the safe choice."
+file = "Main"
+section = "Core"
+key = "GFXBackend"
+type = "choice"
+choices = [
+    { value = "OGL", label = "OpenGL" },
+    { value = "Vulkan", label = "Vulkan" },
+]
+default = "OGL"
+scope = "console"
+applies = "next_launch"
+breaks_hardcore = false
+
+[[setting]]
+id = "internal_resolution"
+label = "Internal resolution"
+description = "Draws the game sharper than the console did. Higher costs more GPU time."
+file = "GFX"
+section = "Settings"
+key = "InternalResolution"
+type = "choice"
+choices = [
+    { value = "1", label = "Native (480p)" },
+    { value = "2", label = "2× (720p)" },
+    { value = "3", label = "3× (1080p)" },
+    { value = "4", label = "4× (1440p)" },
+    { value = "6", label = "6× (4K)" },
+]
+default = "1"
+scope = "per_game"
+applies = "next_launch"
+breaks_hardcore = false
+
+[[setting]]
+id = "vsync"
+label = "V-Sync"
+description = "Waits for the screen before each frame: no tearing, a little more input delay."
+file = "GFX"
+section = "Hardware"
+key = "VSync"
+type = "bool"
+default = "False"
+scope = "per_game"
+applies = "next_launch"
+breaks_hardcore = false
+
+[[setting]]
+id = "aspect_ratio"
+label = "Aspect ratio"
+description = "The shape of the picture. Auto follows what the game asks for."
+file = "GFX"
+section = "Settings"
+key = "AspectRatio"
+type = "choice"
+choices = [
+    { value = "0", label = "Auto" },
+    { value = "1", label = "Force 16:9" },
+    { value = "2", label = "Force 4:3" },
+    { value = "3", label = "Stretch to screen" },
+]
+default = "0"
+scope = "per_game"
+applies = "next_launch"
+breaks_hardcore = false
+
+[[setting]]
+id = "widescreen_hack"
+label = "Widescreen hack"
+description = "Shows more of the scene on wide screens. Some games draw glitches at the edges."
+file = "GFX"
+section = "Settings"
+key = "wideScreenHack"
+type = "bool"
+default = "False"
+scope = "per_game"
+applies = "next_launch"
+breaks_hardcore = false
+
+[[setting]]
+id = "anti_aliasing"
+label = "Anti-aliasing"
+description = "Smooths jagged edges. Supersampling looks better and costs much more."
+file = "GFX"
+section = "Settings"
+key = "MSAA"
+type = "choice"
+choices = [
+    { value = "1", label = "Off", set = { SSAA = "False" } },
+    { value = "2", label = "2× MSAA", set = { SSAA = "False" } },
+    { value = "4", label = "4× MSAA", set = { SSAA = "False" } },
+    { value = "8", label = "8× MSAA", set = { SSAA = "False" } },
+    { id = "2-ssaa", value = "2", label = "2× SSAA", set = { SSAA = "True" } },
+    { id = "4-ssaa", value = "4", label = "4× SSAA", set = { SSAA = "True" } },
+]
+default = "1"
+scope = "per_game"
+applies = "next_launch"
+breaks_hardcore = false
+
+[[setting]]
+id = "anisotropic_filtering"
+label = "Anisotropic filtering"
+description = "Keeps textures sharp at steep angles, like the ground far ahead. Cheap on most GPUs."
+file = "GFX"
+section = "Enhancements"
+key = "MaxAnisotropy"
+type = "choice"
+choices = [
+    { value = "-1", label = "Game default" },
+    { value = "0", label = "1×" },
+    { value = "1", label = "2×" },
+    { value = "2", label = "4×" },
+    { value = "3", label = "8×" },
+    { value = "4", label = "16×" },
+]
+default = "-1"
+scope = "per_game"
+applies = "next_launch"
+breaks_hardcore = false
+
+[[setting]]
+id = "shader_compilation"
+label = "Shader compilation"
+description = "What happens when a new effect appears. Ubershaders avoid stutter but need a strong GPU."
+file = "GFX"
+section = "Settings"
+key = "ShaderCompilationMode"
+type = "choice"
+choices = [
+    { value = "0", label = "Wait (may stutter)" },
+    { value = "1", label = "Ubershaders" },
+    { value = "2", label = "Hybrid ubershaders" },
+    { value = "3", label = "Skip drawing until ready" },
+]
+default = "0"
+scope = "per_game"
+applies = "next_launch"
+breaks_hardcore = false
+
+[[setting]]
+id = "wait_for_shaders"
+label = "Compile shaders before starting"
+description = "Builds the saved shaders before the game starts: a longer start, less stutter."
+file = "GFX"
+section = "Settings"
+key = "WaitForShadersBeforeStarting"
+type = "bool"
+default = "False"
+scope = "console"
+applies = "next_launch"
+breaks_hardcore = false
+
+[[setting]]
+id = "arbitrary_mipmaps"
+label = "Arbitrary mipmap detection"
+description = "Keeps effects some games draw with distance-based textures, like heat haze."
+file = "GFX"
+section = "Enhancements"
+key = "ArbitraryMipmapDetection"
+type = "bool"
+default = "False"
+scope = "per_game"
+applies = "next_launch"
+breaks_hardcore = false
+
+[[setting]]
+id = "texture_cache"
+label = "Texture cache accuracy"
+description = "Safe fixes rare missing or wrong textures, at some speed. Fast suits nearly every game."
+file = "GFX"
+section = "Settings"
+key = "SafeTextureCacheColorSamples"
+type = "choice"
+choices = [
+    { value = "0", label = "Safe" },
+    { value = "512", label = "Medium" },
+    { value = "128", label = "Fast" },
+]
+default = "128"
+scope = "per_game"
+applies = "next_launch"
+breaks_hardcore = false
+
+# Presets set only speed-versus-quality rows; the others never make a preset "Custom".
+[[preset]]
+id = "performance"
+label = "Performance"
+values = { internal_resolution = "1", anti_aliasing = "1", anisotropic_filtering = "-1", shader_compilation = "3", arbitrary_mipmaps = "False" }
+
+[[preset]]
+id = "balanced"
+label = "Balanced"
+values = { internal_resolution = "2", anti_aliasing = "1", anisotropic_filtering = "2", shader_compilation = "3", arbitrary_mipmaps = "True" }
+
+[[preset]]
+id = "quality"
+label = "Quality"
+values = { internal_resolution = "3", anti_aliasing = "4", anisotropic_filtering = "4", shader_compilation = "2", arbitrary_mipmaps = "True" }
+
+# The preset picked automatically from the GPU Dolphin runs on (the one the firmware booted
+# with: boot_vga). First match wins; devices empty = any device of that vendor. PCI ids, hex.
+[[gpu]]
+# Intel Iris Xe (Tiger Lake, Alder Lake, Raptor Lake).
+vendor = "8086"
+devices = ["9a40", "9a49", "9a60", "9a68", "9a70", "9a78", "46a6", "46a8", "46aa", "4626", "4628", "462a", "46b0", "46b3", "a7a0", "a7a1", "a7a8", "a7a9", "a720", "a721"]
+preset = "balanced"
+
+[[gpu]]
+# Intel UHD/HD of the Skylake to Comet Lake era (Gen9).
+vendor = "8086"
+devices = ["1912", "1916", "191b", "191e", "5912", "5916", "5917", "591b", "591e", "3e91", "3e92", "3e9b", "3ea0", "9b41", "9bc5", "9bc8"]
+preset = "performance"
+
+[[gpu]]
+# Intel Arc: discrete (Alchemist, Battlemage) and Lunar Lake's 140V.
+vendor = "8086"
+devices = ["5690", "5691", "5692", "5693", "5694", "56a0", "56a1", "56a5", "56a6", "e20b", "e20c", "64a0"]
+preset = "quality"
+
+[[gpu]]
+# AMD Radeon 680M, 760M/780M, 880M/890M, 8060S.
+vendor = "1002"
+devices = ["1681", "15bf", "150e", "1586"]
+preset = "quality"
+
+[[gpu]]
+# Older AMD integrated graphics (Vega APUs, Steam Deck).
+vendor = "1002"
+devices = ["15d8", "15dd", "1636", "1638", "164c", "15e7", "163f", "1435", "15c8"]
+preset = "balanced"
+
+[[gpu]]
+# Any other AMD GPU is a discrete Radeon.
+vendor = "1002"
+preset = "quality"
+
+[[gpu]]
+# NVIDIA (no x86 integrated GPUs).
+vendor = "10de"
+preset = "quality"

@@ -4,6 +4,7 @@
 pub mod doc;
 pub mod gpu;
 pub mod schema;
+pub mod store;
 
 pub use doc::{ConfigDoc, Style};
 pub use gpu::Gpu;

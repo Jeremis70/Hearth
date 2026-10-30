@@ -214,6 +214,12 @@ impl ProfileDirs {
         self.emulators().join("dolphin")
     }
 
+    /// An emulator's folder shared by every profile (`<home>/emulators/<name>`): the console
+    /// settings, BIOS files.
+    pub fn shared_emulator(&self, name: &str) -> PathBuf {
+        self.shared_emulators.join(name)
+    }
+
     /// RetroArch's system directory (BIOS and core files), shared by every profile.
     pub fn retroarch_system(&self) -> PathBuf {
         self.shared_emulators.join("retroarch").join("system")

@@ -369,6 +369,10 @@ fn main() -> anyhow::Result<()> {
     };
 
     let dolphin = DolphinInstall::detect();
+    let gpu = hearth_core::emusettings::gpu::detect(std::path::Path::new(
+        hearth_core::emusettings::gpu::SYSFS_DRM,
+    ));
+    tracing::info!(gpu = %gpu.map_or_else(|| "unknown".into(), |g| g.to_string()), "GPU for emulator presets");
     match &dolphin {
         Some(install) => tracing::info!(?install, "Dolphin found"),
         None => tracing::info!("Dolphin not found: GameCube and Wii games won't launch"),
@@ -418,7 +422,7 @@ fn main() -> anyhow::Result<()> {
         systems,
         user: user.clone(),
         profile: RetroArchProfile::for_profile(&user),
-        dolphin: DolphinProfile::new(&user, dolphin),
+        dolphin: DolphinProfile::new(&user, dolphin).with_gpu(gpu),
         device_dir,
         runtime_dir: dirs.runtime().to_path_buf(),
         activity: input.activity.clone(),

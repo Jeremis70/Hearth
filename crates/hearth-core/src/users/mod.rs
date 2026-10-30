@@ -214,6 +214,14 @@ impl ProfileDirs {
         self.emulators().join("dolphin")
     }
 
+    /// Where backups go (`<home>/backup`, beside `profiles/` in both layouts).
+    pub fn backup_root(&self) -> PathBuf {
+        self.root
+            .parent()
+            .and_then(Path::parent)
+            .map_or_else(|| self.root.join("backup"), |home| home.join("backup"))
+    }
+
     /// An emulator's folder shared by every profile (`<home>/emulators/<name>`): the console
     /// settings, BIOS files.
     pub fn shared_emulator(&self, name: &str) -> PathBuf {

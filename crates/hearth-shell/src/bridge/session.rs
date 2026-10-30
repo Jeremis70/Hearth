@@ -31,6 +31,7 @@ use hearth_core::custom::CustomStore;
 use hearth_core::library::{Library, LibraryEntry};
 use hearth_core::model::{Game, GameId, SystemId};
 use hearth_core::packs;
+use hearth_core::profiles::dolphin::GameRef;
 use hearth_core::profiles::{DolphinProfile, RetroArchProfile};
 use hearth_core::runtime::{
     LaunchCtx, ProcessRuntime, Runtime, RuntimeEvent, Session as RuntimeSession, SessionId,
@@ -1315,7 +1316,8 @@ impl Controller {
                     self.toast("Dolphin isn't installed");
                     return;
                 };
-                if let Err(err) = self.dolphin.prepare(&input.translation) {
+                let game_ref = GameRef::for_game(&game, &self.picks);
+                if let Err(err) = self.dolphin.prepare(&input.translation, game_ref.as_ref()) {
                     self.toast(&format!("Couldn't write the Dolphin config: {err}"));
                     return;
                 }

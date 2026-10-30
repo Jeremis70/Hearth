@@ -1142,7 +1142,7 @@ fn measure_durations(paths: Vec<PathBuf>) {
 
 /// Dev socket words for the Customize page (`scripts/send-action.sh`); their reply is "ok", an
 /// error, or (`custom_state`) JSON.
-const DEV_WORDS: [&str; 15] = [
+const DEV_WORDS: [&str; 20] = [
     "customize:",
     "pick:",
     "pick_file:",
@@ -1158,6 +1158,11 @@ const DEV_WORDS: [&str; 15] = [
     "reduce_motion:",
     "pad:",
     "profile_state",
+    "emu_state:",
+    "emu_set:",
+    "emu_game_set:",
+    "emu_game_reset:",
+    "emu_effective:",
 ];
 
 /// Wraps the dev socket's command handler with the Customize page's words, run on the UI
@@ -1208,6 +1213,9 @@ impl Controller {
             "custom_state" => return self.custom_state(),
             "anim_state" => return self.anim_state().to_string(),
             "profile_state" => return self.profile_state().to_string(),
+            "emu_state" | "emu_set" | "emu_game_set" | "emu_game_reset" | "emu_effective" => {
+                return self.emu_command(name, arg);
+            }
             "pad" => self.dev_pad(arg),
             // anim:on|off and reduce_motion:on|off, like the Display & sound toggles.
             "anim" | "reduce_motion" => {

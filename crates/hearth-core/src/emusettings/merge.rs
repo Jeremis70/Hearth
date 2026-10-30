@@ -86,6 +86,48 @@ impl<'a> FilePlan<'a> {
     }
 }
 
+/// What `plans` would write, as JSON (the dev socket's `emu_effective`): per file its locked
+/// keys, the settings with the keys they set and their layer, and the keys removed.
+pub fn describe(plans: &[FilePlan<'_>]) -> serde_json::Value {
+    let files: Vec<serde_json::Value> = plans
+        .iter()
+        .map(|p| {
+            let settings: Vec<serde_json::Value> = p
+                .settings
+                .iter()
+                .map(|w| {
+                    let keys: serde_json::Map<String, serde_json::Value> = w
+                        .setting
+                        .keys_for(&w.choice)
+                        .into_iter()
+                        .map(|(k, v)| (k.to_owned(), v.into()))
+                        .collect();
+                    serde_json::json!({
+                        "id": w.setting.id,
+                        "section": w.section,
+                        "choice": w.choice,
+                        "keys": keys,
+                        "layer": match w.layer { Layer::Console => "console", Layer::Game => "game" },
+                    })
+                })
+                .collect();
+            let locked: Vec<String> = p
+                .locked
+                .iter()
+                .map(|(s, k, v)| format!("[{s}] {k} = {v}"))
+                .collect();
+            let strip: Vec<String> = p.strip.iter().map(|(s, k)| format!("[{s}] {k}")).collect();
+            serde_json::json!({
+                "file": p.rel,
+                "locked": locked,
+                "settings": settings,
+                "removed_if_present": strip,
+            })
+        })
+        .collect();
+    serde_json::Value::Array(files)
+}
+
 /// A setting the user changed outside Hearth, kept in the file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Adopted {

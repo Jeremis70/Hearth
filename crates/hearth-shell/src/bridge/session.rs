@@ -53,6 +53,7 @@ use super::art::{self as art_ui, ArtLoader, ArtMap, ConsoleIcons};
 
 mod anim;
 mod customize;
+mod emulators;
 
 use super::controls_page::{
     self, ApplyOutcome, EmulatorConfigApplier, InputPlumberApplier, MappingApplier, Page, TestPage,

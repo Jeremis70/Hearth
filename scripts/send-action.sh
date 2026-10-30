@@ -24,6 +24,17 @@
 #     anim_state            what animates now as JSON: per track (hero, logo, preview) the
 #                           source, format, mode (full/window/stream), frames, decoded bytes,
 #                           flips and late flips; stills and why; caps; .anim disk use
+#   Emulator settings (Dolphin; reply "ok", an error, or JSON):
+#     emu_state:dolphin[:<art key>]          preset, status and rows (value, label, source:
+#                                            default/preset/console/game; with a game, what
+#                                            Dolphin's own game INIs set)
+#     emu_set:dolphin:<setting>=<choice>     a console value, e.g. internal_resolution=3
+#     emu_set:dolphin:preset=<id|auto>       pick a preset (auto: the GPU's)
+#     emu_set:dolphin:reset                  back to Hearth's defaults
+#     emu_game_set:<art key>:<setting>=<choice>   a per-game override (gc/GZ2E01)
+#     emu_game_reset:<art key>[:<setting>]   remove the game's overrides (or one)
+#     emu_effective:<art key>                what the next launch writes: files, locked
+#                                            keys, settings and their layer, Dolphin's args
 #   Profiles:
 #     profile_state         the active profile (id, name) and its folders (saves, controls,
 #                           emulators), the startup migration's result, whether games may start

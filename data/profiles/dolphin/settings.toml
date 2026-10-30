@@ -73,7 +73,7 @@ breaks_hardcore = false
 [[setting]]
 id = "aspect_ratio"
 label = "Aspect ratio"
-description = "The shape of the picture. Auto follows what the game asks for."
+description = "The shape of the picture. Auto follows the game; Stretch fills the screen and distorts it."
 file = "GFX"
 section = "Settings"
 key = "AspectRatio"
@@ -92,7 +92,7 @@ breaks_hardcore = false
 [[setting]]
 id = "widescreen_hack"
 label = "Widescreen hack"
-description = "Shows more of the scene on wide screens. Some games draw glitches at the edges."
+description = "Shows more of the scene on wide screens; needs Aspect ratio on Force 16:9. The HUD may stretch."
 file = "GFX"
 section = "Settings"
 key = "wideScreenHack"

@@ -3,8 +3,8 @@
 //! Only a few bytes are read. Used for the per-game controls key and to identify games for
 //! artwork.
 //!
-//! - GameCube/Wii: the disc header holds the 6-character game id at 0x00 and the internal
-//!   name (up to 0x60 bytes, NUL-padded) at 0x20. Containers keep a copy of that header at a
+//! - GameCube/Wii: the disc header holds the 6-character game id at 0x00, the disc revision at
+//!   0x07 and the internal name (up to 0x60 bytes, NUL-padded) at 0x20. Containers keep a copy of that header at a
 //!   fixed offset: RVZ/WIA at 0x58, CISO at 0x8000, WBFS at 0x200; plain ISO/GCM (and NKit)
 //!   at 0.
 //! - N64: the internal name is 20 bytes at 0x20 and the game code 4 bytes at 0x3B, in one of
@@ -24,6 +24,8 @@ pub struct RomHeader {
     /// Internal name, trimmed (`THE LEGEND OF ZELDA`). Only kept when it is printable ASCII:
     /// Japanese discs use Shift-JIS, which is no use for searching.
     pub internal_name: Option<String>,
+    /// Disc revision (GameCube/Wii): Dolphin also reads `GameSettings/<id>r<rev>.ini`.
+    pub revision: Option<u16>,
 }
 
 /// Reads the header of `rom` for `system`.
@@ -52,6 +54,10 @@ fn disc_header(rom: &Path) -> io::Result<RomHeader> {
     };
     let mut id = [0u8; 6];
     read_at(&mut file, offset, &mut id)?;
+    let mut rev = [0u8; 1];
+    let revision = read_at(&mut file, offset + 7, &mut rev)
+        .ok()
+        .map(|()| u16::from(rev[0]));
     // The name is optional: a truncated test file or odd dump still has its id.
     let mut name = [0u8; 0x60];
     let internal_name = read_at(&mut file, offset + 0x20, &mut name)
@@ -60,6 +66,7 @@ fn disc_header(rom: &Path) -> io::Result<RomHeader> {
     Ok(RomHeader {
         serial: valid_serial(&id),
         internal_name,
+        revision,
     })
 }
 
@@ -85,6 +92,7 @@ fn n64_header(rom: &Path) -> io::Result<RomHeader> {
     Ok(RomHeader {
         serial: valid_serial(&header[0x3B..0x3F]),
         internal_name: text(&header[0x20..0x34]),
+        revision: None,
     })
 }
 
@@ -182,7 +190,13 @@ pub(crate) mod tests {
             let header = read(&SystemId::new("gc"), &path).unwrap();
             assert_eq!(header.serial.as_deref(), Some("GZ2E01"), "{file}");
             assert_eq!(header.internal_name.as_deref(), Some(name), "{file}");
+            assert_eq!(header.revision, Some(0), "{file}");
         }
+        let path = dir.path().join("rev2.iso");
+        let mut data = disc(b"", 0, b"GZ2E01", name);
+        data[7] = 2;
+        std::fs::write(&path, data).unwrap();
+        assert_eq!(read(&SystemId::new("gc"), &path).unwrap().revision, Some(2));
     }
 
     #[test]

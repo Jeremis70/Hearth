@@ -9,6 +9,7 @@
 
 pub mod backup;
 pub mod doc;
+pub mod gecko;
 pub mod gpu;
 pub mod merge;
 pub mod schema;

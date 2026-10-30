@@ -305,6 +305,10 @@ export component Home inherits Rectangle {
             }
             return NavResult.edge;
         }
+        if row.fixed {
+            return action == UiAction.left || action == UiAction.right || action == UiAction.accept
+                || action == UiAction.options ? NavResult.edge : NavResult.handled;
+        }
         if action == UiAction.options {
             if !row.marked { return NavResult.edge; }
             HomeData.game-setting-reset(row.key);

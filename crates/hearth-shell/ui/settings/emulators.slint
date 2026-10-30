@@ -88,7 +88,7 @@ export component EmuRowView inherits Rectangle {
             }
         }
         if !data.action: Text {
-            text: focused ? "‹  " + data.value + "  ›" : data.value;
+            text: focused && !data.fixed ? "‹  " + data.value + "  ›" : data.value;
             vertical-alignment: center;
             horizontal-alignment: right;
             font-size: Theme.body;

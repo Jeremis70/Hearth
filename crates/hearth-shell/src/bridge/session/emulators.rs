@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 use hearth_core::emusettings::{EmulatorSettings, Scope, Setting, merge};
 use hearth_core::model::{Game, GameId};
-use hearth_core::profiles::dolphin::GameRef;
+use hearth_core::profiles::dolphin::{GameRef, WIDESCREEN};
 use hearth_core::systems::EmulatorKind;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
@@ -100,6 +100,7 @@ fn preset_row(settings: &EmulatorSettings) -> EmuRow {
         note: Default::default(),
         marked: false,
         action: false,
+        fixed: false,
     }
 }
 
@@ -113,6 +114,7 @@ fn setting_row(setting: &Setting, value: &str) -> EmuRow {
         note: Default::default(),
         marked: false,
         action: false,
+        fixed: false,
     }
 }
 
@@ -125,6 +127,7 @@ fn action_row(key: &str, label: &str, description: &str) -> EmuRow {
         note: Default::default(),
         marked: false,
         action: true,
+        fixed: false,
     }
 }
 
@@ -181,9 +184,17 @@ impl Controller {
                 }
                 let (_, game) = self.dolphin_game(key)?;
                 let shipped = self.dolphin.shipped_game_values(&game.id);
-                Ok(settings
-                    .state_json(Some(&settings.game(&game.dir)), &shipped)
-                    .to_string())
+                let mut state = settings.state_json(Some(&settings.game(&game.dir)), &shipped);
+                state["widescreen"] = match self.dolphin.widescreen_code(&game) {
+                    Some(ws) => serde_json::json!({
+                        "code": ws.code.name,
+                        "approved": ws.approved,
+                        "breaks_hardcore": ws.breaks_hardcore(),
+                        "on": self.dolphin.widescreen_on(&game),
+                    }),
+                    None => serde_json::Value::Null,
+                };
+                Ok(state.to_string())
             }
             "emu_set" => {
                 let rest = arg
@@ -208,9 +219,12 @@ impl Controller {
                     .split_once('=')
                     .ok_or("error: emu_game_set:<art key>:<setting>=<choice>")?;
                 let (_, game) = self.dolphin_game(key)?;
-                settings
-                    .set_game(&game.dir, id, Some(choice))
-                    .map_err(|e| format!("error: {e}"))?;
+                if id == WIDESCREEN {
+                    self.dolphin.set_widescreen(&game, choice == "True")
+                } else {
+                    settings.set_game(&game.dir, id, Some(choice))
+                }
+                .map_err(|e| format!("error: {e}"))?;
                 self.refresh_emulators();
                 Ok("ok".into())
             }
@@ -222,6 +236,7 @@ impl Controller {
                 };
                 let (_, game) = self.dolphin_game(key)?;
                 match id {
+                    Some(WIDESCREEN) => self.dolphin.set_widescreen(&game, false),
                     Some(id) => settings.set_game(&game.dir, id, None),
                     None => settings.reset_game(&game.dir),
                 }
@@ -299,23 +314,56 @@ impl Controller {
         let settings = self.dolphin.settings();
         let overrides = settings.game(&game_ref.dir);
         let shipped = self.dolphin.shipped_game_values(&game_ref.id);
-        let mut rows: Vec<EmuRow> = settings
-            .schema()
-            .settings
-            .iter()
-            .filter(|s| s.scope == Scope::PerGame)
-            .map(|s| {
-                let (value, source) = game_value(settings, s, &overrides, &shipped);
-                let mut row = setting_row(s, &value);
-                row.marked = source == GameSource::Game;
-                row.note = match source {
-                    GameSource::Game => "Custom for this game".into(),
-                    GameSource::Dolphin => "Set by Dolphin for this game".into(),
-                    GameSource::Console => Default::default(),
-                };
-                row
+        // Widescreen: only for games Dolphin ships a widescreen code for.
+        let widescreen = self
+            .dolphin
+            .widescreen_code(&game_ref)
+            .map(|_| self.dolphin.widescreen_on(&game_ref));
+        let mut rows: Vec<EmuRow> = widescreen
+            .map(|on| EmuRow {
+                key: WIDESCREEN.into(),
+                label: "Widescreen".into(),
+                value: if on { "On" } else { "Off" }.into(),
+                description: "Makes the game draw in true 16:9 with Dolphin's own code for it. \
+                              May cause small glitches in some games."
+                    .into(),
+                note: if on { "Custom for this game" } else { "" }.into(),
+                marked: on,
+                action: false,
+                fixed: false,
             })
+            .into_iter()
             .collect();
+        rows.extend(
+            settings
+                .schema()
+                .settings
+                .iter()
+                .filter(|s| s.scope == Scope::PerGame)
+                .map(|s| {
+                    // While Widescreen is on, it sets these two.
+                    let forced = match s.id.as_str() {
+                        "aspect_ratio" if widescreen == Some(true) => Some("1"),
+                        "widescreen_hack" if widescreen == Some(true) => Some("False"),
+                        _ => None,
+                    };
+                    if let Some(value) = forced {
+                        let mut row = setting_row(s, value);
+                        row.note = "Set by Widescreen".into();
+                        row.fixed = true;
+                        return row;
+                    }
+                    let (value, source) = game_value(settings, s, &overrides, &shipped);
+                    let mut row = setting_row(s, &value);
+                    row.marked = source == GameSource::Game;
+                    row.note = match source {
+                        GameSource::Game => "Custom for this game".into(),
+                        GameSource::Dolphin => "Set by Dolphin for this game".into(),
+                        GameSource::Console => Default::default(),
+                    };
+                    row
+                }),
+        );
         rows.push(action_row(
             "reset",
             "Reset to console defaults",
@@ -344,6 +392,26 @@ impl Controller {
         else {
             return false;
         };
+        if key == WIDESCREEN {
+            let on = self.dolphin.widescreen_on(&game_ref);
+            if (step > 0) == on {
+                return false;
+            }
+            if let Err(err) = self.dolphin.set_widescreen(&game_ref, !on) {
+                tracing::warn!("can't save the game's setting: {err}");
+                self.toast("Couldn't save the setting");
+                return false;
+            }
+            self.refresh_emulators();
+            return true;
+        }
+        if self.dolphin.widescreen_on(&game_ref)
+            && self.dolphin.widescreen_code(&game_ref).is_some()
+            && matches!(key, "aspect_ratio" | "widescreen_hack")
+        {
+            // Set by Widescreen.
+            return false;
+        }
         let settings = self.dolphin.settings().clone();
         let Some(setting) = settings.schema().setting(key) else {
             return false;
@@ -376,6 +444,8 @@ impl Controller {
         let settings = self.dolphin.settings();
         let done = if key.is_empty() {
             settings.reset_game(&game_ref.dir)
+        } else if key == WIDESCREEN {
+            self.dolphin.set_widescreen(&game_ref, false)
         } else {
             settings.set_game(&game_ref.dir, key, None)
         };

@@ -48,7 +48,8 @@ export struct SettingsCategory {
 // One row of an emulator's settings (Settings → Emulators → Dolphin, or a game's Game
 // settings page): `action` rows (Reset) run on Accept; the others step through their choices
 // with Left/Right (Accept steps forward). `marked`: changed for this game (accent dot);
-// `note`: a second line ("Custom for this game", "Dolphin sets On for this game").
+// `note`: a second line ("Custom for this game", "Set by Dolphin for this game"); `fixed`: set
+// by another row (Widescreen), not changeable here.
 export struct EmuRow {
     key: string,
     label: string,
@@ -57,6 +58,7 @@ export struct EmuRow {
     note: string,
     marked: bool,
     action: bool,
+    fixed: bool,
 }
 
 // Settings → Display & sound, below the pack rows: a volume (`slider`, 0–100 in steps of 10)

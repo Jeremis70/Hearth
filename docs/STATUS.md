@@ -36,6 +36,39 @@ Last updated: 2026-10-30 (round E.1, emulator settings part 1). Read this first,
   Settings → Emulators, a Game settings page for Dolphin games. Design: README §9 "Emulator
   settings", §4 "Settings" and "Home".
 
+Round E.1b (Widescreen, library lock), 2026-10-30, oldest first:
+- Disk: `target/debug/incremental` (20 GB) and `target/debug/examples` (6 GB) deleted; 19 GB
+  free before, 44 GB after.
+- `13b3fec`, `4a219a4` (after E.1, from the user's checks): stepping a game's setting back to
+  its value without an override removes the override; the widescreen hack's description says
+  it needs Force 16:9.
+- `258cd58`: disc revision in `rom_header`. `6618399`: `emusettings::gecko` (shipped codes,
+  widescreen code, approval hash; `sha1` 0.11 added). `6f62c7a`: merge Widescreen layer,
+  managed keys and lines (`Applied.lines`). `61cb7dd`: Dolphin's Widescreen layer
+  (`set_widescreen`, `widescreen_code`, `with_sys_dir`). `a3ef168`: the row, fixed rows,
+  `emu_game_set:<key>:widescreen=True|False`, `emu_state` `widescreen`.
+- `af7b9e2`: **"Couldn't load the library: database is locked"**, cause: on every start the
+  art worker's `Library::open` (`BEGIN IMMEDIATE`, write lock ~1 ms) overlaps the library
+  thread's `Library::sync` (instrumented: both open within 50 µs, sync starts 0.3–0.5 ms after
+  the art worker's open ends). `sync` was a deferred transaction: it reads under a shared lock,
+  then upgrades at its first write; with another connection holding the write lock, SQLite
+  fails the upgrade at once ("database is locked", busy timeout not used, to avoid a deadlock).
+  Only starts whose scan changes the library (a new or moved game, the migration) write in
+  `sync`, so it was rare: seen twice in ~45 starts. Not the migration: its connection is
+  dropped before startup continues. Fix: `BEGIN IMMEDIATE` for every transaction that writes
+  (`sync`, `record_session`, `set_art_candidates`); regression test
+  `sync_waits_for_another_writer_instead_of_failing` (fails with deferred transactions).
+- Verified live (test home, nested gamescope 1920×1080, dev socket, screenshots): TP's row
+  (approved code), On: `GameSettings/GZ2E01.ini` held `[Gecko_Enabled] $16:9 Widescreen v2`,
+  `EnableCheats = True`, `AspectRatio = 1`, `wideScreenHack = False` (no `EnableCheats` in
+  `Dolphin.ini`); the attract intro filled 16:9 undistorted at 29.97 fps; Aspect ratio and
+  Widescreen hack showed "Set by Widescreen" and ignored Right and Options. Off: the per-game
+  Stretch (`AspectRatio = 3`) came back, the code line and keys left. A fake disc `GQQE01`
+  (`.dev-data/test-games/gc/Fake Quiz/`, 4 KB, no shipped code) has no row. 10 more starts
+  where the scan adds a game loaded the library.
+- Not verified: the HUD in gameplay (the dev socket can't press buttons in a game); a game with
+  a revision file; achievements.
+
 Round E.1 (emulator settings, part 1), 2026-10-30, oldest first:
 - `99e1886`: sha2 0.11.1 (built and all tests passed before the commit, migration tests
   included).
@@ -91,8 +124,7 @@ Round E.1 (emulator settings, part 1), 2026-10-30, oldest first:
     browser, editor and Claude); `~/.config/retroarch` unchanged.
 - Not verified: the user's real `.dev-data` (untouched: no Hearth start on it in this round);
   real controller input on the new pages; Vulkan or another GPU; the Flatpak; listening.
-- Found, not fixed: the start that ran the test home's profile migration showed "Couldn't load
-  the library: database is locked" (once; later starts were fine).
+- Found then: "Couldn't load the library: database is locked" (fixed in E.1b).
 - **First start on the real `.dev-data`:** backup of `Dolphin.ini`, `GFX.ini`, `Logger.ini`
   (and `retroarch.cfg` at OoT's launch) in `backup/<stamp>-emulator-settings/default/`;
   `Dolphin.ini` gains the locked keys in their sections (its `[Analytics] ID`, `[DSP]`,
@@ -745,7 +777,7 @@ worker's side), `hearth-core::files`, `hearth-audio::analyze`, `ui/customize/`,
   - library: `.dev-data/data/library.sqlite3`.
 - **FPS counter:** `HEARTH_RETROARCH_ARGS="--appendconfig=data/dev/retroarch-fps.cfg"`.
 - **Checks:** `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
-  `cargo test --workspace` (audio 16, core 227, platform 35, shell 28 tests).
+  `cargo test --workspace` (audio 16, core 237, platform 35, shell 28 tests).
 - **Artwork:** set `HEARTH_STEAMGRIDDB_KEY` or `[art] steamgriddb_key` in
   `.dev-data/config/hearth.toml` (gitignored). Without it: placeholders and one log line.
 

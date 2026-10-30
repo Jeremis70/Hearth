@@ -157,7 +157,7 @@ Reduce motion (Settings → Display & sound): all durations multiply by `Theme.m
 - **Starting a game while another runs** (Play on Home, Options → Play, later the Library): a `ConfirmDialog` (720 wide; titles wrap, two lines at most) "Close <running game>?", "<new game> will start. Unsaved progress will be lost.", [Close and play] (danger) and [Cancel] (focused). The plain Close game confirmation says only "Unsaved progress will be lost." Confirm closes the running game the usual way (a frozen game is continued first so it can quit), waits for its session to end, then launches the new one. Cancel or Back leaves everything as it was.
 - **Problems Hearth works around** (e.g. `hearth.toml` unreadable): a one-line notice at the bottom center, warning icon + "Couldn't read hearth.toml (line 3) · Using default settings", for 20 s. It never quotes the file (it may hold the API key).
 - **Properties:** a modal card with title, console, file path, size and the SteamGridDB match, then focusable rows: Artwork, Theme music, Wrong game? (Up/Down, Accept opens the Customize page; Back from there returns here), and Game settings for Dolphin games. Back closes it.
-- **Game settings** (Dolphin games): an opaque card over Home (1280 wide, the screen's height inside the safe area) titled "<game> · Game settings", listing the settings that may differ per game (§9 "Emulator settings"). A row shows the game's value: its own (accent dot, "Custom for this game"), else what Dolphin's shipped game settings set ("Set by Dolphin for this game"), else the console's. Left/Right step it (Accept steps forward) and give the game its own value; Options resets that row; the last row, "Reset to console defaults", asks first and removes them all. The focused row's description and "Applies next launch" (or "Restart <game> to apply" while a Dolphin game runs) sit under the list. Back closes it.
+- **Game settings** (Dolphin games): an opaque card over Home (1280 wide, the screen's height inside the safe area) titled "<game> · Game settings", listing the settings that may differ per game (§9 "Emulator settings"), first a Widescreen row (Off/On) for games Dolphin ships a widescreen code for (§9 "Widescreen"); while it's on, Aspect ratio and Widescreen hack show "Force 16:9" / "Off" with "Set by Widescreen" and can't be changed (no ‹ ›, edge sound). A row shows the game's value: its own (accent dot, "Custom for this game"), else what Dolphin's shipped game settings set ("Set by Dolphin for this game"), else the console's. Left/Right step it (Accept steps forward) and give the game its own value; Options resets that row; the last row, "Reset to console defaults", asks first and removes them all. The focused row's description and "Applies next launch" (or "Restart <game> to apply" while a Dolphin game runs) sit under the list. Back closes it.
 
 ### Customize (a game's artwork, match and theme)
 
@@ -528,6 +528,24 @@ is the user's. Code: `hearth-core::emusettings` (`doc` the format-preserving edi
   user picks one.
 - **Testing:** dev socket words `emu_state`, `emu_set`, `emu_game_set`, `emu_game_reset`,
   `emu_effective` (`scripts/send-action.sh`).
+
+**Widescreen** (round E.1b, Dolphin): a game's Widescreen row turns on the widescreen Gecko
+code Dolphin ships for it, never a downloaded one. `emusettings::gecko` reads the game's shipped
+files (`Sys/GameSettings`: `<id[0]>`, `<id[0..3]>`, `<id>`, `<id>r<rev>`, merged like Dolphin's
+`LoadDefaultGameIni`; the disc revision comes from the header) and takes the first `[Gecko]`
+code whose name says widescreen or 16:9 and isn't an add-on (108 games in 2609; for games with
+HUD variants, the first, "Normal HUD"). No code: no row. It is a layer in the merge, above the
+game's overrides and under the locked keys, for the game INI only: `[Gecko_Enabled]
+$<code>`, `[Core] EnableCheats = True` (Dolphin reads it through the game layer, so cheats are
+on for that game only, never globally; codes the user enabled for the game run too),
+`[Video_Settings] AspectRatio = 1` (Force 16:9) and `wideScreenHack = False`. Off, the normal
+layers supply those keys again (the game's own Stretch comes back); Hearth removes the code
+line only if it added it. A value changed outside Hearth while it's on is kept and not adopted
+(Widescreen would cover the lower layer) until it's turned off. Stored as `widescreen = "True"`
+in the game's `emulator.toml`; Reset to console defaults turns it off. `breaks_hardcore` comes
+from `Sys/ApprovedInis.json`: the code's name under the game's INI names with the SHA-1 Dolphin
+computes (line count u64, then address and data u32, little-endian); TP's "16:9 Widescreen v2"
+is approved. Stored and shown by `emu_state` only.
 
 **Rejected: shared files linked into each profile's folder.** Emulators save settings by
 writing a temporary file and renaming it over the original, which replaces a symlink with a

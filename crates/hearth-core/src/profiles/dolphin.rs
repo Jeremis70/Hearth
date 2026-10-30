@@ -140,6 +140,8 @@ pub struct DolphinProfile {
     backup_root: PathBuf,
     /// `<profile id>/dolphin`, the backup's folder.
     backup_label: String,
+    /// Dolphin's `Sys` folder when not the install's own (tests).
+    sys_dir: Option<PathBuf>,
 }
 
 /// A game Dolphin is launched with, for its own settings.
@@ -149,21 +151,25 @@ pub struct GameRef {
     pub id: String,
     /// Hearth's data for the game (`<data>/games/gc/GZ2E01`): its `emulator.toml`.
     pub dir: PathBuf,
+    /// The disc revision (Dolphin also reads `<id>r<rev>.ini`).
+    pub revision: Option<u16>,
 }
+
+/// A game's Widescreen row in its stored overrides (`[dolphin] widescreen = "True"`).
+pub const WIDESCREEN: &str = "widescreen";
 
 impl GameRef {
     /// `game`'s reference, if its disc header has a game id (every GameCube and Wii disc
     /// does). Its data folder is the one of its Customize picks (by art key).
     pub fn for_game(game: &crate::model::Game, picks: &crate::custom::CustomStore) -> Option<Self> {
-        let serial = crate::rom_header::read(&game.system, &game.path)
-            .ok()?
-            .serial
-            .filter(|s| s.len() == 6)?;
+        let header = crate::rom_header::read(&game.system, &game.path).ok()?;
+        let serial = header.serial.filter(|s| s.len() == 6)?;
         let key = picks.key_of(game);
         // Per-game data only under the header key (`gc/GZ2E01`), never a name hash.
         key.as_str().ends_with(&format!("/{serial}")).then(|| Self {
             dir: picks.dir(&key),
             id: serial,
+            revision: header.revision,
         })
     }
 }
@@ -198,7 +204,49 @@ impl DolphinProfile {
             ),
             backup_root: user.backup_root(),
             backup_label: format!("{}/dolphin", user.id()),
+            sys_dir: None,
         }
+    }
+
+    /// Reads Dolphin's shipped files from `sys` instead of the install's `Sys` folder.
+    pub fn with_sys_dir(mut self, sys: impl Into<PathBuf>) -> Self {
+        self.sys_dir = Some(sys.into());
+        self
+    }
+
+    /// Dolphin's `Sys` folder (shipped game settings, approved codes), if found.
+    pub fn sys(&self) -> Option<PathBuf> {
+        if let Some(dir) = &self.sys_dir {
+            return Some(dir.clone());
+        }
+        self.sys_game_settings()?.parent().map(Path::to_path_buf)
+    }
+
+    /// `game`'s shipped widescreen Gecko code, if Dolphin ships one: then its Game settings
+    /// have a Widescreen row.
+    pub fn widescreen_code(&self, game: &GameRef) -> Option<crate::emusettings::gecko::Widescreen> {
+        crate::emusettings::gecko::widescreen(&self.sys()?, &game.id, game.revision)
+    }
+
+    /// Whether `game`'s Widescreen row is on.
+    pub fn widescreen_on(&self, game: &GameRef) -> bool {
+        self.settings
+            .game(&game.dir)
+            .get(WIDESCREEN)
+            .is_some_and(|v| v == "True")
+    }
+
+    /// Turns `game`'s Widescreen row on or off (off: nothing stored).
+    pub fn set_widescreen(&self, game: &GameRef, on: bool) -> io::Result<()> {
+        if on && self.widescreen_code(game).is_none() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("Dolphin ships no widescreen code for {}", game.id),
+            ));
+        }
+        let mut overrides = crate::emusettings::GameOverrides::load(&game.dir);
+        overrides.set("dolphin", WIDESCREEN, on.then_some("True"));
+        overrides.save(&game.dir)
     }
 
     /// Recommends the preset for `gpu` (the box's GPU, see `emusettings::gpu`).
@@ -342,12 +390,27 @@ impl DolphinProfile {
     }
 
     /// What Hearth will merge into Dolphin's files for a launch of `game` (or of no game in
-    /// particular): locked keys, console settings and the game's overrides.
+    /// particular): locked keys, console settings, the game's overrides and, with its
+    /// Widescreen row on, the Widescreen layer above them: the shipped code enabled
+    /// (`[Gecko_Enabled]`), cheats on for this game only (`[Core] EnableCheats`, read through
+    /// Dolphin's game layer), Aspect ratio Force 16:9 and Widescreen hack off.
     pub fn plans(&self, game: Option<&GameRef>) -> Vec<FilePlan<'_>> {
         let schema = self.settings.schema();
         let shared = self.settings.shared();
         let resolved = self.settings.resolved(&shared);
         let overrides = game.map(|g| self.settings.game(&g.dir)).unwrap_or_default();
+        let widescreen = game
+            .filter(|g| self.widescreen_on(g))
+            .and_then(|g| self.widescreen_code(g));
+        // The keys the Widescreen layer sets: setting id → choice.
+        let ws_choice = |id: &str| -> Option<&'static str> {
+            widescreen.as_ref()?;
+            match id {
+                "aspect_ratio" => Some("1"),
+                "widescreen_hack" => Some("False"),
+                _ => None,
+            }
+        };
         let mut main = FilePlan::new(MAIN_INI, Style::Ini);
         let mut logger = FilePlan::new(LOGGER_INI, Style::Ini);
         let mut gfx = FilePlan::new(GFX_INI, Style::Ini);
@@ -380,7 +443,19 @@ impl DolphinProfile {
                 choice,
                 layer: Layer::Console,
             });
-            if let (Some(plan), Some(choice)) = (per_game.as_mut(), overrides.get(&setting.id))
+            if let (Some(plan), Some(choice), Some(section)) = (
+                per_game.as_mut(),
+                ws_choice(&setting.id),
+                game_section(setting.file, &setting.section),
+            ) {
+                plan.settings.push(Wanted {
+                    setting,
+                    section,
+                    choice: choice.to_owned(),
+                    layer: Layer::Widescreen,
+                });
+            } else if let (Some(plan), Some(choice)) =
+                (per_game.as_mut(), overrides.get(&setting.id))
                 && setting.scope == crate::emusettings::Scope::PerGame
                 && setting.choice(choice).is_some()
                 && let Some(section) = game_section(setting.file, &setting.section)
@@ -392,6 +467,12 @@ impl DolphinProfile {
                     layer: Layer::Game,
                 });
             }
+        }
+        if let (Some(plan), Some(ws)) = (per_game.as_mut(), &widescreen) {
+            plan.keys
+                .push(("Core".into(), "EnableCheats".into(), "True".into()));
+            plan.lines
+                .push(("Gecko_Enabled".into(), format!("${}", ws.code.name)));
         }
         let mut plans = vec![main, logger, gfx];
         plans.extend(per_game);
@@ -631,6 +712,7 @@ mod tests {
         GameRef {
             id: "GZ2E01".into(),
             dir: home.join("data/games/gc/GZ2E01"),
+            revision: Some(0),
         }
     }
 
@@ -747,6 +829,82 @@ mod tests {
             fs::read_to_string(&ini).unwrap(),
             "[Core]\nCPUThread = False\n[Video_Settings]\n[Video_Enhancements]\n"
         );
+    }
+
+    /// A `Sys` folder shipping a widescreen code for TP only.
+    fn fixture_sys(home: &Path) -> PathBuf {
+        let sys = home.join("Sys");
+        fs::create_dir_all(sys.join("GameSettings")).unwrap();
+        fs::write(
+            sys.join("GameSettings/GZ2E01.ini"),
+            "[Video_Enhancements]\nArbitraryMipmapDetection = True\n[Gecko]\n\
+             $16:9 Widescreen v2 [Ralf]\n06003F30 00000068\nC002A014 D0040000\n",
+        )
+        .unwrap();
+        fs::write(sys.join("ApprovedInis.json"), "{}").unwrap();
+        sys
+    }
+
+    #[test]
+    fn widescreen_layer_on_and_off() {
+        let dir = tempdir();
+        let (user, profile) = temp_profile(dir.path());
+        let profile = profile.with_sys_dir(fixture_sys(dir.path()));
+        let game = tp(dir.path());
+        let code = profile.widescreen_code(&game).unwrap();
+        assert_eq!(code.code.name, "16:9 Widescreen v2");
+        assert!(code.breaks_hardcore(), "not on the fixture's approved list");
+        // A game without a shipped code has no row and can't be turned on.
+        let other = GameRef {
+            id: "GXXE01".into(),
+            dir: dir.path().join("data/games/gc/GXXE01"),
+            revision: Some(0),
+        };
+        assert!(profile.widescreen_code(&other).is_none());
+        assert!(profile.set_widescreen(&other, true).is_err());
+
+        // The game's own Stretch first.
+        profile
+            .settings()
+            .set_game(&game.dir, "aspect_ratio", Some("3"))
+            .unwrap();
+        profile
+            .prepare(&Translation::default(), Some(&game))
+            .unwrap();
+        let ini = user.dolphin().join("GameSettings/GZ2E01.ini");
+        let stretch = fs::read_to_string(&ini).unwrap();
+        assert_eq!(stretch, "[Video_Settings]\nAspectRatio = 3\n");
+
+        profile.set_widescreen(&game, true).unwrap();
+        assert!(profile.widescreen_on(&game));
+        let report = profile
+            .prepare(&Translation::default(), Some(&game))
+            .unwrap();
+        assert!(
+            report.adopted.is_empty() && report.kept.is_empty(),
+            "{report:?}"
+        );
+        crate::profiles::input::assert_golden(
+            Path::new("emusettings/dolphin/widescreen/GZ2E01.ini"),
+            &fs::read_to_string(&ini).unwrap(),
+        );
+        // The Widescreen hack and console settings in GFX.ini are untouched.
+        let gfx = fs::read_to_string(user.dolphin().join(GFX_INI)).unwrap();
+        assert!(!gfx.contains("wideScreenHack"), "{gfx}");
+
+        profile.set_widescreen(&game, false).unwrap();
+        assert!(!profile.widescreen_on(&game));
+        profile
+            .prepare(&Translation::default(), Some(&game))
+            .unwrap();
+        assert_eq!(
+            fs::read_to_string(&ini).unwrap(),
+            format!("{stretch}[Core]\n[Gecko_Enabled]\n")
+        );
+        // Reset to console defaults also turns it off.
+        profile.set_widescreen(&game, true).unwrap();
+        profile.settings().reset_game(&game.dir).unwrap();
+        assert!(!profile.widescreen_on(&game));
     }
 
     #[test]

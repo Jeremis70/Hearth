@@ -29,6 +29,20 @@ pub enum Layer {
     Console,
     /// The game's own overrides.
     Game,
+    /// A game's Widescreen row (Dolphin): above the game's overrides for the keys it sets. A
+    /// value changed outside Hearth while it's on is left to the user (not adopted into a
+    /// lower layer, which Widescreen would cover at the next launch) until it's turned off.
+    Widescreen,
+}
+
+impl Layer {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Console => "console",
+            Self::Game => "game",
+            Self::Widescreen => "widescreen",
+        }
+    }
 }
 
 /// One schema setting Hearth wants in a file.
@@ -53,6 +67,14 @@ pub struct FilePlan<'a> {
     pub settings: Vec<Wanted<'a>>,
     /// (section, key) removed if present (locked keys that mustn't be overridden here).
     pub strip: Vec<(String, String)>,
+    /// (section, key, value) Hearth sets while it needs them (outside the schema, like
+    /// Dolphin's `Core.EnableCheats` for a Widescreen code). Gone from the plan, a key goes if
+    /// unchanged; changed outside Hearth, it's left to the user while still planned.
+    pub keys: Vec<(String, String, String)>,
+    /// (section, line) entries Hearth adds while it needs them (`[Gecko_Enabled]`
+    /// `$<code>`). Gone from the plan, a line goes only if Hearth added it; removed by the user
+    /// while planned, it isn't added back.
+    pub lines: Vec<(String, String)>,
     /// Whether a missing key means the emulator's default (its main files), or only "not set
     /// here" (a game INI: lower layers, Dolphin's shipped game fixes included, then apply).
     pub missing_is_default: bool,
@@ -67,6 +89,8 @@ impl<'a> FilePlan<'a> {
             locked: Vec::new(),
             settings: Vec::new(),
             strip: Vec::new(),
+            keys: Vec::new(),
+            lines: Vec::new(),
             missing_is_default: true,
         }
     }
@@ -107,7 +131,7 @@ pub fn describe(plans: &[FilePlan<'_>]) -> serde_json::Value {
                         "section": w.section,
                         "choice": w.choice,
                         "keys": keys,
-                        "layer": match w.layer { Layer::Console => "console", Layer::Game => "game" },
+                        "layer": w.layer.name(),
                     })
                 })
                 .collect();
@@ -117,10 +141,18 @@ pub fn describe(plans: &[FilePlan<'_>]) -> serde_json::Value {
                 .map(|(s, k, v)| format!("[{s}] {k} = {v}"))
                 .collect();
             let strip: Vec<String> = p.strip.iter().map(|(s, k)| format!("[{s}] {k}")).collect();
+            let keys: Vec<String> = p
+                .keys
+                .iter()
+                .map(|(s, k, v)| format!("[{s}] {k} = {v}"))
+                .collect();
+            let lines: Vec<String> = p.lines.iter().map(|(s, l)| format!("[{s}] {l}")).collect();
             serde_json::json!({
                 "file": p.rel,
                 "locked": locked,
                 "settings": settings,
+                "keys": keys,
+                "lines": lines,
                 "removed_if_present": strip,
             })
         })
@@ -147,6 +179,9 @@ pub struct Report {
     pub foreign: Vec<String>,
     /// Locked keys that held another value (`file [section] key`).
     pub restored: Vec<String>,
+    /// Values changed outside Hearth over a layer that doesn't take them back (Widescreen's
+    /// keys and lines): kept in the file, not stored (`file [section] key`).
+    pub kept: Vec<String>,
     /// Files whose text changed.
     pub written: Vec<String>,
 }
@@ -168,6 +203,9 @@ impl Report {
         for key in &self.restored {
             tracing::info!(emulator, %key, "restored a key Hearth owns");
         }
+        for key in &self.kept {
+            tracing::info!(emulator, %key, "kept a value changed outside Hearth");
+        }
     }
 }
 
@@ -181,6 +219,9 @@ pub fn merge(dir: &Path, plans: &[FilePlan<'_>], applied: &mut Applied) -> std::
         let mut doc = before.clone();
         let old = applied.files.remove(&plan.rel).unwrap_or_default();
         let old_yielded = applied.yielded.remove(&plan.rel).unwrap_or_default();
+        let old_lines = applied.lines.remove(&plan.rel).unwrap_or_default();
+        let mut lines_rec: std::collections::BTreeMap<String, Vec<String>> =
+            std::collections::BTreeMap::new();
         let mut yielded = std::collections::BTreeMap::new();
         let mut record = Applied::default();
         let rec = record.files.entry(plan.rel.clone()).or_default();
@@ -211,12 +252,85 @@ pub fn merge(dir: &Path, plans: &[FilePlan<'_>], applied: &mut Applied) -> std::
                 .insert(key.clone(), value.clone());
         }
 
+        for (section, key, value) in &plan.keys {
+            let id = format!("key:{section}/{key}");
+            let changed = || {
+                was(section, key).is_some_and(|then| {
+                    doc.get(section, key)
+                        .is_none_or(|have| !same_value(None, have, then))
+                })
+            };
+            if old_yielded.get(&id) == Some(value) || changed() {
+                if !old_yielded.contains_key(&id) {
+                    report.kept.push(format!("{} [{section}] {key}", plan.rel));
+                }
+                yielded.insert(id, value.clone());
+                continue;
+            }
+            if !doc
+                .get(section, key)
+                .is_some_and(|have| same_value(None, have, value))
+            {
+                doc.set(section, key, value);
+            }
+            rec.entry(section.clone())
+                .or_default()
+                .insert(key.clone(), value.clone());
+        }
+
+        let added_before = |section: &str, line: &str| {
+            old_lines
+                .iter()
+                .any(|(s, ls)| s.eq_ignore_ascii_case(section) && ls.iter().any(|l| l == line))
+        };
+        for (section, line) in &plan.lines {
+            let id = format!("line:{section}/{line}");
+            if old_yielded.contains_key(&id) {
+                yielded.insert(id, "on".into());
+                continue;
+            }
+            let present = doc.has_line(section, line);
+            if added_before(section, line) && !present {
+                // Removed by the user while Hearth wanted it: theirs.
+                report.kept.push(format!("{} [{section}] {line}", plan.rel));
+                yielded.insert(id, "on".into());
+                continue;
+            }
+            if present && !added_before(section, line) {
+                // The user's own line: not Hearth's to remove later.
+                continue;
+            }
+            doc.add_line(section, line);
+            lines_rec
+                .entry(section.clone())
+                .or_default()
+                .push(line.clone());
+        }
+        // Lines Hearth added and no longer wants.
+        for (section, lines) in &old_lines {
+            for line in lines {
+                let wanted = plan
+                    .lines
+                    .iter()
+                    .any(|(s, l)| s.eq_ignore_ascii_case(section) && l == line);
+                if !wanted {
+                    doc.remove_line(section, line);
+                }
+            }
+        }
+
         for want in &plan.settings {
             let s = want.setting;
             let section = want.section.as_str();
             let fallback = plan.missing_is_default;
             let in_file = s.read_with(|k| doc.get(section, k).map(str::to_owned), fallback);
-            let target = if let Some(then) = old_yielded.get(&s.id) {
+            let target = if want.layer == Layer::Widescreen
+                && old_yielded.get(&s.id) == Some(&want.choice)
+            {
+                // Changed by the user while Widescreen was on: theirs until it's turned off.
+                yielded.insert(s.id.clone(), want.choice.clone());
+                continue;
+            } else if let Some(then) = old_yielded.get(&s.id) {
                 // Left to the user last time: still theirs unless Hearth's value changed since,
                 // or the file now holds a value Hearth offers.
                 match in_file {
@@ -241,6 +355,13 @@ pub fn merge(dir: &Path, plans: &[FilePlan<'_>], applied: &mut Applied) -> std::
             {
                 // Changed outside Hearth since Hearth wrote it.
                 match in_file {
+                    _ if want.layer == Layer::Widescreen => {
+                        report
+                            .kept
+                            .push(format!("{} [{section}] {}", plan.rel, s.key));
+                        yielded.insert(s.id.clone(), want.choice.clone());
+                        continue;
+                    }
                     Some(choice) => {
                         report.adopted.push(Adopted {
                             setting: s.id.clone(),
@@ -289,6 +410,12 @@ pub fn merge(dir: &Path, plans: &[FilePlan<'_>], applied: &mut Applied) -> std::
                     .into_iter()
                     .map(move |k| (w.section.as_str(), k))
             })
+            .chain(
+                plan.keys
+                    .iter()
+                    .filter(|(s, k, _)| yielded.contains_key(&format!("key:{s}/{k}")))
+                    .map(|(s, k, _)| (s.as_str(), k.as_str())),
+            )
             .collect();
         for (section, keys) in &old {
             for (key, value) in keys {
@@ -325,6 +452,9 @@ pub fn merge(dir: &Path, plans: &[FilePlan<'_>], applied: &mut Applied) -> std::
         applied.files.extend(record.files);
         if !yielded.is_empty() {
             applied.yielded.insert(plan.rel.clone(), yielded);
+        }
+        if !lines_rec.is_empty() {
+            applied.lines.insert(plan.rel.clone(), lines_rec);
         }
     }
     Ok(report)
@@ -624,5 +754,104 @@ mod tests {
         let report = run(dir.path(), &schema, &[("arbitrary_mipmaps", "False")]);
         assert_eq!(report.foreign, ["arbitrary_mipmaps"]);
         assert_eq!(read(dir.path(), GAME), "[Video_Enhancements]\n");
+    }
+
+    /// TP's game INI plan with per-game Stretch, with or without the Widescreen layer.
+    fn widescreen_plan(schema: &Schema, on: bool) -> Vec<FilePlan<'_>> {
+        let aspect = schema.setting("aspect_ratio").unwrap();
+        let hack = schema.setting("widescreen_hack").unwrap();
+        let mut game = FilePlan::game(GAME, Style::Ini);
+        let (aspect_choice, layer) = if on {
+            ("1", Layer::Widescreen)
+        } else {
+            ("3", Layer::Game)
+        };
+        game.settings.push(Wanted {
+            setting: aspect,
+            section: "Video_Settings".into(),
+            choice: aspect_choice.into(),
+            layer,
+        });
+        if on {
+            game.settings.push(Wanted {
+                setting: hack,
+                section: "Video_Settings".into(),
+                choice: "False".into(),
+                layer: Layer::Widescreen,
+            });
+            game.keys
+                .push(("Core".into(), "EnableCheats".into(), "True".into()));
+            game.lines
+                .push(("Gecko_Enabled".into(), "$16:9 Widescreen v2".into()));
+        }
+        vec![game]
+    }
+
+    fn run_ws(dir: &Path, schema: &Schema, on: bool) -> Report {
+        let mut applied = Applied::load(dir);
+        let report = merge(dir, &widescreen_plan(schema, on), &mut applied).unwrap();
+        applied.save(dir).unwrap();
+        report
+    }
+
+    #[test]
+    fn widescreen_on_then_off_brings_the_games_stretch_back() {
+        let dir = tempdir();
+        let schema = Schema::dolphin();
+        fs::create_dir_all(dir.path().join("GameSettings")).unwrap();
+        // The user's own enabled code stays whatever happens.
+        fs::write(
+            dir.path().join(GAME),
+            "[Gecko_Enabled]\n$Mine\n[Core]\nCPUThread = False\n",
+        )
+        .unwrap();
+        run_ws(dir.path(), &schema, false);
+        assert!(read(dir.path(), GAME).contains("AspectRatio = 3"));
+        let report = run_ws(dir.path(), &schema, true);
+        assert!(
+            report.adopted.is_empty() && report.kept.is_empty(),
+            "{report:?}"
+        );
+        assert_golden(
+            Path::new("emusettings/merge/widescreen/on.ini"),
+            &read(dir.path(), GAME),
+        );
+        let report = run_ws(dir.path(), &schema, false);
+        assert!(
+            report.adopted.is_empty() && report.kept.is_empty(),
+            "{report:?}"
+        );
+        assert_eq!(
+            read(dir.path(), GAME),
+            "[Gecko_Enabled]\n$Mine\n[Core]\nCPUThread = False\n[Video_Settings]\nAspectRatio = 3\n"
+        );
+    }
+
+    #[test]
+    fn a_change_made_while_widescreen_is_on_is_kept() {
+        let dir = tempdir();
+        let schema = Schema::dolphin();
+        run_ws(dir.path(), &schema, true);
+        // In Dolphin's game properties: another aspect ratio, cheats off, the code unticked.
+        let text = read(dir.path(), GAME)
+            .replace("AspectRatio = 1", "AspectRatio = 2")
+            .replace("EnableCheats = True", "EnableCheats = False")
+            .replace("$16:9 Widescreen v2\n", "");
+        fs::write(dir.path().join(GAME), &text).unwrap();
+        let report = run_ws(dir.path(), &schema, true);
+        assert!(report.adopted.is_empty(), "{report:?}");
+        assert_eq!(report.kept.len(), 3, "{report:?}");
+        assert_eq!(read(dir.path(), GAME), text);
+        // Still theirs at the next launch, and nothing more is logged.
+        assert_eq!(run_ws(dir.path(), &schema, true), Report::default());
+        assert_eq!(read(dir.path(), GAME), text);
+        // Turned off in Hearth: the normal layers supply the aspect ratio again.
+        run_ws(dir.path(), &schema, false);
+        let off = read(dir.path(), GAME);
+        assert!(off.contains("AspectRatio = 3"), "{off}");
+        assert!(
+            off.contains("EnableCheats = False"),
+            "the user's value stays: {off}"
+        );
     }
 }

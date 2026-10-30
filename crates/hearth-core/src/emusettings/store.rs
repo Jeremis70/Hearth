@@ -254,6 +254,9 @@ pub struct Applied {
     /// changes (the user changed it in Hearth).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub yielded: BTreeMap<String, BTreeMap<String, String>>,
+    /// Lines Hearth added (`[Gecko_Enabled]` entries): file → section → lines.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub lines: BTreeMap<String, BTreeMap<String, Vec<String>>>,
 }
 
 impl Applied {

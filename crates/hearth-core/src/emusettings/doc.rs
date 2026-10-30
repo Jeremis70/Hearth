@@ -157,6 +157,77 @@ impl ConfigDoc {
         !at.is_empty()
     }
 
+    /// Whether `section` holds a line reading `text` (trimmed), like Dolphin's
+    /// `[Gecko_Enabled]` entries (`$16:9 Widescreen v2`).
+    pub fn has_line(&self, section: &str, text: &str) -> bool {
+        self.line_index(section, text).is_some()
+    }
+
+    /// Adds the line `text` at the end of `section` (created if missing), unless it's there.
+    /// Returns whether the text changed.
+    pub fn add_line(&mut self, section: &str, text: &str) -> bool {
+        if self.has_line(section, text) {
+            return false;
+        }
+        let mut current: Option<&str> = Some("");
+        let mut end = None;
+        for (i, line) in self.lines.iter().enumerate() {
+            match line {
+                Line::Section { name, .. } => {
+                    current = Some(name);
+                    if self.same(name, section) {
+                        end = Some(i + 1);
+                    }
+                }
+                Line::Raw(t) if t.trim().is_empty() => {}
+                _ => {
+                    if current.is_some_and(|c| self.same(c, section)) {
+                        end = Some(i + 1);
+                    }
+                }
+            }
+        }
+        let line = Line::Raw(text.to_owned());
+        match end {
+            Some(at) => self.lines.insert(at, line),
+            None => {
+                self.lines.push(Line::Section {
+                    name: section.to_owned(),
+                    text: format!("[{section}]"),
+                });
+                self.lines.push(line);
+            }
+        }
+        true
+    }
+
+    /// Removes the line reading `text` from `section`. Returns whether it was there.
+    pub fn remove_line(&mut self, section: &str, text: &str) -> bool {
+        match self.line_index(section, text) {
+            Some(i) => {
+                self.lines.remove(i);
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn line_index(&self, section: &str, text: &str) -> Option<usize> {
+        let mut current = "";
+        for (i, line) in self.lines.iter().enumerate() {
+            match line {
+                Line::Section { name, .. } => current = name,
+                Line::Raw(t) | Line::Key { text: t, .. }
+                    if self.same(current, section) && t.trim() == text.trim() =>
+                {
+                    return Some(i);
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
     fn same(&self, a: &str, b: &str) -> bool {
         match self.style {
             Style::Ini => a.eq_ignore_ascii_case(b),
@@ -340,6 +411,27 @@ mod tests {
         let mut doc = ConfigDoc::parse("# header\n[S]\nk = v\n", Style::Ini);
         doc.set("", "top", "1");
         assert_eq!(doc.to_string(), "# header\ntop = 1\n[S]\nk = v\n");
+    }
+
+    #[test]
+    fn lines_of_a_section() {
+        let mut doc = ConfigDoc::parse(
+            "[Gecko]\n$Code\n04000000 00000001\n[Gecko_Enabled]\n$Mine\n\n[Core]\nX = 1\n",
+            Style::Ini,
+        );
+        assert!(doc.has_line("Gecko_Enabled", "$Mine"));
+        assert!(!doc.has_line("Gecko", "$Mine"));
+        assert!(doc.add_line("gecko_enabled", "$16:9 Widescreen v2"));
+        assert!(!doc.add_line("Gecko_Enabled", "$16:9 Widescreen v2"));
+        assert!(doc.add_line("Video_Settings", "$x"));
+        assert_eq!(
+            doc.to_string(),
+            "[Gecko]\n$Code\n04000000 00000001\n[Gecko_Enabled]\n$Mine\n$16:9 Widescreen v2\n\n\
+             [Core]\nX = 1\n[Video_Settings]\n$x\n"
+        );
+        assert!(doc.remove_line("Gecko_Enabled", "$16:9 Widescreen v2"));
+        assert!(!doc.remove_line("Gecko_Enabled", "$16:9 Widescreen v2"));
+        assert!(doc.has_line("Gecko_Enabled", "$Mine"));
     }
 
     #[test]

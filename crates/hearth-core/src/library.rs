@@ -232,11 +232,21 @@ impl Library {
         Ok(Self { conn })
     }
 
+    /// A transaction that will write, taking the write lock first (`BEGIN IMMEDIATE`). A
+    /// deferred one reads under a shared lock, then upgrades at its first write; if another
+    /// connection holds the write lock at that moment (the art worker opening the library at
+    /// startup), SQLite fails the upgrade at once with "database is locked" instead of waiting
+    /// out the busy timeout, since waiting could deadlock. Taking the lock up front waits.
+    fn write_transaction(&mut self) -> rusqlite::Result<rusqlite::Transaction<'_>> {
+        self.conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+    }
+
     /// Makes the stored games match a fresh scan: new games are added, titles and paths
     /// updated, games no longer found removed (with every profile's history). Returns the
     /// removed games.
     pub fn sync(&mut self, games: &[Game]) -> Result<Vec<RemovedGame>, LibraryError> {
-        let tx = self.conn.transaction()?;
+        let tx = self.write_transaction()?;
         move_renamed(&tx, games)?;
         tx.execute_batch(
             "CREATE TEMP TABLE IF NOT EXISTS seen (id TEXT PRIMARY KEY); DELETE FROM seen;",
@@ -336,7 +346,7 @@ impl Library {
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
         let secs = i64::try_from(played.as_secs()).unwrap_or(i64::MAX);
-        let tx = self.conn.transaction()?;
+        let tx = self.write_transaction()?;
         let added = tx.execute(
             "INSERT INTO profile_games (profile_id, game_id, last_played, playtime_secs)
              SELECT ?1, id, ?3, ?4 FROM games WHERE id = ?2
@@ -509,7 +519,10 @@ impl Library {
         key: &ArtKey,
         candidates: &[ArtCandidate],
     ) -> Result<(), LibraryError> {
-        let tx = self.conn.unchecked_transaction()?;
+        let tx = rusqlite::Transaction::new_unchecked(
+            &self.conn,
+            rusqlite::TransactionBehavior::Immediate,
+        )?;
         tx.execute(
             "DELETE FROM art_candidates WHERE art_key = ?1",
             [key.as_str()],
@@ -666,6 +679,35 @@ mod tests {
             path: PathBuf::from(format!("/games/n64/{title}.z64")),
             folder: None,
         }
+    }
+
+    #[test]
+    fn sync_waits_for_another_writer_instead_of_failing() {
+        // Startup: the art worker's connection holds the write lock (its own `open`) while
+        // the library thread syncs a scan that adds a game.
+        let dir = tempdir();
+        let path = dir.path().join("l.sqlite3");
+        let mut lib = Library::open(&path).unwrap();
+        lib.sync(&[game("roms:n64/Zelda.z64", "Zelda")]).unwrap();
+        let other = Connection::open(&path).unwrap();
+        other.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let (held_tx, held_rx) = std::sync::mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            held_tx.send(()).unwrap();
+            std::thread::sleep(Duration::from_millis(300));
+            other.execute_batch("COMMIT").unwrap();
+        });
+        held_rx.recv().unwrap();
+        let started = std::time::Instant::now();
+        // A deferred transaction failed here at once with "database is locked".
+        lib.sync(&[
+            game("roms:n64/Zelda.z64", "Zelda"),
+            game("roms:n64/Mario.z64", "Mario"),
+        ])
+        .unwrap();
+        assert!(started.elapsed() >= Duration::from_millis(200));
+        writer.join().unwrap();
+        assert_eq!(lib.recent(&ProfileId::default()).unwrap().len(), 2);
     }
 
     #[test]

@@ -3,6 +3,7 @@
 
 pub mod doc;
 pub mod gpu;
+pub mod merge;
 pub mod schema;
 pub mod store;
 

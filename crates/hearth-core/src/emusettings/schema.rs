@@ -120,6 +120,15 @@ impl Setting {
         keys
     }
 
+    /// What `key` holds when the emulator uses this setting's default (the default choice's
+    /// value for it).
+    pub fn default_value(&self, key: &str) -> Option<&str> {
+        self.keys_for(&self.default)
+            .into_iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, v)| v)
+    }
+
     /// Every key this setting may write.
     pub fn all_keys(&self) -> Vec<&str> {
         let mut keys = vec![self.key.as_str()];

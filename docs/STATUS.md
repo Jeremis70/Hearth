@@ -73,10 +73,12 @@ Round D (profile-ready storage), 2026-10-24, oldest first:
     notice on screen, launch refused with a toast, old files unchanged, db still version 3.
 - Found, not fixed (pre-existing): quitting Hearth while a game runs closes the game without
   recording that session's playtime (`Controller::shutdown`).
-- Not done yet: the user's real `.dev-data` is still in the old layout, waiting for the OK
-  (`migration_plan`: 8 moves, backup 28 files / 1,147,806 bytes, BIOS 2.0 MiB and Dolphin cache
-  7.2 MiB moved unchanged). Starting a Hearth built from this round on `.dev-data` runs the
-  migration.
+- The user's real `.dev-data` was migrated on 2026-10-28 15:19 (Hearth started on it): marker
+  `done`, 8/8 moves, `backup/20261028-151937/` (28 files) passes `sha256sum -c`; checked
+  2026-10-30: OoT's srm, TP's gci and both controls files byte-identical to the backup, no old
+  folder left, library v4 with OoT 3753 s and TP 2910 s under `default` (TP +92 s from one
+  session played after the move, recorded in `play_sessions`). `retroarch.cfg` still held the
+  old relative paths (written 10-24, before the move; rewritten at OoT's next launch).
 
 Round C.2 (animated art + polish), 2026-10-24, oldest first:
 - `b9336cb`: `.dev-data/games` links the moved ROMs and their `theme.mp3` (see below).

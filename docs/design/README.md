@@ -153,10 +153,11 @@ Reduce motion (Settings → Display & sound): all durations multiply by `Theme.m
   - The logo/greeting block, meta line, buttons and pill move up by 260. Focus goes to Play, or to the first widget on Welcome.
   - Up or Back restores the row.
 - Navigation: Left/Right in the row; Up from the row → top bar; L1/R1 switch Games/Media; Options on a game cell (or ⋯) opens the game menu.
-- **Game menu:** opens to the right of the focused cell, or under the buttons when opened from them. Items: Play or Close game (whichever applies), Controls for this game, Favorite (toggle with a check mark; the menu stays open), Artwork, Theme music, Wrong game? (each opens the Customize page on that section), Properties. Back, Options or Left closes it. Uninstall comes later.
+- **Game menu:** opens to the right of the focused cell, or under the buttons when opened from them. Items: Play or Close game (whichever applies), Controls for this game, Favorite (toggle with a check mark; the menu stays open), Artwork, Theme music, Wrong game? (each opens the Customize page on that section), Game settings (Dolphin games), Properties. Back, Options or Left closes it. Uninstall comes later.
 - **Starting a game while another runs** (Play on Home, Options → Play, later the Library): a `ConfirmDialog` (720 wide; titles wrap, two lines at most) "Close <running game>?", "<new game> will start. Unsaved progress will be lost.", [Close and play] (danger) and [Cancel] (focused). The plain Close game confirmation says only "Unsaved progress will be lost." Confirm closes the running game the usual way (a frozen game is continued first so it can quit), waits for its session to end, then launches the new one. Cancel or Back leaves everything as it was.
 - **Problems Hearth works around** (e.g. `hearth.toml` unreadable): a one-line notice at the bottom center, warning icon + "Couldn't read hearth.toml (line 3) · Using default settings", for 20 s. It never quotes the file (it may hold the API key).
-- **Properties:** a modal card with title, console, file path, size and the SteamGridDB match, then three focusable rows: Artwork, Theme music, Wrong game? (Up/Down, Accept opens the Customize page; Back from there returns here). Back closes it.
+- **Properties:** a modal card with title, console, file path, size and the SteamGridDB match, then focusable rows: Artwork, Theme music, Wrong game? (Up/Down, Accept opens the Customize page; Back from there returns here), and Game settings for Dolphin games. Back closes it.
+- **Game settings** (Dolphin games): an opaque card over Home (1280 wide, the screen's height inside the safe area) titled "<game> · Game settings", listing the settings that may differ per game (§9 "Emulator settings"). A row shows the game's value: its own (accent dot, "Custom for this game"), else what Dolphin's shipped game settings set ("Set by Dolphin for this game"), else the console's. Left/Right step it (Accept steps forward) and give the game its own value; Options resets that row; the last row, "Reset to console defaults", asks first and removes them all. The focused row's description and "Applies next launch" (or "Restart <game> to apply" while a Dolphin game runs) sit under the list. Back closes it.
 
 ### Customize (a game's artwork, match and theme)
 
@@ -212,6 +213,7 @@ Settings
   - "Connected controllers": one row per physical controller from the input backend: controller glyph, name ("DualSense", "Xbox controller"…), connection (USB/Bluetooth), battery (icon + %, charging icon while charging). Empty: "No controller connected". Rows appear and go as controllers connect and disconnect; battery levels refresh every few seconds.
   - A controller's row opens its page (right pane): glyph, name, connection and battery, then its actions: "Button test" now; player number and Identify later.
   - "Controls": one row per console with controls ("Default" / "Customized"), opening that console's controls page (wide). These are shared by everyone, not tied to one controller.
+- **Emulators:** one row per emulator ("Dolphin · Balanced", "RetroArch"; the category's status is "Dolphin · <preset>"). Accept opens its page in the right pane (narrow): the title, then for Dolphin a Preset row (Performance, Balanced, Quality; "Custom" once a preset row differs; its description names the preset recommended for this GPU), the settings of `data/profiles/dolphin/settings.toml` and "Reset to defaults" (confirmation). Rows show their value; the focused one shows ‹ value › and steps with Left/Right (Accept steps forward). Under the list: the focused row's description and "Applies next launch", or "Restart <game> to apply" while a game of that emulator runs or is frozen. The list scrolls by whole rows. RetroArch's page says "More settings coming soon". Back returns to the list.
 - Display & sound: "Console icons" and "UI sounds", each showing the selected pack and opening a list of "Hearth default" plus the installed packs with files for it (name, "by <author>"); a check marks the selection. Choosing saves it in `hearth.toml`; icons and sounds change at once. Below them: UI sounds volume and Music volume (Left/Right in steps of 10, a level bar and the number), Mute all, Music in overlay, Game themes, Animated artwork (on by default; "Off · Reduce motion" while that is on) and Reduce motion (Accept toggles, "On" in accent). The last two are saved under `[display]`.
 
 ### In-game overlay (from `overlay.md`)
@@ -364,10 +366,11 @@ controls). Code: `hearth-core::users` (`ProfileId`, `ProfileDirs`, `UserProfile`
   config/hearth.toml                 shared (see "Settings, later" below)
   config/controls/device.toml        shared: names of this box's pads
   data/library.sqlite3               shared library; play history per profile (profile_id)
-  data/games/<art key>/              Customize picks, shared
+  data/games/<art key>/              Customize picks and emulator.toml (Game settings), shared
   data/display-class, hearth.lock    shared
   cache/ packs/ runtime/             shared (art, audio analyses, packs, InputPlumber profiles)
   emulators/retroarch/system/        shared: BIOS and core system files
+  emulators/dolphin/shared.toml      shared: Dolphin's console settings (preset, changed rows)
   profiles/
     migration.toml                   progress of the move from before profiles
     <id>/
@@ -378,9 +381,9 @@ controls). Code: `hearth-core::users` (`ProfileId`, `ProfileDirs`, `UserProfile`
       saves/wii/nand/                the Wii NAND (Wii saves live in it)
       controls/systems/<system>.toml
       controls/games/<system>/<serial>.toml
-      emulators/retroarch/           retroarch.cfg (rewritten at launch), states/, config/,
+      emulators/retroarch/           retroarch.cfg (merged at launch), hearth-applied.toml, states/, config/,
                                      remaps/, logs/, playlists/, screenshots/
-      emulators/dolphin/             Dolphin's user dir: Config/, StateSaves/, GC/SRAM.raw,
+      emulators/dolphin/             Dolphin's user dir: Config/, GameSettings/, hearth-applied.toml, StateSaves/, GC/SRAM.raw,
                                      Cache/, Load/, Logs/, …
   backup/<YYYYmmdd-HHMMSS>/          copies made before moving data, with SHA256SUMS
 ```
@@ -397,7 +400,10 @@ save states stay in the emulator's folder (they are emulator-specific).
 - **Dolphin's cache is per profile.** Dolphin has no setting for its cache folder: `D_CACHE_IDX`
   follows the user directory (`-u`), and only `XDG_CACHE_HOME` moves it when there is no `-u`
   (`UICommon::SetUserDirectory`). The shader cache is rebuilt per profile; it is small (7 MB for
-  TP).
+  TP). Sharing it (it depends on the GPU, driver, backend and graphics settings, which belong to
+  the console) is deferred to the profiles round: the only way is a directory symlink, and that
+  round decides whether regenerable caches may be an exception to "path keys, never symlinks"
+  below.
 - **How emulators find the saves:** RetroArch gets `savefile_directory = saves/<system>` with
   `sort_savefiles_enable = false` and the shared `system_directory`, all absolute, in the config
   Hearth writes at every launch. Dolphin gets `-u emulators/dolphin` and `-C` overrides
@@ -451,29 +457,77 @@ migration's `open_upgrading` does. A finished migration records `done` and later
 nothing. `cargo run -p hearth-core --example migration_plan` prints the plan and the backup
 size without changing anything.
 
-### Emulator settings shared by every profile (design, for the emulator settings round)
+### Emulator settings
 
-Graphics settings, texture packs and other emulator options that belong to the console rather
-than to a person must coexist with per-profile emulator folders.
+Users aren't stuck with Hearth's defaults: Hearth owns only the keys it needs, and every other key
+is the user's. Code: `hearth-core::emusettings` (`doc` the format-preserving editor, `schema`,
+`store`, `merge`, `gpu`, `backup`), `profiles/dolphin.rs`, `profiles/retroarch.rs`.
 
-**Recommended: a shared base merged at launch.** Hearth owns the shared settings in its own files
-(`<home>/emulators/<emulator>/shared.toml`, written by the future Emulators settings page) and
-applies them at every launch, under the profile's settings and under Hearth's enforced keys:
-
-- **RetroArch:** Hearth already writes `retroarch.cfg` at every launch. Order of precedence,
-  lowest first: RetroArch's defaults → the shared settings (video driver options, shaders,
-  scaling) → the profile's own settings (controls translation, per-profile options) → Hearth's
-  enforced keys (paths, hotkeys bound to nothing, fullscreen). Written as one generated file, or
-  as `--appendconfig shared.cfg|profile.cfg` with the enforced keys in the main file. Shared
-  shaders and overlays live in `<home>/emulators/retroarch/` (paths given by
-  `video_shader_dir`, `overlay_directory`), like the BIOS folder.
-- **Dolphin:** shared settings become more `-C` overrides (Dolphin's command-line layer is
-  never saved, so the profile's ini can't drift). Shared assets by path keys, not copies:
-  `General.LoadPath` → `<home>/emulators/dolphin/Load` (texture packs, GraphicMods, Riivolution)
-  and `General.ResourcePackPath` → `<home>/emulators/dolphin/ResourcePacks`. Graphics options
-  (`GFX.ini`) go through `-C Graphics.<Section>.<Key>`.
-- A per-profile override of a shared setting, if ever wanted, is one more layer in the same
-  merge.
+- **Locked keys** (Hearth's, re-applied at every launch, a hand edit is restored and logged):
+  fullscreen, input and the virtual pad, hotkeys off, pop-ups and on-screen messages off, paths
+  and saves, exit behavior, update checks, analytics, Discord; later the RetroAchievements token
+  and hardcore. Dolphin's `GCPadNew.ini` and `Hotkeys.ini` are wholly Hearth's and still
+  regenerated. RetroArch's locked keys are exactly what Hearth wrote before (its settings, paths,
+  hotkey binds, the input translation's keys).
+- **User-owned keys** are everything else; Hearth never writes them. The settings Hearth offers
+  are user-owned too: Hearth writes them from its layers but keeps a value changed in the
+  emulator itself.
+- **Merged, never regenerated.** Only the lines of the keys Hearth manages change; unknown keys,
+  comments and blank lines stay byte for byte; a missing key goes at the end of its section;
+  files are written atomically and only when their text changes. Dolphin drops comments itself
+  (measured below).
+- **Layers**, lowest first: the emulator's defaults → the console base shared by every profile,
+  `<home>/emulators/<emu>/shared.toml` (the preset and the rows changed in Settings) → the profile
+  layer (`profiles/<id>/emulators/<emu>/`, supported, empty in E.1) → the game's overrides,
+  `<data>/games/<art key>/emulator.toml` (beside its Customize picks, shared by every profile,
+  deleted only with the game) → locked keys. Graphics belong to the console, so they live in the
+  shared base.
+- **How they reach Dolphin.** Its layers (`Common/Config/Enums.h`, lowest first): Base (the `-u`
+  ini files) < CommandLine (`-C`) < GlobalGame (`Sys/GameSettings`, shipped game fixes) <
+  LocalGame (`<-u>/GameSettings/<id>.ini`). Console settings go into the Base files
+  (`Dolphin.ini`, `GFX.ini`), never `-C`: the command line beats Base, so a value changed in
+  Dolphin's own UI would be ignored. A game's overrides go into `GameSettings/<id>.ini`, which
+  also beats Dolphin's shipped fixes (TP's `Sys/GameSettings/GZ2.ini` turns arbitrary mipmap
+  detection on: only a per-game value changes that). Locked keys go into `Dolphin.ini` /
+  `Logger.ini` and stay `-C`; locked `[Core]` keys found in a game INI are removed. Game INI
+  sections: `GFX.Settings` → `[Video_Settings]` (likewise Hardware, Enhancements, Hacks),
+  `Main.Core` → `[Core]` (`ConfigLoaders/GameConfigLoader.cpp`).
+- **How they reach RetroArch.** `retroarch.cfg` (`--config`) is merged in place; no
+  `--appendconfig` (appended files override the main one and its "Save configuration" would bake
+  them in). No curated settings yet (E.2).
+- **What Hearth applied** (`hearth-applied.toml` in each profile's emulator folder): every key it
+  wrote, per file and section. At launch a managed setting whose file value no longer means what
+  Hearth applied was changed outside Hearth: the file keeps it, and it is adopted into the layer
+  it came from (Settings shows it; logged "kept a setting changed outside Hearth"). A value
+  Hearth has no choice for (InternalResolution = 5) is left to the user until it is changed in
+  Hearth again (`yielded`). A key Hearth wrote before and no longer manages goes only if
+  unchanged. "Means the same" compares values as the emulator reads them (`True`/`true`, `2`/
+  `2.0`), ignores line order, and in a main file treats a missing key as the default (a game INI
+  missing a key means "not set here").
+- **What Dolphin 2609 does to its files** (measured 2026-10-30, TP started and quit with
+  SIGTERM, 0.5 s): at startup it rewrites `Dolphin.ini` and `GFX.ini`, dropping every comment and
+  adding `[Analytics] ID`; values, spellings, order, unknown keys and keys at their defaults are
+  kept. On exit it appends defaults of its own (`[DSP]`, `[NetPlay]`, `[SDL_Hints]`; every log
+  type and `WriteTo*` in `Logger.ini`); `GFX.ini` is unchanged. None of it is taken as a change by
+  the user (golden test `dolphin_rewrite`).
+- **The first merge** copies the files it will touch to
+  `backup/<stamp>-emulator-settings/<profile>/<emu>/` with `SHA256SUMS`, once. A `retroarch.cfg`
+  generated before (its old header, no applied record) is converted: all its keys count as
+  Hearth's, its header changes, nothing else moves.
+- **Schema** (`data/profiles/<emu>/settings.toml`, checked by tests): per setting id, label,
+  description, file/section/key, type (bool or choice; a choice may set other keys of its
+  section, e.g. anti-aliasing sets `MSAA` and `SSAA`), friendly choices, default, scope (console
+  or per game), applies (next launch / restart game) and `breaks_hardcore` (stored only). Every
+  Dolphin key was checked against Dolphin 2609's source (`verified_with`).
+- **Presets** (Performance, Balanced, Quality) set only the speed-versus-quality rows (internal
+  resolution, anti-aliasing, anisotropic filtering, shader compilation, arbitrary mipmaps); a
+  preset row changed afterwards shows "Custom", other rows never do. The preset is recommended
+  from the GPU games run on (`/sys/class/drm/card*/device`: display class, the `boot_vga` one
+  first; rules by PCI vendor/device in the schema: Iris Xe → Balanced, older Intel →
+  Performance, Radeon 680M–890M, Arc and discrete GPUs → Quality, unknown → Balanced) until the
+  user picks one.
+- **Testing:** dev socket words `emu_state`, `emu_set`, `emu_game_set`, `emu_game_reset`,
+  `emu_effective` (`scripts/send-action.sh`).
 
 **Rejected: shared files linked into each profile's folder.** Emulators save settings by
 writing a temporary file and renaming it over the original, which replaces a symlink with a
@@ -481,5 +535,6 @@ plain file (the profile silently forks); Dolphin rewrites its whole `Dolphin.ini
 hard links break the same way; and the Flatpak sandbox needs every link target granted. A merge
 at launch has none of these problems and keeps Hearth the only writer of shared settings.
 
-(Moving a texture pack folder into the shared `Load` later is a move of user files: it will need
-the same backup-and-rename care as round D's migration.)
+Shared assets (texture packs, resource packs) will go by path keys (`General.LoadPath`,
+`General.ResourcePackPath` → `<home>/emulators/dolphin/…`), not copies; moving a texture pack
+folder there later is a move of user files and needs round D's backup-and-rename care.

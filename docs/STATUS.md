@@ -1,6 +1,6 @@
 # Hearth status
 
-Last updated: 2026-10-24 (round D, profile-ready storage). Read this first, then `AGENTS.md` (rules, commands),
+Last updated: 2026-10-30 (round E.1, emulator settings part 1). Read this first, then `AGENTS.md` (rules, commands),
 `.github/instructions/rust.instructions.md` and `docs/plan.md` (architecture).
 
 ## 0. Where we are, and how we work
@@ -31,6 +31,74 @@ Last updated: 2026-10-24 (round D, profile-ready storage). Read this first, then
 - Round D, profile-ready storage (2026-10-24): per-person data under
   `<home>/profiles/<id>/`, today's data moved into `profiles/default/` by a backed-up,
   resumable migration. No profile UI. Design: README §9 "Profiles and storage".
+- Round E.1, emulator settings part 1 (2026-10-30): locked versus user-owned keys, configs
+  merged at launch (never regenerated), Dolphin's settings schema and presets from the GPU,
+  Settings → Emulators, a Game settings page for Dolphin games. Design: README §9 "Emulator
+  settings", §4 "Settings" and "Home".
+
+Round E.1 (emulator settings, part 1), 2026-10-30, oldest first:
+- `99e1886`: sha2 0.11.1 (built and all tests passed before the commit, migration tests
+  included).
+- `a8ba66a`, `c551beb`: `emusettings::doc` (format-preserving INI/cfg editor, atomic writes).
+- `0329665`: `data/profiles/dolphin/settings.toml` (11 settings, `verified_with = "Dolphin
+  2609"`; "Compile shaders before starting" added: console scope, off, in no preset), presets,
+  GPU rules, `emusettings::gpu` (sysfs).
+- `a75dd3b`: `emusettings::store` (`shared.toml`, the game's `emulator.toml`,
+  `hearth-applied.toml`).
+- `a33b09c`, `0383ed8`: `emusettings::merge` (comparison by meaning, missing key = default in
+  main files only, adoption, values Hearth doesn't offer left to the user until changed in
+  Hearth, stale keys); goldens `tests/golden/emusettings/merge/`.
+- `4c4f7b5`: Dolphin on the model (`DolphinProfile::plans/prepare`, `GameRef`, shipped game
+  values, one-time backup); goldens `tests/golden/emusettings/dolphin/`.
+- `99b7bad`: RetroArch merged (conversion of the generated file); goldens
+  `tests/golden/emusettings/retroarch/`; all of RetroArch's earlier tests unchanged.
+- `10d08a4`: dev socket `emu_state`, `emu_set`, `emu_game_set`, `emu_game_reset`,
+  `emu_effective`.
+- `b60fc87`: Settings → Emulators (`ui/settings/emulators.slint`,
+  `bridge/session/emulators.rs`).
+- `0e6815e`: Game settings (`ui/components/game_settings.slint`), Options and Properties
+  entries for Dolphin games (`HomeTile.game-settings`).
+- Measured (Dolphin 2609 in the test home, TP started and quit with SIGTERM like Hearth does,
+  0.5 s to exit): at startup Dolphin rewrites `Dolphin.ini` and `GFX.ini`, dropping every
+  comment and adding `[Analytics] ID`; values, spellings (`false` stays `false`), order, unknown
+  keys and default-valued keys are kept. On exit it appends its own defaults (`[DSP]`,
+  `[NetPlay]`, `[SDL_Hints]`; 57 log types and `WriteTo*` in `Logger.ini`); `GFX.ini` unchanged.
+  A first try that killed gamescope before Dolphin made Dolphin abort in cubeb's logger (core
+  dump, the disk briefly full while systemd-coredump wrote it): not a Hearth path (Hearth
+  SIGTERMs the game's group, gamescope stays).
+- Verified live (debug, nested gamescope 1920×1080 and 1280×720, `scripts/test-home.sh`
+  `--no-pad-input --no-audio`, dev socket and screenshots):
+  - Settings → Emulators: "Dolphin · Balanced" (GPU `8086:9a49`); Internal resolution 2× → 3×
+    showed Custom; Preset → Quality updated every preset row (Vulkan stayed: not a preset row);
+    Reset to defaults (confirmation) removed `shared.toml`; RetroArch shows "More settings coming
+    soon"; scrolling to the last row.
+  - TP with the console at 3×: `GFX.ini` held `InternalResolution = 3` (not among Dolphin's 23
+    `-C`), Dolphin's own exit save kept it; the health screen is crisper than at 1×.
+  - Hand edits: `ShowFPS = True` (user's) survived and Dolphin showed its FPS counter;
+    `[Display] Fullscreen = False` (locked) was restored and logged.
+  - Per-game 1× for TP: `GameSettings/GZ2E01.ini` `[Video_Settings] InternalResolution = 1`,
+    `GFX.ini` still 3×, the frame softer; Reset to console defaults removed `emulator.toml` (the
+    picks stayed) and the key left the INI at the next launch. The page: accent dot and "Custom
+    for this game", "Set by Dolphin for this game" on arbitrary mipmaps (TP's shipped INI),
+    Options resets a row; OoT's menu has no Game settings.
+  - Across Dolphin's start and exit rewrites, nothing was adopted or logged as changed.
+  - OoT: a copy of the real generated `retroarch.cfg` was converted (header and paths only; the
+    joypad driver follows the input mode as before), backed up once; RetroArch logged
+    "Redirecting save file to …/test-home/profiles/default/saves/n64/…srm"; the intro played. A
+    user key and comment added afterwards survived the next launch, `video_fullscreen` was
+    restored.
+  - Nothing written outside the repo since the first launch (`find ~ -newer`, only the
+    browser, editor and Claude); `~/.config/retroarch` unchanged.
+- Not verified: the user's real `.dev-data` (untouched: no Hearth start on it in this round);
+  real controller input on the new pages; Vulkan or another GPU; the Flatpak; listening.
+- Found, not fixed: the start that ran the test home's profile migration showed "Couldn't load
+  the library: database is locked" (once; later starts were fine).
+- **First start on the real `.dev-data`:** backup of `Dolphin.ini`, `GFX.ini`, `Logger.ini`
+  (and `retroarch.cfg` at OoT's launch) in `backup/<stamp>-emulator-settings/default/`;
+  `Dolphin.ini` gains the locked keys in their sections (its `[Analytics] ID`, `[DSP]`,
+  `[NetPlay]`, `[SDL_Hints]` stay); `GFX.ini` (empty) gets Balanced: TP at 2× instead of
+  native; `retroarch.cfg` converted (header; keys as before); `hearth-applied.toml` in both
+  folders. Nothing under `saves/` is touched.
 
 Round D (profile-ready storage), 2026-10-24, oldest first:
 - `f725497`: `hearth-core::users` (`ProfileId`, `ProfileDirs`, `profile.toml`); `DataDirs`
@@ -397,6 +465,16 @@ The working tree is clean.
    `DISPLAY=:1 cargo run -p hearth-platform --example gamescope_probe -- windows|props`.
 
 **Next / open:**
+- Before new consoles: a content key for ROMs without a readable header (round of its own).
+  Today's art key falls back to `<system>/name-<hash of the cleaned file name>`, so renaming
+  such a file loses its picks, match, cached art and (later) Game settings. Proposed:
+  `<system>/crc-<crc32>` for files under 64 MiB (cached by path, size and mtime; bigger
+  headerless files keep the name hash until their system gets a serial reader), and a one-time
+  re-key of existing `name-` folders with a backup. NES: No-Intro hashes skip the 16-byte iNES
+  header, so ours must too.
+- Dolphin's shader cache stays per profile; sharing it is for the profiles round (README §9).
+- E.2: RetroArch curated settings, presets and per-game overrides; which of its logging and
+  history keys to free.
 - Real art verified 2026-10-20: OoT and TP matched (SteamGridDB 21202 and 34645), grid,
   hero 3840×1240, logo and icon cached; a `--mock-network` restart showed them from the cache
   with no provider call. Wi-Fi itself was never turned off (not allowed here).
@@ -471,11 +549,13 @@ The working tree is clean.
 
 **Emulators**
 - RetroArch (`profiles/retroarch.rs`, N64 via mupen64plus_next) uses an isolated config in
-  the profile's `emulators/retroarch/`; saves in `saves/<system>/`, BIOS in the shared
-  `emulators/retroarch/system/`.
+  the profile's `emulators/retroarch/`, merged at launch (Hearth's keys locked, the rest the
+  user's); saves in `saves/<system>/`, BIOS in the shared `emulators/retroarch/system/`.
 - Dolphin (`profiles/dolphin.rs`, gc and wii) is the native `dolphin-emu`, else the Flatpak,
-  run with `-u <profile>/emulators/dolphin` and `-C` overrides (reasons listed in the file;
-  memory cards and NAND in the profile's `saves/`).
+  run with `-u <profile>/emulators/dolphin` and `-C` for the locked keys (also merged into its
+  ini files); console settings merged into `Dolphin.ini`/`GFX.ini`, a game's into
+  `GameSettings/<id>.ini` (README §9 "Emulator settings"); memory cards and NAND in the
+  profile's `saves/`.
 - Dolphin needs `UseDiscordPresence=False`: otherwise it writes outside the repo.
 - The window search counts mapped windows only.
 
@@ -645,8 +725,9 @@ worker's side), `hearth-core::files`, `hearth-audio::analyze`, `ui/customize/`,
   `HEARTH_GS_FULLSCREEN=1`, `HEARTH_GS_ARGS`, `HEARTH_GS_RELEASE=1`).
 - **Dev socket actions** (add `--no-pad-input` so a real controller never drives a test
   instance): up, down, left, right, accept, back, prev_tab, next_tab, options,
-  home_short, home_long, capture. Commands: `sound:<name>`, `audio_state`, and the Customize
-  page's words (see `scripts/send-action.sh`; `custom_state` gives JSON). Replies are printed.
+  home_short, home_long, capture. Commands: `sound:<name>`, `audio_state`, the Customize
+  page's words and the emulator settings' (`emu_state`, `emu_set`, `emu_game_set`,
+  `emu_game_reset`, `emu_effective`; see `scripts/send-action.sh`; the `_state` words give JSON). Replies are printed.
 - **Throwaway test home:** `scripts/test-home.sh [--reset] [gamescope|windowed] [args]`
   (`.dev-data/test-home`, `--mock-sgdb=fixtures`, `HEARTH_DOWNLOADS=.dev-data/downloads`,
   `--games-dir .dev-data/test-games`). Its dev socket: `HEARTH_DEV_SOCKET=./.dev-data/test-home/actions.sock`.
@@ -664,7 +745,7 @@ worker's side), `hearth-core::files`, `hearth-audio::analyze`, `ui/customize/`,
   - library: `.dev-data/data/library.sqlite3`.
 - **FPS counter:** `HEARTH_RETROARCH_ARGS="--appendconfig=data/dev/retroarch-fps.cfg"`.
 - **Checks:** `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
-  `cargo test --workspace` (audio 16, core 198, platform 35, shell 28 tests).
+  `cargo test --workspace` (audio 16, core 227, platform 35, shell 28 tests).
 - **Artwork:** set `HEARTH_STEAMGRIDDB_KEY` or `[art] steamgriddb_key` in
   `.dev-data/config/hearth.toml` (gitignored). Without it: placeholders and one log line.
 
@@ -677,7 +758,7 @@ worker's side), `hearth-core::files`, `hearth-audio::analyze`, `ui/customize/`,
 - **Overlay = `STEAM_OVERLAY` only.** Keep `GAMESCOPE_EXTERNAL_OVERLAY` at 0, or the window is
   drawn twice. A hidden overlay must also be transparent (`panel: none`).
 - **RetroArch:**
-  - always `--config <generated cfg>`, never `~/.config/retroarch`;
+  - always `--config <profile's cfg>`, never `~/.config/retroarch`;
   - every hotkey is bound to button 999 / axis +99, because `"nul"` falls back to the
     autoconfig profile and PS would open the menu;
   - X11 only inside gamescope.

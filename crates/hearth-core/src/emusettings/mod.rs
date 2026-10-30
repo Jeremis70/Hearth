@@ -144,6 +144,21 @@ impl EmulatorSettings {
         game.save(game_dir)
     }
 
+    /// A game's value chosen on its Game settings page: stored as an override only when it
+    /// differs from `without` (what the game gets with no override of its own: the console's
+    /// value, or Dolphin's shipped one), so stepping back there leaves no "Custom" behind.
+    pub fn choose_for_game(
+        &self,
+        game_dir: &Path,
+        id: &str,
+        choice: &str,
+        without: &str,
+    ) -> io::Result<()> {
+        let keep = (choice != without).then_some(choice);
+        self.checked(id, choice)?;
+        self.set_game(game_dir, id, keep)
+    }
+
     /// Clears every override of a game for this emulator.
     pub fn reset_game(&self, game_dir: &Path) -> io::Result<()> {
         let mut game = GameOverrides::load(game_dir);
@@ -273,6 +288,18 @@ mod tests {
         assert_eq!(row["label"], "4× (1440p)");
         settings
             .set_game(&game, "internal_resolution", None)
+            .unwrap();
+        assert!(settings.game(&game).is_empty());
+        // Stepping away and back leaves no override.
+        settings
+            .choose_for_game(&game, "vsync", "True", "False")
+            .unwrap();
+        assert_eq!(
+            settings.game(&game).get("vsync").map(String::as_str),
+            Some("True")
+        );
+        settings
+            .choose_for_game(&game, "vsync", "False", "False")
             .unwrap();
         assert!(settings.game(&game).is_empty());
         settings.set_game(&game, "vsync", Some("True")).unwrap();

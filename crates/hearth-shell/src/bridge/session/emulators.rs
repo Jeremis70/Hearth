@@ -354,7 +354,8 @@ impl Controller {
         let Some(choice) = stepped(setting, &current, step) else {
             return false;
         };
-        if let Err(err) = settings.set_game(&game_ref.dir, key, Some(choice)) {
+        let (without, _) = game_value(&settings, setting, &BTreeMap::new(), &shipped);
+        if let Err(err) = settings.choose_for_game(&game_ref.dir, key, choice, &without) {
             tracing::warn!("can't save the game's setting: {err}");
             self.toast("Couldn't save the setting");
             return false;
